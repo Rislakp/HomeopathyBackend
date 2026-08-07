@@ -72,7 +72,7 @@ exports.createCourse = async (req, res) => {
 // UPDATE COURSE
 exports.updateCourse = async (req, res) => {
   try {
-    const { courseId } = req.params;
+    const { id } = req.params;
 
     const updateData = {
       ...req.body,
@@ -80,8 +80,8 @@ exports.updateCourse = async (req, res) => {
 
     delete updateData.courseId;
 
-    const updatedCourse = await Course.findOneAndUpdate(
-      { courseId },
+    const updatedCourse = await Course.findByIdAndUpdate(
+      id,
       updateData,
       {
         new: true,
@@ -114,11 +114,9 @@ exports.updateCourse = async (req, res) => {
 // DELETE COURSE
 exports.deleteCourse = async (req, res) => {
   try {
-    const { courseId } = req.params;
+    const { id } = req.params;
 
-    const deletedCourse = await Course.findOneAndDelete({
-      courseId,
-    });
+    const deletedCourse = await Course.findByIdAndDelete(id);
 
     if (!deletedCourse) {
       return res.status(404).json({
