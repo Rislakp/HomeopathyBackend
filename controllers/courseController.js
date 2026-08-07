@@ -114,3 +114,71 @@ exports.createCourse = async (req, res) => {
   }
 };
 
+/**
+ * @desc    Update a course by courseId
+ * @route   PUT /api/courses/:courseId
+ * @access  Public
+ */
+exports.updateCourse = async (req, res) => {
+  try {
+    const { courseId } = req.params;
+    const updateData = { ...req.body };
+    
+    // Prevent modification of courseId
+    delete updateData.courseId;
+
+    const updatedCourse = await Course.findOneAndUpdate(
+      { courseId },
+      updateData,
+      { new: true, runValidators: true }
+    );
+
+    if (!updatedCourse) {
+      return res.status(404).json({
+        success: false,
+        message: 'Course not found'
+      });
+    }
+
+    return res.status(200).json({
+      success: true,
+      data: updatedCourse
+    });
+  } catch (error) {
+    return res.status(500).json({
+      success: false,
+      message: error.message || 'Error updating course'
+    });
+  }
+};
+
+/**
+ * @desc    Delete a course by courseId
+ * @route   DELETE /api/courses/:courseId
+ * @access  Public
+ */
+exports.deleteCourse = async (req, res) => {
+  try {
+    const { courseId } = req.params;
+    const deletedCourse = await Course.findOneAndDelete({ courseId });
+
+    if (!deletedCourse) {
+      return res.status(404).json({
+        success: false,
+        message: 'Course not found'
+      });
+    }
+
+    return res.status(200).json({
+      success: true,
+      message: 'Course deleted'
+    });
+  } catch (error) {
+    return res.status(500).json({
+      success: false,
+      message: error.message || 'Error deleting course'
+    });
+  }
+};
+
+

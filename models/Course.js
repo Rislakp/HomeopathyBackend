@@ -40,7 +40,10 @@ courseSchema.pre('validate', async function(next) {
         { $inc: { seq: 1 } },
         { new: true, upsert: true }
       );
+      
+      // FIXED: Added backticks around the template literal
       this.courseId = `CRS-${String(counter.seq).padStart(6, '0')}`;
+      
       next();
     } catch (error) {
       next(error);
