@@ -6,8 +6,8 @@ router.get('/', courseController.getCourses);
 
 router.post('/', courseController.createCourse);
 
-router.put('/:courseId', courseController.updateCourse);
+router.put('/:id', courseController.updateCourse);
 
-router.delete('/:courseId', courseController.deleteCourse);
+router.delete('/:id', courseController.deleteCourse);
 
 module.exports = router;

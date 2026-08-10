@@ -1,21 +1,33 @@
 require('dotenv').config();
 
 const express = require('express');
+const cors = require('cors');
 const connectDB = require('./config/db');
 
 const app = express();
+
+// CORS
+app.use(cors({
+  origin: '*',
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization'],
+}));
 
 app.use(express.json());
 
 // Routes
 app.use('/api/courses', require('./routes/courseRoutes'));
+const lessonRoutes = require('./routes/lesson.routes');
+app.use(lessonRoutes);
 
-// MongoDB connection
+// MongoDB
 connectDB();
 
+// Test
 app.get('/', (req, res) => {
   res.json({
-    message: 'Backend is working'
+    success: true,
+    message: 'Backend is working',
   });
 });
 
