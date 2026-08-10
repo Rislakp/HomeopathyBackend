@@ -80,8 +80,8 @@ exports.updateCourse = async (req, res) => {
 
     delete updateData.courseId;
 
-    const updatedCourse = await Course.findByIdAndUpdate(
-      id,
+    const updatedCourse = await Course.findOneAndUpdate(
+      { courseId: id },
       updateData,
       {
         new: true,
@@ -116,7 +116,7 @@ exports.deleteCourse = async (req, res) => {
   try {
     const { id } = req.params;
 
-    const deletedCourse = await Course.findByIdAndDelete(id);
+    const deletedCourse = await Course.findOneAndDelete({ courseId: id });
 
     if (!deletedCourse) {
       return res.status(404).json({

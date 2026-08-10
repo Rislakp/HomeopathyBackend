@@ -7,7 +7,7 @@ async function addModuleToCourse(req, res) {
     const { lessonTitle, uploadFileOrLink, lessonType } = req.body;
 
     // 1. Check course exists
-    const course = await Course.findById(courseId);
+    const course = await Course.findOne({ courseId });
     if (!course) {
       return res.status(404).json({
         success: false,

@@ -4,7 +4,7 @@ const validateLesson = (req, res, next) => {
   const { courseId } = req.params;
   const { lessonTitle, uploadFileOrLink, lessonType } = req.body;
 
-  // Validate courseId is a valid Mongo ObjectId
+  // Validate courseId is a valid custom courseId format
   if (!courseId) {
     return res.status(400).json({
       success: false,
@@ -12,7 +12,8 @@ const validateLesson = (req, res, next) => {
     });
   }
 
-  if (!mongoose.Types.ObjectId.isValid(courseId)) {
+  const courseIdRegex = /^CRS-\d{6}$/;
+  if (!courseIdRegex.test(courseId)) {
     return res.status(400).json({
       success: false,
       message: 'Invalid courseId format'
