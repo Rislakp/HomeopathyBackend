@@ -33,6 +33,23 @@ app.get('/', (req, res) => {
   });
 });
 
+// 404 Route Not Found Catch-All
+app.use((req, res, next) => {
+  res.status(404).json({
+    success: false,
+    message: `Route not found: ${req.method} ${req.originalUrl}`
+  });
+});
+
+// 500 Global Error Handler Middleware
+app.use((err, req, res, next) => {
+  console.error('Express Error Handler:', err);
+  res.status(err.status || 500).json({
+    success: false,
+    message: err.message || 'Internal Server Error'
+  });
+});
+
 const PORT = process.env.PORT || 5000;
 
 app.listen(PORT, () => {

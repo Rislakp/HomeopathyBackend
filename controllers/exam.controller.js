@@ -41,32 +41,60 @@ function parseMCQText(text) {
  */
 async function extractMCQs(req, res) {
   try {
+    // 1. Multer & Buffer Validation
     if (!req.file) {
       return res.status(400).json({
         success: false,
-        message: 'Please upload a PDF file.'
+        message: 'No file uploaded'
       });
     }
 
-    // Extract raw text from PDF buffer using pdf-parse
-    const parsedData = await pdfParse(req.file.buffer);
-    
-    // Parse the MCQs using the updated regex logic
+    if (!req.file.buffer) {
+      return res.status(400).json({
+        success: false,
+        message: 'No file uploaded'
+      });
+    }
+
+    // 2. Safe PDF Parsing (pdf-parse)
+    let parsedData;
+    try {
+      parsedData = await pdfParse(req.file.buffer);
+    } catch (error) {
+      console.error('PDF Parsing Error:', error);
+      return res.status(500).json({
+        success: false,
+        message: 'Failed to parse PDF'
+      });
+    }
+
+    // 3. Safe Text Extraction & Regex
+    if (!parsedData || typeof parsedData.text !== 'string') {
+      return res.status(200).json({
+        success: true,
+        message: 'Successfully extracted 0 MCQs.',
+        questions: []
+      });
+    }
+
+    const text = parsedData.text;
     const regex = /(\d+)\.\s+([\s\S]+?)\s+A\)\s+([\s\S]+?)\s+B\)\s+([\s\S]+?)\s+C\)\s+([\s\S]+?)\s+D\)\s+([\s\S]+?)\s+Answer:\s+([A-D])(?:\)|[^\r\n]*)/gi;
     const parsedQuestions = [];
     let match;
 
-    while ((match = regex.exec(parsedData.text)) !== null) {
-      parsedQuestions.push({
-        questionText: match[2].trim(),
-        options: {
-          A: match[3].trim(),
-          B: match[4].trim(),
-          C: match[5].trim(),
-          D: match[6].trim()
-        },
-        correctOption: match[7].trim().toUpperCase()
-      });
+    while ((match = regex.exec(text)) !== null) {
+      if (match[2] && match[3] && match[4] && match[5] && match[6] && match[7]) {
+        parsedQuestions.push({
+          questionText: match[2].trim(),
+          options: {
+            A: match[3].trim(),
+            B: match[4].trim(),
+            C: match[5].trim(),
+            D: match[6].trim()
+          },
+          correctOption: match[7].trim().toUpperCase()
+        });
+      }
     }
 
     return res.status(200).json({
@@ -78,8 +106,7 @@ async function extractMCQs(req, res) {
     console.error('Error extracting MCQs:', error);
     return res.status(500).json({
       success: false,
-      message: 'Failed to extract text from PDF. Please check if the file is valid.',
-      error: error.message
+      message: 'An unexpected error occurred during extraction'
     });
   }
 }
