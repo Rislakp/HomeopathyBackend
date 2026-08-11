@@ -15,44 +15,21 @@ const Exam = require('../models/exam.model');
  * Tolerates variations like Ans: or Answer:.
  */
 function parseMCQText(text) {
-  // Split the text into blocks starting with Q followed by digit(s)
-  const blocks = text.split(/(?=Q\d+[\.\s\)])/gi);
+  const regex = /(\d+)\.\s+([\s\S]+?)\s+A\)\s+([\s\S]+?)\s+B\)\s+([\s\S]+?)\s+C\)\s+([\s\S]+?)\s+D\)\s+([\s\S]+?)\s+Answer:\s+([A-D])\)/gi;
   const questions = [];
+  let match;
 
-  for (const block of blocks) {
-    const trimmed = block.trim();
-    // Skip empty blocks or blocks that do not start with a question identifier
-    if (!trimmed || !/^Q\d+/i.test(trimmed)) {
-      continue;
-    }
-
-    // Extract Question Text (from Q1. up to A) or A.)
-    const qTextMatch = trimmed.match(/Q\d+[\.\s\)]+([\s\S]*?)(?=\s*A[\)\.])/i);
-    
-    // Extract Options
-    const optAMatch = trimmed.match(/A[\)\.]\s*([\s\S]*?)(?=\s*B[\)\.])/i);
-    const optBMatch = trimmed.match(/B[\)\.]\s*([\s\S]*?)(?=\s*C[\)\.])/i);
-    const optCMatch = trimmed.match(/C[\)\.]\s*([\s\S]*?)(?=\s*D[\)\.])/i);
-    
-    // Option D goes up to Ans: or Answer:
-    const optDMatch = trimmed.match(/D[\)\.]\s*([\s\S]*?)(?=\s*(Ans|Answer):)/i) 
-                      || trimmed.match(/D[\)\.]\s*([\s\S]*?)$/i);
-
-    // Extract Correct Option
-    const ansMatch = trimmed.match(/(?:Ans|Answer):\s*([A-D])/i);
-
-    if (qTextMatch && optAMatch && optBMatch && optCMatch && optDMatch && ansMatch) {
-      questions.push({
-        questionText: qTextMatch[1].trim(),
-        options: {
-          A: optAMatch[1].trim(),
-          B: optBMatch[1].trim(),
-          C: optCMatch[1].trim(),
-          D: optDMatch[1].trim()
-        },
-        correctOption: ansMatch[1].trim().toUpperCase()
-      });
-    }
+  while ((match = regex.exec(text)) !== null) {
+    questions.push({
+      questionText: match[2].trim(),
+      options: {
+        A: match[3].trim(),
+        B: match[4].trim(),
+        C: match[5].trim(),
+        D: match[6].trim()
+      },
+      correctOption: match[7].trim().toUpperCase()
+    });
   }
 
   return questions;
@@ -73,7 +50,24 @@ async function extractMCQs(req, res) {
 
     // Extract raw text from PDF buffer using pdf-parse
     const parsedData = await pdfParse(req.file.buffer);
-    const parsedQuestions = parseMCQText(parsedData.text);
+    
+    // Parse the MCQs using the updated regex logic
+    const regex = /(\d+)\.\s+([\s\S]+?)\s+A\)\s+([\s\S]+?)\s+B\)\s+([\s\S]+?)\s+C\)\s+([\s\S]+?)\s+D\)\s+([\s\S]+?)\s+Answer:\s+([A-D])\)/gi;
+    const parsedQuestions = [];
+    let match;
+
+    while ((match = regex.exec(parsedData.text)) !== null) {
+      parsedQuestions.push({
+        questionText: match[2].trim(),
+        options: {
+          A: match[3].trim(),
+          B: match[4].trim(),
+          C: match[5].trim(),
+          D: match[6].trim()
+        },
+        correctOption: match[7].trim().toUpperCase()
+      });
+    }
 
     return res.status(200).json({
       success: true,
