@@ -49,8 +49,8 @@ async function addModuleToCourse(req, res) {
 
 async function addLessonToModule(req, res) {
   try {
-    const { courseId, moduleId } = req.params;
-    const { lessonTitle, lessonType, mediaContent } = req.body;
+    const { courseId } = req.params;
+    const { moduleTitle, lessonTitle, lessonType, mediaContent } = req.body;
 
     // 1. Find the Course by courseId
     const course = await Course.findOne({ courseId });
@@ -61,14 +61,14 @@ async function addLessonToModule(req, res) {
       });
     }
 
-    // 2. Find the specific Module inside that course using the moduleId
+    // 2. Find the specific module inside the course's modules array where the title exactly matches the provided moduleTitle
     const courseModule = course.modules.find(
-      (m) => m.moduleId === moduleId || m._id.toString() === moduleId
+      (m) => m.moduleTitle === moduleTitle
     );
     if (!courseModule) {
       return res.status(404).json({
         success: false,
-        message: "Module not found for the given moduleId"
+        message: "Module not found in this course"
       });
     }
 
@@ -79,14 +79,13 @@ async function addLessonToModule(req, res) {
       mediaContent
     });
 
-    // 4. Save the course document
+    // 4. Save the parent Course document
     await course.save();
 
-    // 5. Success response with exact requested fields
+    // 5. Success response (201) with exact requested fields
     return res.status(201).json({
       message: "Lesson added successfully",
       courseId: course.courseId,
-      moduleId: courseModule.moduleId,
       moduleTitle: courseModule.moduleTitle,
       lessonTitle,
       lessonType,

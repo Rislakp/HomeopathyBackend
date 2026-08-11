@@ -10,7 +10,7 @@ const {
 } = require('../controllers/lesson.controller');
 
 router.post('/api/courses/:courseId/modules', validateLesson, addModuleToCourse);
-router.post('/api/courses/:courseId/modules/:moduleId/lessons', validateLesson, addLessonToModule);
+router.post('/api/courses/:courseId/lessons', validateLesson, addLessonToModule);
 
 router.get('/api/courses/:courseId/modules/:moduleId/lessons/:lessonId', getLesson);
 router.put('/api/courses/:courseId/modules/:moduleId/lessons/:lessonId', updateLesson);

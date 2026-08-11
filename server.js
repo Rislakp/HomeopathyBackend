@@ -19,6 +19,8 @@ app.use(express.json());
 app.use('/api/courses', require('./routes/courseRoutes'));
 const lessonRoutes = require('./routes/lesson.routes');
 app.use(lessonRoutes);
+const examRoutes = require('./routes/exam.routes');
+app.use(examRoutes);
 
 // MongoDB
 connectDB();

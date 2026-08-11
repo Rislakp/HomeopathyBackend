@@ -81,7 +81,7 @@ const validateLesson = (req, res, next) => {
   }
 
   // Validate lessonType
-  const allowedTypes = ['video', 'pdf', 'link', 'document', 'audio'];
+  const allowedTypes = ['video', 'pdf', 'link', 'document', 'audio', 'Live Class'];
   if (!lessonType) {
     return res.status(400).json({
       success: false,
