@@ -72,8 +72,8 @@ async function extractMCQs(req, res) {
     }
 
     // Extract raw text from PDF buffer using pdf-parse
-    const pdfData = await pdfParse(req.file.buffer);
-    const parsedQuestions = parseMCQText(pdfData.text);
+    const parsedData = await pdfParse(req.file.buffer);
+    const parsedQuestions = parseMCQText(parsedData.text);
 
     return res.status(200).json({
       success: true,
