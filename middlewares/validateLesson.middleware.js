@@ -2,6 +2,12 @@ const mongoose = require('mongoose');
 
 const validateLesson = (req, res, next) => {
   const { courseId } = req.params;
+  
+  // Support both mediaContent and uploadFileOrLink
+  if (req.body.mediaContent && !req.body.uploadFileOrLink) {
+    req.body.uploadFileOrLink = req.body.mediaContent;
+  }
+  
   const { lessonTitle, uploadFileOrLink, lessonType } = req.body;
 
   // Validate courseId is a valid custom courseId format
