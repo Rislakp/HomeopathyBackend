@@ -21,6 +21,10 @@ const lessonRoutes = require('./routes/lesson.routes');
 app.use(lessonRoutes);
 const examRoutes = require('./routes/exam.routes');
 app.use(examRoutes);
+const studentRoutes = require('./src/student/student.routes');
+app.use(studentRoutes);
+const adminExamRoutes = require('./src/admin/admin.routes');
+app.use(adminExamRoutes);
 
 // MongoDB
 connectDB();
