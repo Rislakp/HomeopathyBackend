@@ -16,8 +16,16 @@ function authenticateUser(req, res, next) {
 
     if (token) {
       try {
-        const decoded = jwt.verify(token, process.env.JWT_SECRET || 'default_secret_key');
-        req.user = { id: decoded.id || decoded._id || decoded.studentId };
+        const secret = process.env.JWT_SECRET || 'white_coat_academy_secret_jwt_key_2026_super_secure';
+        const decoded = jwt.verify(token, secret);
+        const userId = decoded.userId || decoded.id || decoded._id || decoded.studentId;
+        
+        req.user = {
+          id: userId ? userId.toString() : undefined,
+          userId: userId ? userId.toString() : undefined,
+          role: decoded.role ? decoded.role.toLowerCase() : undefined,
+          email: decoded.email,
+        };
         return next();
       } catch (jwtErr) {
         return res.status(401).json({
@@ -30,7 +38,7 @@ function authenticateUser(req, res, next) {
     // Support explicit student-id header for development/testing if token not provided
     const directUserId = req.headers['x-student-id'] || req.headers['x-user-id'];
     if (directUserId) {
-      req.user = { id: directUserId };
+      req.user = { id: directUserId.toString(), userId: directUserId.toString() };
       return next();
     }
 
