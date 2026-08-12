@@ -1,3 +1,4 @@
+const mongoose = require('mongoose');
 const pdfParse = require('pdf-parse');
 const Exam = require('../models/exam.model');
 
@@ -158,8 +159,72 @@ async function createGrandMockExam(req, res) {
   }
 }
 
+/**
+ * GET /api/exams/grand-mock
+ * Fetches all grand mock exams excluding the questions array for summary list.
+ */
+async function getAllGrandMocks(req, res) {
+  try {
+    const exams = await Exam.find()
+      .select('-questions')
+      .sort({ createdAt: -1 });
+
+    return res.status(200).json({
+      success: true,
+      data: exams
+    });
+  } catch (error) {
+    console.error('Error fetching Grand Mock exams:', error);
+    return res.status(500).json({
+      success: false,
+      message: 'Failed to fetch Grand Mock exams.',
+      error: error.message
+    });
+  }
+}
+
+/**
+ * GET /api/exams/grand-mock/:id
+ * Fetches a single grand mock exam by ID including all questions.
+ */
+async function getGrandMockById(req, res) {
+  try {
+    const { id } = req.params;
+
+    if (!mongoose.Types.ObjectId.isValid(id)) {
+      return res.status(400).json({
+        success: false,
+        message: 'Invalid Exam ID format.'
+      });
+    }
+
+    const exam = await Exam.findById(id);
+
+    if (!exam) {
+      return res.status(404).json({
+        success: false,
+        message: 'Grand Mock Exam not found.'
+      });
+    }
+
+    return res.status(200).json({
+      success: true,
+      data: exam
+    });
+  } catch (error) {
+    console.error('Error fetching Grand Mock Exam by ID:', error);
+    return res.status(500).json({
+      success: false,
+      message: 'Failed to fetch Grand Mock Exam details.',
+      error: error.message
+    });
+  }
+}
+
 module.exports = {
   extractMCQs,
   createGrandMockExam,
+  getAllGrandMocks,
+  getGrandMockById,
   parseMCQText // Exported for test verification
 };
