@@ -17,25 +17,34 @@ const studentSchema = new mongoose.Schema({
       'Please add a valid email'
     ]
   },
+  dateOfBirth: {
+    type: String,
+    trim: true
+  },
+  contactNumber: {
+    type: String,
+    trim: true
+  },
+  qualification: {
+    type: String,
+    trim: true
+  },
   phone: {
     type: String,
-    required: [true, 'Please add a phone number'],
-    unique: true,
     trim: true
   },
   course: {
     type: String,
-    required: [true, 'Please specify a course'],
-    trim: true
+    trim: true,
+    default: 'General'
   },
   subscription: {
     type: String,
-    required: [true, 'Please specify a subscription level'],
-    trim: true
+    trim: true,
+    default: 'Free'
   },
   status: {
     type: String,
-    required: true,
     enum: ['Active', 'Inactive', 'Trial', 'Expired'],
     default: 'Active'
   },
@@ -47,7 +56,7 @@ const studentSchema = new mongoose.Schema({
   timestamps: true,
   toJSON: {
     transform: function(doc, ret) {
-      ret.id = ret._id.toString();
+      ret.id = ret._id ? ret._id.toString() : ret.id;
       delete ret._id;
       delete ret.__v;
       return ret;
@@ -55,7 +64,7 @@ const studentSchema = new mongoose.Schema({
   },
   toObject: {
     transform: function(doc, ret) {
-      ret.id = ret._id.toString();
+      ret.id = ret._id ? ret._id.toString() : ret.id;
       delete ret._id;
       delete ret.__v;
       return ret;

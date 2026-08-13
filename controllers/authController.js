@@ -1,5 +1,6 @@
 const jwt = require('jsonwebtoken');
 const User = require('../models/User');
+const Student = require('../models/Student');
 
 const EMAIL_REGEX = /^\w+([\.-]?\w+)*@\w+([\.-]?\w+)*(\.\w{2,3})+$/;
 
@@ -258,8 +259,89 @@ const getMe = async (req, res) => {
   }
 };
 
+/**
+ * @route   POST /api/auth/register-student
+ * @desc    Register a new student with profile details (public)
+ * @access  Public
+ */
+const registerStudent = async (req, res) => {
+  try {
+    const { name, email, dateOfBirth, contactNumber, qualification } = req.body;
+
+    // 1. Validation
+    const errors = [];
+    if (!name || typeof name !== 'string' || !name.trim()) errors.push('Name is required');
+    if (!email || typeof email !== 'string' || !email.trim()) {
+      errors.push('Email is required');
+    } else if (!EMAIL_REGEX.test(email.trim().toLowerCase())) {
+      errors.push('Please provide a valid email address');
+    }
+    if (!dateOfBirth || typeof dateOfBirth !== 'string' || !dateOfBirth.trim()) errors.push('Date of birth is required');
+    if (!contactNumber || typeof contactNumber !== 'string' || !contactNumber.trim()) errors.push('Contact number is required');
+    if (!qualification || typeof qualification !== 'string' || !qualification.trim()) errors.push('Qualification is required');
+
+    if (errors.length > 0) {
+      return res.status(400).json({
+        success: false,
+        message: 'Validation failed',
+        errors,
+      });
+    }
+
+    const cleanEmail = email.trim().toLowerCase();
+
+    // 2. Duplicate Check
+    const existingStudent = await Student.findOne({ email: cleanEmail });
+    if (existingStudent) {
+      return res.status(409).json({
+        success: false,
+        message: 'A student with this email already exists',
+      });
+    }
+
+    // 3. Save Student to MongoDB
+    const newStudent = new Student({
+      name: name.trim(),
+      email: cleanEmail,
+      dateOfBirth: dateOfBirth.trim(),
+      contactNumber: contactNumber.trim(),
+      qualification: qualification.trim(),
+    });
+
+    const savedStudent = await newStudent.save();
+
+    // 4. Return 201 Created Response
+    return res.status(201).json({
+      success: true,
+      message: 'Student registered successfully',
+      studentId: savedStudent._id.toString(),
+      data: {
+        name: savedStudent.name,
+        email: savedStudent.email,
+        dateOfBirth: savedStudent.dateOfBirth,
+        contactNumber: savedStudent.contactNumber,
+        qualification: savedStudent.qualification,
+      },
+    });
+  } catch (error) {
+    console.error('Register Student Error:', error);
+    if (error.code === 11000) {
+      return res.status(409).json({
+        success: false,
+        message: 'A student with this email already exists',
+      });
+    }
+    return res.status(500).json({
+      success: false,
+      message: 'Internal server error while registering student',
+      error: error.message,
+    });
+  }
+};
+
 module.exports = {
   register,
+  registerStudent,
   login,
   getMe,
 };

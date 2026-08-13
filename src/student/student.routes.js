@@ -8,8 +8,8 @@ const {
   getStudentResults
 } = require('./student.controller');
 
-// Protect all student exam routes with authentication
-router.use(authenticateUser);
+// Protect all student routes strictly under /api/student with authentication
+router.use('/api/student', authenticateUser);
 
 /**
  * @route   GET /api/student/exams
