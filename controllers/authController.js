@@ -9,13 +9,15 @@ const EMAIL_REGEX = /^\w+([\.-]?\w+)*@\w+([\.-]?\w+)*(\.\w{2,3})+$/;
 const generateToken = (user) => {
   const secret = process.env.JWT_SECRET || 'white_coat_academy_secret_jwt_key_2026_super_secure';
   const expiresIn = process.env.JWT_EXPIRES_IN || '7d';
+  const userIdStr = user._id.toString();
 
   return jwt.sign(
     {
-      userId: user._id.toString(),
-      id: user._id.toString(),
+      userId: userIdStr,
+      id: userIdStr,
+      studentId: userIdStr,
       email: user.email,
-      role: user.role,
+      role: user.role || 'student',
     },
     secret,
     { expiresIn }
@@ -102,14 +104,17 @@ const register = async (req, res) => {
     });
 
     const token = generateToken(user);
+    const userIdStr = user._id.toString();
 
     return res.status(201).json({
       success: true,
       message: 'Registration successful',
       token: token,
+      studentId: userIdStr,
       role: user.role,
       user: {
-        id: user._id.toString(),
+        id: userIdStr,
+        studentId: userIdStr,
         name: user.name,
         email: user.email,
         role: user.role,
@@ -164,10 +169,10 @@ const login = async (req, res) => {
       });
     }
 
-    // 4. Role Security Check: Match requested role with database role
+    // 4. Role check: If client explicitly supplied role, enforce match
     if (role) {
       const requestedRole = role.toString().trim().toLowerCase();
-      const dbRole = user.role.toString().trim().toLowerCase();
+      const dbRole = (user.role || 'student').toString().trim().toLowerCase();
 
       if (dbRole !== requestedRole) {
         return res.status(403).json({
@@ -179,18 +184,22 @@ const login = async (req, res) => {
 
     // 5. Generate JWT Token
     const token = generateToken(user);
+    const userIdStr = user._id.toString();
+    const userRole = user.role || 'student';
 
-    // 6. Return response formatted for Flutter AuthProvider & UserModel
+    // 6. Return response formatted with studentId at root and inside user object
     return res.status(200).json({
       success: true,
       message: 'Login successful',
       token: token,
-      role: user.role,
+      studentId: userIdStr,
+      role: userRole,
       user: {
-        id: user._id.toString(),
+        id: userIdStr,
+        studentId: userIdStr,
         name: user.name,
         email: user.email,
-        role: user.role,
+        role: userRole,
       },
     });
   } catch (error) {
@@ -225,13 +234,19 @@ const getMe = async (req, res) => {
       });
     }
 
+    const userIdStr = user._id.toString();
+    const userRole = user.role || 'student';
+
     return res.status(200).json({
       success: true,
+      studentId: userIdStr,
+      role: userRole,
       user: {
-        id: user._id.toString(),
+        id: userIdStr,
+        studentId: userIdStr,
         name: user.name,
         email: user.email,
-        role: user.role,
+        role: userRole,
       },
     });
   } catch (error) {

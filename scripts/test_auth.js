@@ -150,8 +150,8 @@ async function runTests() {
       assert(regAdminRes.data.success === true, 'Admin response success is true');
       assert(regAdminRes.data.role === 'admin', 'Role is admin');
 
-      // 4. Student Login (Success)
-      console.log('\n--- TEST 4: Student Login (Matching role) ---');
+      // 4. Student Login (Success - Without role in request payload)
+      console.log('\n--- TEST 4: Student Login (Without role in payload) ---');
       const loginStudentRes = await makeRequest(
         {
           hostname: 'localhost',
@@ -163,13 +163,15 @@ async function runTests() {
         {
           email: studentEmail,
           password: testPassword,
-          role: 'student',
         }
       );
       console.log('Response:', loginStudentRes);
       assert(loginStudentRes.status === 200, 'Student login returned status 200');
       assert(loginStudentRes.data.success === true, 'Login success is true');
       assert(loginStudentRes.data.role === 'student', 'Returned role is student');
+      assert(typeof loginStudentRes.data.studentId === 'string' && loginStudentRes.data.studentId.length > 0, 'studentId is returned at root');
+      assert(typeof loginStudentRes.data.user.studentId === 'string' && loginStudentRes.data.user.studentId === loginStudentRes.data.studentId, 'studentId is returned inside user object');
+      assert(loginStudentRes.data.user.id === loginStudentRes.data.studentId, 'user.id matches studentId');
       assert(typeof loginStudentRes.data.token === 'string', 'Returned JWT token');
       studentToken = loginStudentRes.data.token;
 

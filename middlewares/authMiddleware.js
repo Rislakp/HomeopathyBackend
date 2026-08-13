@@ -33,7 +33,7 @@ const authMiddleware = async (req, res, next) => {
       const secret = process.env.JWT_SECRET || 'white_coat_academy_secret_jwt_key_2026_super_secure';
       const decoded = jwt.verify(token, secret);
 
-      const userId = decoded.userId || decoded.id || decoded._id;
+      const userId = decoded.userId || decoded.id || decoded._id || decoded.studentId;
       const role = decoded.role;
       const email = decoded.email;
 
@@ -47,6 +47,7 @@ const authMiddleware = async (req, res, next) => {
       req.user = {
         id: userId.toString(),
         userId: userId.toString(),
+        studentId: userId.toString(),
         role: role ? role.toLowerCase() : undefined,
         email: email,
       };
