@@ -23,7 +23,6 @@ function authenticateUser(req, res, next) {
         req.user = {
           id: userId ? userId.toString() : undefined,
           userId: userId ? userId.toString() : undefined,
-          role: decoded.role ? decoded.role.toLowerCase() : undefined,
           email: decoded.email,
         };
         return next();

@@ -1,93 +1,67 @@
 const jwt = require('jsonwebtoken');
 const User = require('../models/User');
-const Student = require('../models/Student');
+let Student;
+try {
+  Student = require('../models/Student');
+} catch (e) {
+  // Student model optional
+}
 
 const EMAIL_REGEX = /^\w+([\.-]?\w+)*@\w+([\.-]?\w+)*(\.\w{2,3})+$/;
 
 /**
- * Generate JWT token helper
+ * Generate JWT token without role concept
  */
 const generateToken = (user) => {
-  const secret = process.env.JWT_SECRET || 'white_coat_academy_secret_jwt_key_2026_super_secure';
-  const expiresIn = process.env.JWT_EXPIRES_IN || '7d';
-  const userIdStr = user._id.toString();
-
-  return jwt.sign(
-    {
-      userId: userIdStr,
-      id: userIdStr,
-      studentId: userIdStr,
-      email: user.email,
-      role: user.role || 'student',
-    },
-    secret,
-    { expiresIn }
-  );
+  const secret =
+    process.env.JWT_SECRET ||
+    'white_coat_academy_secret_jwt_key_2026_super_secure';
+  return jwt.sign({ id: user._id, email: user.email }, secret, {
+    expiresIn: '30d',
+  });
 };
 
 /**
- * @route   POST /api/auth/register
- * @desc    Register a new user (Student or Admin)
+ * @route   POST /api/auth/signup (or /api/auth/register)
+ * @desc    Register a new user (role field completely removed)
  * @access  Public
  */
-const register = async (req, res) => {
+const signup = async (req, res) => {
   try {
-    const { name, email, password, role } = req.body;
+    const { name, email, password } = req.body;
 
-    // 1. Basic presence validation
+    // -----------------------------
+    // VALIDATION
+    // -----------------------------
+    const errors = [];
+
     if (!name || typeof name !== 'string' || !name.trim()) {
-      return res.status(400).json({
-        success: false,
-        message: 'Name is required',
-      });
+      errors.push('Name is required');
     }
 
     if (!email || typeof email !== 'string' || !email.trim()) {
+      errors.push('Email is required');
+    } else if (!EMAIL_REGEX.test(email.trim().toLowerCase())) {
+      errors.push('Please provide a valid email address');
+    }
+
+    if (!password || typeof password !== 'string' || password.length < 6) {
+      errors.push('Password is required and must be at least 6 characters');
+    }
+
+    if (errors.length > 0) {
       return res.status(400).json({
         success: false,
-        message: 'Email is required',
+        message: 'Validation failed',
+        errors,
       });
     }
 
     const cleanEmail = email.trim().toLowerCase();
-    if (!EMAIL_REGEX.test(cleanEmail)) {
-      return res.status(400).json({
-        success: false,
-        message: 'Please provide a valid email address',
-      });
-    }
 
-    if (!password || typeof password !== 'string' || password.length < 6) {
-      return res.status(400).json({
-        success: false,
-        message: 'Password is required and must be at least 6 characters',
-      });
-    }
-
-    if (!role || typeof role !== 'string') {
-      return res.status(400).json({
-        success: false,
-        message: 'Role is required (student or admin)',
-      });
-    }
-
-    const normalizedRole = role.trim().toLowerCase();
-    if (!['student', 'admin'].includes(normalizedRole)) {
-      return res.status(400).json({
-        success: false,
-        message: 'Role must be either student or admin',
-      });
-    }
-
-    // 2. Admin Signup Security Check
-    if (normalizedRole === 'admin' && process.env.ALLOW_ADMIN_SIGNUP === 'false') {
-      return res.status(403).json({
-        success: false,
-        message: 'Admin registration is restricted',
-      });
-    }
-
-    // 3. Duplicate email check
+    // -----------------------------
+    // CHECK DUPLICATE USER
+    // -----------------------------
     const existingUser = await User.findOne({ email: cleanEmail });
     if (existingUser) {
       return res.status(400).json({
@@ -96,36 +70,40 @@ const register = async (req, res) => {
       });
     }
 
-    // 4. Create and save new user
+    // -----------------------------
+    // CREATE USER
+    // -----------------------------
     const user = await User.create({
       name: name.trim(),
       email: cleanEmail,
       password: password,
-      role: normalizedRole,
     });
 
+    // -----------------------------
+    // GENERATE TOKEN & RESPONSE
+    // -----------------------------
     const token = generateToken(user);
-    const userIdStr = user._id.toString();
 
     return res.status(201).json({
       success: true,
-      message: 'Registration successful',
-      token: token,
-      studentId: userIdStr,
-      role: user.role,
+      token,
       user: {
-        id: userIdStr,
-        studentId: userIdStr,
+        _id: user._id,
         name: user.name,
         email: user.email,
-        role: user.role,
       },
     });
   } catch (error) {
-    console.error('Registration Error:', error);
+    console.error('Signup Error:', error);
+    if (error.code === 11000) {
+      return res.status(400).json({
+        success: false,
+        message: 'Account already exists',
+      });
+    }
     return res.status(500).json({
       success: false,
-      message: 'Internal server error during registration',
+      message: 'Internal server error while registering user',
       error: error.message,
     });
   }
@@ -133,27 +111,23 @@ const register = async (req, res) => {
 
 /**
  * @route   POST /api/auth/login
- * @desc    Authenticate user & return token + user info
+ * @desc    Authenticate user & get token (role field completely removed)
  * @access  Public
  */
 const login = async (req, res) => {
   try {
-    const rawEmail = req.body.email || req.body.username || req.body.Email;
-    const { password, role } = req.body;
+    const { email, password } = req.body;
 
-    // 1. Missing fields validation
-    if (!rawEmail || !password) {
+    if (!email || !password) {
       return res.status(400).json({
         success: false,
-        message: 'Email and password are required',
+        message: 'Please provide email and password',
       });
     }
 
-    const cleanEmail = rawEmail.toString().trim().toLowerCase();
-    const cleanPassword = password.toString();
-
-    // 2. Find user in database
+    const cleanEmail = email.trim().toLowerCase();
     const user = await User.findOne({ email: cleanEmail });
+
     if (!user) {
       return res.status(401).json({
         success: false,
@@ -161,8 +135,7 @@ const login = async (req, res) => {
       });
     }
 
-    // 3. Verify password
-    const isMatch = await user.matchPassword(cleanPassword);
+    const isMatch = await user.matchPassword(password);
     if (!isMatch) {
       return res.status(401).json({
         success: false,
@@ -170,37 +143,15 @@ const login = async (req, res) => {
       });
     }
 
-    // 4. Role check: If client explicitly supplied role, enforce match
-    if (role) {
-      const requestedRole = role.toString().trim().toLowerCase();
-      const dbRole = (user.role || 'student').toString().trim().toLowerCase();
-
-      if (dbRole !== requestedRole) {
-        return res.status(403).json({
-          success: false,
-          message: 'Invalid role',
-        });
-      }
-    }
-
-    // 5. Generate JWT Token
     const token = generateToken(user);
-    const userIdStr = user._id.toString();
-    const userRole = user.role || 'student';
 
-    // 6. Return response formatted with studentId at root and inside user object
     return res.status(200).json({
       success: true,
-      message: 'Login successful',
-      token: token,
-      studentId: userIdStr,
-      role: userRole,
+      token,
       user: {
-        id: userIdStr,
-        studentId: userIdStr,
+        _id: user._id,
         name: user.name,
         email: user.email,
-        role: userRole,
       },
     });
   } catch (error) {
@@ -215,19 +166,14 @@ const login = async (req, res) => {
 
 /**
  * @route   GET /api/auth/me
- * @desc    Get currently authenticated user info
- * @access  Private (Requires valid JWT)
+ * @desc    Get logged in user profile
+ * @access  Private
  */
 const getMe = async (req, res) => {
   try {
-    if (!req.user || !req.user.id) {
-      return res.status(401).json({
-        success: false,
-        message: 'User session not found',
-      });
-    }
+    const userId = req.user.id || req.user._id || req.user.userId;
+    const user = await User.findById(userId).select('-password');
 
-    const user = await User.findById(req.user.id).select('-password');
     if (!user) {
       return res.status(404).json({
         success: false,
@@ -235,102 +181,92 @@ const getMe = async (req, res) => {
       });
     }
 
-    const userIdStr = user._id.toString();
-    const userRole = user.role || 'student';
-
     return res.status(200).json({
       success: true,
-      studentId: userIdStr,
-      role: userRole,
       user: {
-        id: userIdStr,
-        studentId: userIdStr,
+        _id: user._id,
         name: user.name,
         email: user.email,
-        role: userRole,
       },
     });
   } catch (error) {
     console.error('GetMe Error:', error);
     return res.status(500).json({
       success: false,
-      message: 'Internal server error retrieving user profile',
+      message: 'Internal server error fetching user profile',
+      error: error.message,
     });
   }
 };
 
 /**
  * @route   POST /api/auth/register-student
- * @desc    Register a new student with profile details (public)
+ * @desc    Register a student profile alongside user account
  * @access  Public
  */
 const registerStudent = async (req, res) => {
   try {
-    const { name, email, dateOfBirth, contactNumber, qualification } = req.body;
+    const {
+      name,
+      email,
+      password,
+      dob,
+      dateOfBirth,
+      phone,
+      contactNumber,
+      qualification,
+    } = req.body;
 
-    // 1. Validation
-    const errors = [];
-    if (!name || typeof name !== 'string' || !name.trim()) errors.push('Name is required');
-    if (!email || typeof email !== 'string' || !email.trim()) {
-      errors.push('Email is required');
-    } else if (!EMAIL_REGEX.test(email.trim().toLowerCase())) {
-      errors.push('Please provide a valid email address');
-    }
-    if (!dateOfBirth || typeof dateOfBirth !== 'string' || !dateOfBirth.trim()) errors.push('Date of birth is required');
-    if (!contactNumber || typeof contactNumber !== 'string' || !contactNumber.trim()) errors.push('Contact number is required');
-    if (!qualification || typeof qualification !== 'string' || !qualification.trim()) errors.push('Qualification is required');
+    const finalDob = dob || dateOfBirth;
+    const finalPhone = phone || contactNumber;
 
-    if (errors.length > 0) {
+    if (!name || !email || !password) {
       return res.status(400).json({
         success: false,
-        message: 'Validation failed',
-        errors,
+        message: 'Name, email, and password are required',
       });
     }
 
     const cleanEmail = email.trim().toLowerCase();
 
-    // 2. Duplicate Check
-    const existingStudent = await Student.findOne({ email: cleanEmail });
-    if (existingStudent) {
+    const existingUser = await User.findOne({ email: cleanEmail });
+    if (existingUser) {
       return res.status(409).json({
         success: false,
-        message: 'A student with this email already exists',
+        message: 'An account with this email already exists',
       });
     }
 
-    // 3. Save Student to MongoDB
-    const newStudent = new Student({
+    const user = await User.create({
       name: name.trim(),
       email: cleanEmail,
-      dateOfBirth: dateOfBirth.trim(),
-      contactNumber: contactNumber.trim(),
-      qualification: qualification.trim(),
+      password,
     });
 
-    const savedStudent = await newStudent.save();
+    if (Student) {
+      await Student.create({
+        name: name.trim(),
+        email: cleanEmail,
+        dateOfBirth: finalDob ? finalDob.trim() : '',
+        contactNumber: finalPhone ? finalPhone.trim() : '',
+        qualification: qualification ? qualification.trim() : '',
+        userId: user._id,
+      });
+    }
 
-    // 4. Return 201 Created Response
+    const token = generateToken(user);
+
     return res.status(201).json({
       success: true,
-      message: 'Student registered successfully',
-      studentId: savedStudent._id.toString(),
-      data: {
-        name: savedStudent.name,
-        email: savedStudent.email,
-        dateOfBirth: savedStudent.dateOfBirth,
-        contactNumber: savedStudent.contactNumber,
-        qualification: savedStudent.qualification,
+      token,
+      user: {
+        _id: user._id,
+        name: user.name,
+        email: user.email,
       },
     });
   } catch (error) {
     console.error('Register Student Error:', error);
-    if (error.code === 11000) {
-      return res.status(409).json({
-        success: false,
-        message: 'A student with this email already exists',
-      });
-    }
     return res.status(500).json({
       success: false,
       message: 'Internal server error while registering student',
@@ -340,8 +276,9 @@ const registerStudent = async (req, res) => {
 };
 
 module.exports = {
-  register,
-  registerStudent,
+  signup,
+  register: signup,
   login,
   getMe,
+  registerStudent,
 };
