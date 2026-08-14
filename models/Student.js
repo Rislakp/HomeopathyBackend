@@ -55,6 +55,16 @@ const studentSchema = new mongoose.Schema({
   joinedDate: {
     type: Date,
     default: Date.now
+  },
+  avatar: {
+    type: String,
+    trim: true,
+    default: ''
+  },
+  profileImage: {
+    type: String,
+    trim: true,
+    default: ''
   }
 }, {
   timestamps: true,
@@ -76,4 +86,14 @@ const studentSchema = new mongoose.Schema({
   }
 });
 
-module.exports = mongoose.model('Student', studentSchema);
+// Indexes for performance optimization (email already has unique index)
+studentSchema.index({ userId: 1 });
+studentSchema.index({ status: 1 });
+studentSchema.index({ course: 1 });
+studentSchema.index({ name: 1 });
+studentSchema.index({ phone: 1 });
+studentSchema.index({ contactNumber: 1 });
+studentSchema.index({ createdAt: -1 });
+studentSchema.index({ status: 1, course: 1, createdAt: -1 });
+
+module.exports = mongoose.models.Student || mongoose.model('Student', studentSchema);

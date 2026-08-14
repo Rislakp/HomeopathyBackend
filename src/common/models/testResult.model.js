@@ -63,4 +63,9 @@ const testResultSchema = new mongoose.Schema({
   timestamps: true
 });
 
-module.exports = mongoose.model('TestResult', testResultSchema);
+// Indexes for aggregation and performance optimization
+testResultSchema.index({ studentId: 1, createdAt: -1 });
+testResultSchema.index({ examId: 1 });
+testResultSchema.index({ studentId: 1, examId: 1 });
+
+module.exports = mongoose.models.TestResult || mongoose.model('TestResult', testResultSchema);
