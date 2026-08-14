@@ -88,13 +88,16 @@ async function runTests() {
           name: 'Test User',
           email: testEmail,
           password: testPassword,
+          dateOfBirth: '01/01/1995',
+          contactNumber: '9988776655',
+          qualification: 'BHMS',
         }
       );
       console.log('Response:', regRes);
       assert(regRes.status === 201, 'User registered with status 201');
       assert(regRes.data.success === true, 'Response success is true');
-      assert(regRes.data.role === undefined, 'No role in response root');
-      assert(regRes.data.user.role === undefined, 'No role in response user object');
+      assert(regRes.data.role === 'student', 'Role is student in response root');
+      assert(regRes.data.user.role === 'student', 'Role is student in response user object');
       assert(regRes.data.user.email === testEmail, 'User email matches');
       assert(typeof regRes.data.token === 'string', 'Token returned on signup');
 
@@ -112,6 +115,9 @@ async function runTests() {
           name: 'Test User Duplicate',
           email: testEmail,
           password: testPassword,
+          dateOfBirth: '01/01/1995',
+          contactNumber: '9988776655',
+          qualification: 'BHMS',
         }
       );
       console.log('Response:', dupRes);
@@ -136,8 +142,8 @@ async function runTests() {
       console.log('Response:', loginRes);
       assert(loginRes.status === 200, 'Login returned status 200');
       assert(loginRes.data.success === true, 'Login success is true');
-      assert(loginRes.data.role === undefined, 'No role in response root');
-      assert(loginRes.data.user.role === undefined, 'No role in response user object');
+      assert(loginRes.data.role === 'student', 'Role is student in response root');
+      assert(loginRes.data.user.role === 'student', 'Role is student in response user object');
       assert(typeof loginRes.data.token === 'string', 'Token returned on login');
       userToken = loginRes.data.token;
 

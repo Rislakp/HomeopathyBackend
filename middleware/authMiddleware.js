@@ -58,13 +58,13 @@ const authMiddleware = async (req, res, next) => {
       });
     }
 
-    // No role handling
     req.user = {
       id: user._id.toString(),
       userId: user._id.toString(),
       studentId: user._id.toString(),
       email: user.email,
       name: user.name,
+      role: user.role || decoded.role || 'student',
     };
 
     next();

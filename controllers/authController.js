@@ -10,32 +10,54 @@ try {
 const EMAIL_REGEX = /^\w+([\.-]?\w+)*@\w+([\.-]?\w+)*(\.\w{2,3})+$/;
 
 /**
- * Generate JWT token without role concept
+ * Generate JWT token containing user id, email, and role
  */
 const generateToken = (user) => {
   const secret =
     process.env.JWT_SECRET ||
     'white_coat_academy_secret_jwt_key_2026_super_secure';
-  return jwt.sign({ id: user._id, email: user.email }, secret, {
-    expiresIn: '30d',
-  });
+  return jwt.sign(
+    {
+      id: user._id,
+      email: user.email,
+      role: user.role || 'student',
+    },
+    secret,
+    {
+      expiresIn: process.env.JWT_EXPIRES_IN || '30d',
+    }
+  );
 };
 
 /**
- * @route   POST /api/auth/signup (or /api/auth/register)
- * @desc    Register a new user (role field completely removed)
+ * @route   POST /api/auth/register (or /api/auth/student/signup, /api/auth/signup)
+ * @desc    Register a new student user with required profile fields
  * @access  Public
  */
-const signup = async (req, res) => {
+const registerStudent = async (req, res) => {
   try {
-    const { name, email, password } = req.body;
+    const {
+      name,
+      email,
+      password,
+      dob,
+      dateOfBirth,
+      phone,
+      contactNumber,
+      qualification,
+    } = req.body;
+
+    const finalDob = (dateOfBirth || dob || '').toString().trim();
+    const finalPhone = (contactNumber || phone || '').toString().trim();
+    const finalQualification = (qualification || '').toString().trim();
+    const finalName = (name || '').toString().trim();
 
     // -----------------------------
     // VALIDATION
     // -----------------------------
     const errors = [];
 
-    if (!name || typeof name !== 'string' || !name.trim()) {
+    if (!finalName) {
       errors.push('Name is required');
     }
 
@@ -49,6 +71,18 @@ const signup = async (req, res) => {
       errors.push('Password is required and must be at least 6 characters');
     }
 
+    if (!finalDob) {
+      errors.push('Date of birth is required');
+    }
+
+    if (!finalPhone) {
+      errors.push('Contact number is required');
+    }
+
+    if (!finalQualification) {
+      errors.push('Qualification is required');
+    }
+
     if (errors.length > 0) {
       return res.status(400).json({
         success: false,
@@ -60,24 +94,58 @@ const signup = async (req, res) => {
     const cleanEmail = email.trim().toLowerCase();
 
     // -----------------------------
-    // CHECK DUPLICATE USER
+    // CHECK DUPLICATE USER (EMAIL / PHONE)
     // -----------------------------
-    const existingUser = await User.findOne({ email: cleanEmail });
+    const existingUser = await User.findOne({
+      $or: [
+        { email: cleanEmail },
+        { phone: finalPhone },
+        { contactNumber: finalPhone },
+      ],
+    });
+
     if (existingUser) {
+      const isEmailDup = existingUser.email === cleanEmail;
       return res.status(400).json({
         success: false,
-        message: 'Account already exists',
+        message: isEmailDup
+          ? 'Account with this email already exists'
+          : 'Account with this contact number already exists',
       });
     }
 
     // -----------------------------
-    // CREATE USER
+    // CREATE USER (Role defaults to "student")
     // -----------------------------
     const user = await User.create({
-      name: name.trim(),
+      name: finalName,
       email: cleanEmail,
       password: password,
+      role: 'student',
+      dateOfBirth: finalDob,
+      contactNumber: finalPhone,
+      phone: finalPhone,
+      qualification: finalQualification,
     });
+
+    // -----------------------------
+    // SYNC STUDENT MODEL IF AVAILABLE
+    // -----------------------------
+    if (Student) {
+      try {
+        await Student.create({
+          name: finalName,
+          email: cleanEmail,
+          dateOfBirth: finalDob,
+          contactNumber: finalPhone,
+          phone: finalPhone,
+          qualification: finalQualification,
+          userId: user._id,
+        });
+      } catch (studentErr) {
+        console.warn('Student sync warning:', studentErr.message);
+      }
+    }
 
     // -----------------------------
     // GENERATE TOKEN & RESPONSE
@@ -86,35 +154,42 @@ const signup = async (req, res) => {
 
     return res.status(201).json({
       success: true,
+      message: 'Student registered successfully',
       token,
+      role: 'student',
       user: {
-        _id: user._id,
+        id: user._id.toString(),
         name: user.name,
         email: user.email,
+        phone: user.phone || user.contactNumber,
+        contactNumber: user.contactNumber || user.phone,
+        qualification: user.qualification,
+        dateOfBirth: user.dateOfBirth,
+        role: 'student',
       },
     });
   } catch (error) {
-    console.error('Signup Error:', error);
+    console.error('Student Registration Error:', error);
     if (error.code === 11000) {
       return res.status(400).json({
         success: false,
-        message: 'Account already exists',
+        message: 'Account with this email or phone already exists',
       });
     }
     return res.status(500).json({
       success: false,
-      message: 'Internal server error while registering user',
+      message: 'Internal server error while registering student',
       error: error.message,
     });
   }
 };
 
 /**
- * @route   POST /api/auth/login
- * @desc    Authenticate user & get token (role field completely removed)
+ * @route   POST /api/auth/login (or /api/auth/student/login)
+ * @desc    Student Authentication & JWT generation (rejection of non-student credentials)
  * @access  Public
  */
-const login = async (req, res) => {
+const studentLogin = async (req, res) => {
   try {
     const { email, password } = req.body;
 
@@ -143,22 +218,106 @@ const login = async (req, res) => {
       });
     }
 
+    // -----------------------------
+    // ROLE CHECK: Student access only
+    // -----------------------------
+    if (user.role && user.role !== 'student') {
+      return res.status(403).json({
+        success: false,
+        message: 'Invalid role: Student access only',
+      });
+    }
+
     const token = generateToken(user);
 
     return res.status(200).json({
       success: true,
+      message: 'Login successful',
       token,
+      role: 'student',
       user: {
-        _id: user._id,
+        id: user._id.toString(),
         name: user.name,
         email: user.email,
+        phone: user.phone || user.contactNumber || '',
+        qualification: user.qualification || '',
+        dateOfBirth: user.dateOfBirth || '',
+        role: 'student',
       },
     });
   } catch (error) {
-    console.error('Login Error:', error);
+    console.error('Student Login Error:', error);
     return res.status(500).json({
       success: false,
-      message: 'Internal server error during login',
+      message: 'Internal server error during student login',
+      error: error.message,
+    });
+  }
+};
+
+/**
+ * @route   POST /api/auth/admin/login
+ * @desc    Admin Authentication & JWT generation (rejection of non-admin credentials)
+ * @access  Public
+ */
+const adminLogin = async (req, res) => {
+  try {
+    const { email, password } = req.body;
+
+    if (!email || !password) {
+      return res.status(400).json({
+        success: false,
+        message: 'Please provide email and password',
+      });
+    }
+
+    const cleanEmail = email.trim().toLowerCase();
+    const user = await User.findOne({ email: cleanEmail });
+
+    if (!user) {
+      return res.status(401).json({
+        success: false,
+        message: 'Invalid email or password',
+      });
+    }
+
+    const isMatch = await user.matchPassword(password);
+    if (!isMatch) {
+      return res.status(401).json({
+        success: false,
+        message: 'Invalid email or password',
+      });
+    }
+
+    // -----------------------------
+    // ROLE CHECK: Admin privileges required
+    // -----------------------------
+    if (user.role !== 'admin' && user.role !== 'superadmin') {
+      return res.status(403).json({
+        success: false,
+        message: 'Access denied: Admin privileges required',
+      });
+    }
+
+    const token = generateToken(user);
+
+    return res.status(200).json({
+      success: true,
+      message: 'Admin login successful',
+      token,
+      role: user.role,
+      user: {
+        id: user._id.toString(),
+        name: user.name,
+        email: user.email,
+        role: user.role,
+      },
+    });
+  } catch (error) {
+    console.error('Admin Login Error:', error);
+    return res.status(500).json({
+      success: false,
+      message: 'Internal server error during admin login',
       error: error.message,
     });
   }
@@ -166,7 +325,7 @@ const login = async (req, res) => {
 
 /**
  * @route   GET /api/auth/me
- * @desc    Get logged in user profile
+ * @desc    Get logged-in user profile
  * @access  Private
  */
 const getMe = async (req, res) => {
@@ -184,9 +343,13 @@ const getMe = async (req, res) => {
     return res.status(200).json({
       success: true,
       user: {
-        _id: user._id,
+        id: user._id.toString(),
         name: user.name,
         email: user.email,
+        role: user.role || 'student',
+        phone: user.phone || user.contactNumber || '',
+        qualification: user.qualification || '',
+        dateOfBirth: user.dateOfBirth || '',
       },
     });
   } catch (error) {
@@ -199,86 +362,12 @@ const getMe = async (req, res) => {
   }
 };
 
-/**
- * @route   POST /api/auth/register-student
- * @desc    Register a student profile alongside user account
- * @access  Public
- */
-const registerStudent = async (req, res) => {
-  try {
-    const {
-      name,
-      email,
-      password,
-      dob,
-      dateOfBirth,
-      phone,
-      contactNumber,
-      qualification,
-    } = req.body;
-
-    const finalDob = dob || dateOfBirth;
-    const finalPhone = phone || contactNumber;
-
-    if (!name || !email || !password) {
-      return res.status(400).json({
-        success: false,
-        message: 'Name, email, and password are required',
-      });
-    }
-
-    const cleanEmail = email.trim().toLowerCase();
-
-    const existingUser = await User.findOne({ email: cleanEmail });
-    if (existingUser) {
-      return res.status(409).json({
-        success: false,
-        message: 'An account with this email already exists',
-      });
-    }
-
-    const user = await User.create({
-      name: name.trim(),
-      email: cleanEmail,
-      password,
-    });
-
-    if (Student) {
-      await Student.create({
-        name: name.trim(),
-        email: cleanEmail,
-        dateOfBirth: finalDob ? finalDob.trim() : '',
-        contactNumber: finalPhone ? finalPhone.trim() : '',
-        qualification: qualification ? qualification.trim() : '',
-        userId: user._id,
-      });
-    }
-
-    const token = generateToken(user);
-
-    return res.status(201).json({
-      success: true,
-      token,
-      user: {
-        _id: user._id,
-        name: user.name,
-        email: user.email,
-      },
-    });
-  } catch (error) {
-    console.error('Register Student Error:', error);
-    return res.status(500).json({
-      success: false,
-      message: 'Internal server error while registering student',
-      error: error.message,
-    });
-  }
-};
-
 module.exports = {
-  signup,
-  register: signup,
-  login,
-  getMe,
+  signup: registerStudent,
+  register: registerStudent,
   registerStudent,
+  login: studentLogin,
+  studentLogin,
+  adminLogin,
+  getMe,
 };

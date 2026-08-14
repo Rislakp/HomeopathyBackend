@@ -33,6 +33,10 @@ const studentSchema = new mongoose.Schema({
     type: String,
     trim: true
   },
+  userId: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'User'
+  },
   course: {
     type: String,
     trim: true,
