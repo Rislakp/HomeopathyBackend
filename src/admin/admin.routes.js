@@ -5,8 +5,9 @@ const {
   extractMCQs,
   createGrandMockExam,
   getAllGrandMocks,
-  getGrandMockById
+  getGrandMockById,
 } = require('./admin.controller');
+const { requireAdmin } = require('../../middleware/rbac');
 
 // Multer memory storage configuration for PDF upload
 const storage = multer.memoryStorage();
@@ -20,15 +21,15 @@ const upload = multer({
     }
   },
   limits: {
-    fileSize: 10 * 1024 * 1024 // 10MB limit
-  }
+    fileSize: 10 * 1024 * 1024, // 10MB limit
+  },
 });
 
 // Admin Route: Extract MCQs from PDF
-router.post('/api/exams/extract-mcqs', upload.single('pdf'), extractMCQs);
+router.post('/api/exams/extract-mcqs', requireAdmin, upload.single('pdf'), extractMCQs);
 
 // Admin Route: Create Grand Mock Exam
-router.post('/api/exams/grand-mock', createGrandMockExam);
+router.post('/api/exams/grand-mock', requireAdmin, createGrandMockExam);
 
 // Admin Route: Get Summary List of Grand Mock Exams
 router.get('/api/exams/grand-mock', getAllGrandMocks);

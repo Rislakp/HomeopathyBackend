@@ -10,23 +10,41 @@ try {
 const EMAIL_REGEX = /^\w+([\.-]?\w+)*@\w+([\.-]?\w+)*(\.\w{2,3})+$/;
 
 /**
- * Generate JWT token containing user id, email, and role
+ * Generate JWT token containing user id, email, and role from database
  */
 const generateToken = (user) => {
   const secret =
     process.env.JWT_SECRET ||
     'white_coat_academy_secret_jwt_key_2026_super_secure';
+  const role = (user.role || 'student').toLowerCase().trim();
   return jwt.sign(
     {
-      id: user._id,
+      id: user._id.toString(),
+      userId: user._id.toString(),
       email: user.email,
-      role: user.role || 'student',
+      role: role,
     },
     secret,
     {
       expiresIn: process.env.JWT_EXPIRES_IN || '30d',
     }
   );
+};
+
+/**
+ * Helper to build sanitized user JSON response object
+ */
+const buildUserResponse = (user) => {
+  return {
+    id: user._id ? user._id.toString() : user.id,
+    name: user.name,
+    email: user.email,
+    role: (user.role || 'student').toLowerCase().trim(),
+    phone: user.phone || user.contactNumber || '',
+    contactNumber: user.contactNumber || user.phone || '',
+    qualification: user.qualification || '',
+    dateOfBirth: user.dateOfBirth || '',
+  };
 };
 
 /**
@@ -68,7 +86,7 @@ const registerStudent = async (req, res) => {
     }
 
     if (!password || typeof password !== 'string' || password.length < 6) {
-      errors.push('Password is required and must be at least 6 characters');
+      errors.push('Password must be at least 6 characters');
     }
 
     if (!finalDob) {
@@ -115,7 +133,7 @@ const registerStudent = async (req, res) => {
     }
 
     // -----------------------------
-    // CREATE USER (Role defaults to "student")
+    // CREATE USER (Role strictly set to "student")
     // -----------------------------
     const user = await User.create({
       name: finalName,
@@ -157,16 +175,7 @@ const registerStudent = async (req, res) => {
       message: 'Student registered successfully',
       token,
       role: 'student',
-      user: {
-        id: user._id.toString(),
-        name: user.name,
-        email: user.email,
-        phone: user.phone || user.contactNumber,
-        contactNumber: user.contactNumber || user.phone,
-        qualification: user.qualification,
-        dateOfBirth: user.dateOfBirth,
-        role: 'student',
-      },
+      user: buildUserResponse(user),
     });
   } catch (error) {
     console.error('Student Registration Error:', error);
@@ -185,22 +194,23 @@ const registerStudent = async (req, res) => {
 };
 
 /**
- * @route   POST /api/auth/login (or /api/auth/student/login)
- * @desc    Student Authentication & JWT generation (rejection of non-student credentials)
+ * @route   POST /api/auth/login
+ * @desc    Universal Login: Authenticates user and returns role from database
  * @access  Public
  */
-const studentLogin = async (req, res) => {
+const universalLogin = async (req, res) => {
   try {
-    const { email, password } = req.body;
+    const rawEmail = req.body.email || req.body.username;
+    const rawPassword = req.body.password;
 
-    if (!email || !password) {
+    if (!rawEmail || !rawPassword) {
       return res.status(400).json({
         success: false,
         message: 'Please provide email and password',
       });
     }
 
-    const cleanEmail = email.trim().toLowerCase();
+    const cleanEmail = rawEmail.toString().trim().toLowerCase();
     const user = await User.findOne({ email: cleanEmail });
 
     if (!user) {
@@ -210,7 +220,7 @@ const studentLogin = async (req, res) => {
       });
     }
 
-    const isMatch = await user.matchPassword(password);
+    const isMatch = await user.matchPassword(rawPassword);
     if (!isMatch) {
       return res.status(401).json({
         success: false,
@@ -218,10 +228,64 @@ const studentLogin = async (req, res) => {
       });
     }
 
-    // -----------------------------
-    // ROLE CHECK: Student access only
-    // -----------------------------
-    if (user.role && user.role !== 'student') {
+    const userRole = (user.role || 'student').toLowerCase().trim();
+    const token = generateToken(user);
+
+    return res.status(200).json({
+      success: true,
+      message: 'Login successful',
+      token,
+      role: userRole,
+      user: buildUserResponse(user),
+    });
+  } catch (error) {
+    console.error('Universal Login Error:', error);
+    return res.status(500).json({
+      success: false,
+      message: 'Internal server error during login',
+      error: error.message,
+    });
+  }
+};
+
+/**
+ * @route   POST /api/auth/student/login
+ * @desc    Student Authentication & JWT generation (rejection of non-student credentials)
+ * @access  Public
+ */
+const studentLogin = async (req, res) => {
+  try {
+    const rawEmail = req.body.email || req.body.username;
+    const rawPassword = req.body.password;
+
+    if (!rawEmail || !rawPassword) {
+      return res.status(400).json({
+        success: false,
+        message: 'Please provide email and password',
+      });
+    }
+
+    const cleanEmail = rawEmail.toString().trim().toLowerCase();
+    const user = await User.findOne({ email: cleanEmail });
+
+    if (!user) {
+      return res.status(401).json({
+        success: false,
+        message: 'Invalid email or password',
+      });
+    }
+
+    const isMatch = await user.matchPassword(rawPassword);
+    if (!isMatch) {
+      return res.status(401).json({
+        success: false,
+        message: 'Invalid email or password',
+      });
+    }
+
+    // Role verification: Student role only
+    const userRole = (user.role || 'student').toLowerCase().trim();
+    if (userRole !== 'student') {
       return res.status(403).json({
         success: false,
         message: 'Invalid role: Student access only',
@@ -235,15 +299,7 @@ const studentLogin = async (req, res) => {
       message: 'Login successful',
       token,
       role: 'student',
-      user: {
-        id: user._id.toString(),
-        name: user.name,
-        email: user.email,
-        phone: user.phone || user.contactNumber || '',
-        qualification: user.qualification || '',
-        dateOfBirth: user.dateOfBirth || '',
-        role: 'student',
-      },
+      user: buildUserResponse(user),
     });
   } catch (error) {
     console.error('Student Login Error:', error);
@@ -262,16 +318,17 @@ const studentLogin = async (req, res) => {
  */
 const adminLogin = async (req, res) => {
   try {
-    const { email, password } = req.body;
+    const rawEmail = req.body.email || req.body.username;
+    const rawPassword = req.body.password;
 
-    if (!email || !password) {
+    if (!rawEmail || !rawPassword) {
       return res.status(400).json({
         success: false,
         message: 'Please provide email and password',
       });
     }
 
-    const cleanEmail = email.trim().toLowerCase();
+    const cleanEmail = rawEmail.toString().trim().toLowerCase();
     const user = await User.findOne({ email: cleanEmail });
 
     if (!user) {
@@ -281,7 +338,7 @@ const adminLogin = async (req, res) => {
       });
     }
 
-    const isMatch = await user.matchPassword(password);
+    const isMatch = await user.matchPassword(rawPassword);
     if (!isMatch) {
       return res.status(401).json({
         success: false,
@@ -289,10 +346,9 @@ const adminLogin = async (req, res) => {
       });
     }
 
-    // -----------------------------
-    // ROLE CHECK: Admin privileges required
-    // -----------------------------
-    if (user.role !== 'admin' && user.role !== 'superadmin') {
+    // Role verification: Admin privileges required
+    const userRole = (user.role || '').toLowerCase().trim();
+    if (userRole !== 'admin' && userRole !== 'superadmin') {
       return res.status(403).json({
         success: false,
         message: 'Access denied: Admin privileges required',
@@ -305,13 +361,8 @@ const adminLogin = async (req, res) => {
       success: true,
       message: 'Admin login successful',
       token,
-      role: user.role,
-      user: {
-        id: user._id.toString(),
-        name: user.name,
-        email: user.email,
-        role: user.role,
-      },
+      role: userRole,
+      user: buildUserResponse(user),
     });
   } catch (error) {
     console.error('Admin Login Error:', error);
@@ -326,11 +377,11 @@ const adminLogin = async (req, res) => {
 /**
  * @route   GET /api/auth/me
  * @desc    Get logged-in user profile
- * @access  Private
+ * @access  Private (requireAuth)
  */
 const getMe = async (req, res) => {
   try {
-    const userId = req.user.id || req.user._id || req.user.userId;
+    const userId = req.user.id || req.user.userId;
     const user = await User.findById(userId).select('-password');
 
     if (!user) {
@@ -342,15 +393,7 @@ const getMe = async (req, res) => {
 
     return res.status(200).json({
       success: true,
-      user: {
-        id: user._id.toString(),
-        name: user.name,
-        email: user.email,
-        role: user.role || 'student',
-        phone: user.phone || user.contactNumber || '',
-        qualification: user.qualification || '',
-        dateOfBirth: user.dateOfBirth || '',
-      },
+      user: buildUserResponse(user),
     });
   } catch (error) {
     console.error('GetMe Error:', error);
@@ -362,12 +405,68 @@ const getMe = async (req, res) => {
   }
 };
 
+/**
+ * @route   PATCH /api/auth/users/:id/role (or /api/v1/admin/users/:id/role)
+ * @desc    Admin management: change user role (student <-> admin)
+ * @access  Private (Admin only)
+ */
+const updateUserRole = async (req, res) => {
+  try {
+    const targetUserId = req.params.id;
+    const { role } = req.body;
+
+    if (!role) {
+      return res.status(400).json({
+        success: false,
+        message: 'Role is required',
+      });
+    }
+
+    const cleanRole = role.toString().toLowerCase().trim();
+    const validRoles = ['student', 'admin', 'superadmin', 'teacher', 'staff'];
+
+    if (!validRoles.includes(cleanRole)) {
+      return res.status(400).json({
+        success: false,
+        message: `Invalid role. Allowed roles: ${validRoles.join(', ')}`,
+      });
+    }
+
+    const user = await User.findById(targetUserId);
+    if (!user) {
+      return res.status(404).json({
+        success: false,
+        message: 'User not found',
+      });
+    }
+
+    user.role = cleanRole;
+    await user.save();
+
+    return res.status(200).json({
+      success: true,
+      message: `User role updated to '${cleanRole}' successfully`,
+      user: buildUserResponse(user),
+    });
+  } catch (error) {
+    console.error('UpdateUserRole Error:', error);
+    return res.status(500).json({
+      success: false,
+      message: 'Internal server error updating user role',
+      error: error.message,
+    });
+  }
+};
+
 module.exports = {
   signup: registerStudent,
   register: registerStudent,
   registerStudent,
-  login: studentLogin,
+  login: universalLogin,
+  universalLogin,
   studentLogin,
   adminLogin,
   getMe,
+  updateUserRole,
+  generateToken,
 };

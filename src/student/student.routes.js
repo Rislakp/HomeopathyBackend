@@ -1,15 +1,15 @@
 const express = require('express');
 const router = express.Router();
-const authenticateUser = require('../common/middlewares/auth.middleware');
+const { requireStudent } = require('../../middleware/rbac');
 const {
   getAvailableExams,
   startExam,
   submitExam,
-  getStudentResults
+  getStudentResults,
 } = require('./student.controller');
 
-// Protect all student routes strictly under /api/student with authentication
-router.use('/api/student', authenticateUser);
+// Protect all student routes strictly under /api/student with student role authentication
+router.use('/api/student', requireStudent);
 
 /**
  * @route   GET /api/student/exams

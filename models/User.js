@@ -26,8 +26,10 @@ const userSchema = new mongoose.Schema(
     },
     role: {
       type: String,
-      enum: ['student', 'admin', 'superadmin'],
+      enum: ['student', 'admin', 'superadmin', 'teacher', 'staff'],
       default: 'student',
+      lowercase: true,
+      trim: true,
     },
     dateOfBirth: {
       type: String,

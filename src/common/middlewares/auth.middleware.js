@@ -1,11 +1,12 @@
 const jwt = require('jsonwebtoken');
+const User = require('../models/user.model');
 
 /**
  * Authentication Middleware
- * Extracts user/student ID from Bearer token, custom header, or query param.
- * Falls back safely for development if testing without full JWT.
+ * Extracts user/student ID from Bearer token or custom header,
+ * attaches user role and id to req.user.
  */
-function authenticateUser(req, res, next) {
+async function authenticateUser(req, res, next) {
   try {
     const authHeader = req.headers.authorization;
     let token = null;
@@ -16,20 +17,30 @@ function authenticateUser(req, res, next) {
 
     if (token) {
       try {
-        const secret = process.env.JWT_SECRET || 'white_coat_academy_secret_jwt_key_2026_super_secure';
+        const secret =
+          process.env.JWT_SECRET ||
+          'white_coat_academy_secret_jwt_key_2026_super_secure';
         const decoded = jwt.verify(token, secret);
-        const userId = decoded.userId || decoded.id || decoded._id || decoded.studentId;
-        
+        const userId =
+          decoded.userId || decoded.id || decoded._id || decoded.studentId;
+
+        let userRole = decoded.role;
+        if (!userRole && userId) {
+          const userDoc = await User.findById(userId).select('role').lean();
+          userRole = userDoc ? userDoc.role : 'student';
+        }
+
         req.user = {
           id: userId ? userId.toString() : undefined,
           userId: userId ? userId.toString() : undefined,
           email: decoded.email,
+          role: (userRole || 'student').toLowerCase(),
         };
         return next();
       } catch (jwtErr) {
         return res.status(401).json({
           success: false,
-          message: 'Invalid or expired authentication token.'
+          message: 'Invalid or expired authentication token.',
         });
       }
     }
@@ -37,7 +48,11 @@ function authenticateUser(req, res, next) {
     // Support explicit student-id header for development/testing if token not provided
     const directUserId = req.headers['x-student-id'] || req.headers['x-user-id'];
     if (directUserId) {
-      req.user = { id: directUserId.toString(), userId: directUserId.toString() };
+      req.user = {
+        id: directUserId.toString(),
+        userId: directUserId.toString(),
+        role: 'student',
+      };
       return next();
     }
 
@@ -48,13 +63,14 @@ function authenticateUser(req, res, next) {
 
     return res.status(401).json({
       success: false,
-      message: 'Authentication required. Please provide a Bearer token or Authorization header.'
+      message:
+        'Authentication required. Please provide a Bearer token or Authorization header.',
     });
   } catch (error) {
     return res.status(500).json({
       success: false,
       message: 'Authentication error.',
-      error: error.message
+      error: error.message,
     });
   }
 }

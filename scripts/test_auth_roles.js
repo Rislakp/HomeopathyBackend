@@ -227,7 +227,7 @@ async function runTests() {
         {
           hostname: 'localhost',
           port: TEST_PORT,
-          path: '/api/auth/login',
+          path: '/api/auth/student/login',
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
         },
