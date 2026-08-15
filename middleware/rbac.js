@@ -1,6 +1,12 @@
 const jwt = require('jsonwebtoken');
 const User = require('../models/User');
 
+// Lazy-load optional models to avoid circular dependency issues
+let Admin;
+let Student;
+try { Admin = require('../models/admin.model'); } catch (e) { /* optional */ }
+try { Student = require('../models/Student'); } catch (e) { /* optional */ }
+
 const getJwtSecret = () => {
   return (
     process.env.JWT_SECRET ||
@@ -10,7 +16,14 @@ const getJwtSecret = () => {
 
 /**
  * Authentication Middleware
- * Verifies JWT token and attaches authenticated user to req.user
+ * Verifies JWT token and attaches authenticated user to req.user.
+ *
+ * Lookup order (all checked so that admins stored only in the Admin
+ * collection, and students stored only in the Student collection, are
+ * not falsely rejected):
+ *   1. User collection  (primary – stores role field)
+ *   2. Admin collection (admins created directly, not via User)
+ *   3. Student collection (students created directly, not via User)
  */
 const requireAuth = async (req, res, next) => {
   try {
@@ -55,25 +68,61 @@ const requireAuth = async (req, res, next) => {
       });
     }
 
-    const user = await User.findById(userId).select('-password');
+    // ------------------------------------------------------------------
+    // 1. Try the primary User collection first
+    // ------------------------------------------------------------------
+    let foundUser = await User.findById(userId).select('-password');
+    let normalizedRole = null;
 
-    if (!user) {
+    if (foundUser) {
+      normalizedRole = (foundUser.role || decoded.role || 'student')
+        .toString()
+        .toLowerCase()
+        .trim();
+    }
+
+    // ------------------------------------------------------------------
+    // 2. Fallback: Admin collection
+    //    Covers admins created directly in the Admin collection who may
+    //    not have a corresponding User document.
+    // ------------------------------------------------------------------
+    if (!foundUser && Admin) {
+      const adminDoc = await Admin.findById(userId).select('-password');
+      if (adminDoc) {
+        foundUser = adminDoc;
+        // Admins in this collection carry no explicit role field –
+        // honour the role embedded in the JWT, defaulting to 'admin'.
+        normalizedRole = (decoded.role || 'admin').toString().toLowerCase().trim();
+      }
+    }
+
+    // ------------------------------------------------------------------
+    // 3. Fallback: Student collection
+    //    Covers students created directly in the Student collection.
+    // ------------------------------------------------------------------
+    if (!foundUser && Student) {
+      const studentDoc = await Student.findById(userId).select('-password');
+      if (studentDoc) {
+        foundUser = studentDoc;
+        normalizedRole = (decoded.role || 'student').toString().toLowerCase().trim();
+      }
+    }
+
+    if (!foundUser) {
+      console.warn(
+        `[requireAuth] Token userId ${userId} not found in User, Admin, or Student collections.`
+      );
       return res.status(401).json({
         success: false,
         message: 'User associated with this token no longer exists.',
       });
     }
 
-    const normalizedRole = (user.role || decoded.role || 'student')
-      .toString()
-      .toLowerCase()
-      .trim();
-
     req.user = {
-      id: user._id.toString(),
-      userId: user._id.toString(),
-      email: user.email,
-      name: user.name,
+      id: foundUser._id.toString(),
+      userId: foundUser._id.toString(),
+      email: foundUser.email,
+      name: foundUser.name,
       role: normalizedRole,
     };
 
