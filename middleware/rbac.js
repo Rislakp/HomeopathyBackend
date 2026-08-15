@@ -100,21 +100,28 @@ const requireRole = (...allowedRoles) => {
   return async (req, res, next) => {
     // If requireAuth hasn't already run, run it first
     if (!req.user) {
-      return requireAuth(req, res, () => {
-        const userRole = (req.user?.role || '').toLowerCase().trim();
-        if (
-          normalizedAllowedRoles.includes(userRole) ||
-          (userRole === 'superadmin' && normalizedAllowedRoles.includes('admin'))
-        ) {
-          return next();
-        }
+      return requireAuth(req, res, (err) => {
+        // Forward any error from requireAuth to Express error handler
+        if (err) return next(err);
 
-        return res.status(403).json({
-          success: false,
-          message: `Forbidden: Access denied. Required role: [${normalizedAllowedRoles.join(', ')}], current role: '${userRole}'`,
-          currentRole: userRole,
-          allowedRoles: normalizedAllowedRoles,
-        });
+        try {
+          const userRole = (req.user?.role || '').toLowerCase().trim();
+          if (
+            normalizedAllowedRoles.includes(userRole) ||
+            (userRole === 'superadmin' && normalizedAllowedRoles.includes('admin'))
+          ) {
+            return next();
+          }
+
+          return res.status(403).json({
+            success: false,
+            message: `Forbidden: Access denied. Required role: [${normalizedAllowedRoles.join(', ')}], current role: '${userRole}'`,
+            currentRole: userRole,
+            allowedRoles: normalizedAllowedRoles,
+          });
+        } catch (innerErr) {
+          return next(innerErr);
+        }
       });
     }
 
