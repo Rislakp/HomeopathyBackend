@@ -1,6 +1,7 @@
 const mongoose = require('mongoose');
 const Student = require('../models/Student');
 const User = require('../models/User');
+const TestResult = require('../src/common/models/testResult.model');
 
 /**
  * Sync registered student users from User collection into Student collection if missing
@@ -740,7 +741,69 @@ async function getAdminStudentById(req, res) {
   }
 }
 
+/**
+ * GET /api/v1/admin/students/:id/results
+ * Fetches the exam result history for a specific student by their MongoDB ID.
+ * Requires admin Bearer token. Does NOT use the student's own session.
+ */
+async function getAdminStudentResults(req, res) {
+  try {
+    const { id } = req.params;
+
+    if (!mongoose.Types.ObjectId.isValid(id)) {
+      return res.status(400).json({
+        success: false,
+        message: 'Invalid Student ID format'
+      });
+    }
+
+    const studentObjectId = new mongoose.Types.ObjectId(id);
+
+    // The testresults collection stores studentId which can reference either
+    // the Student document _id OR the linked User _id. We try both.
+    const results = await TestResult.find({
+      $or: [
+        { studentId: studentObjectId }
+      ]
+    })
+      .populate('examId', 'title marksPerQuestion durationMinutes totalQuestions negativeMarkPenalty')
+      .sort({ createdAt: -1 })
+      .lean();
+
+    // If no results found by student doc _id, try via the linked userId
+    // (for students whose test was submitted using their User _id as studentId)
+    if (results.length === 0) {
+      const studentDoc = await Student.findById(studentObjectId).lean();
+      if (studentDoc && studentDoc.userId) {
+        const resultsByUserId = await TestResult.find({ studentId: studentDoc.userId })
+          .populate('examId', 'title marksPerQuestion durationMinutes totalQuestions negativeMarkPenalty')
+          .sort({ createdAt: -1 })
+          .lean();
+        return res.status(200).json({
+          success: true,
+          count: resultsByUserId.length,
+          data: resultsByUserId
+        });
+      }
+    }
+
+    return res.status(200).json({
+      success: true,
+      count: results.length,
+      data: results
+    });
+  } catch (error) {
+    console.error('Error fetching student exam results by ID:', error);
+    return res.status(500).json({
+      success: false,
+      message: 'Failed to retrieve student exam results',
+      error: error.message
+    });
+  }
+}
+
 module.exports = {
   getAdminStudents,
-  getAdminStudentById
+  getAdminStudentById,
+  getAdminStudentResults,
 };

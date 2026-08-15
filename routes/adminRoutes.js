@@ -3,6 +3,7 @@ const router = express.Router();
 const {
   getAdminStudents,
   getAdminStudentById,
+  getAdminStudentResults,
 } = require('../controllers/adminStudentController');
 const { updateUserRole } = require('../controllers/authController');
 const { requireAdmin } = require('../middleware/rbac');
@@ -17,6 +18,14 @@ router.use(requireAdmin);
  */
 router.get('/students', getAdminStudents);
 router.get('/students/:id', getAdminStudentById);
+
+/**
+ * @route   GET /api/v1/admin/students/:id/results
+ * @desc    Fetch exam result history for a specific student by their MongoDB ID.
+ *          Uses the admin Bearer token — does NOT use the student's own session.
+ * @access  Private (Admin Only)
+ */
+router.get('/students/:id/results', getAdminStudentResults);
 
 // User role management by Admin
 router.patch('/users/:id/role', updateUserRole);
