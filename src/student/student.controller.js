@@ -157,9 +157,16 @@ async function submitExam(req, res) {
       });
     }
 
-    const marksPerQuestion = exam.marksPerQuestion || 1;
+    // ── Negative-Marking Constants ──────────────────────────────────────
+    // +4 for every correct answer, -1 for every wrong answer, 0 for unanswered
+    const MARKS_CORRECT  = 4;
+    const MARKS_WRONG    = -1;
+
     const totalQuestions = exam.questions.length || exam.totalQuestions || 0;
-    const totalMarks = totalQuestions * marksPerQuestion;
+    // maximumScore is what a student would get if they answered every question correctly
+    const maximumScore = totalQuestions * MARKS_CORRECT;
+    // totalMarks kept for backward-compatibility with admin aggregation pipeline
+    const totalMarks = maximumScore;
 
     // Create lookup map for exam questions by question _id string
     const questionMap = new Map();
@@ -203,8 +210,15 @@ async function submitExam(req, res) {
       }
     }
 
-    // 3. Compute final score
-    const finalScore = totalCorrect * marksPerQuestion;
+    // 3. Compute score using negative-marking formula
+    //    finalScore = (correctAnswers × 4) - (wrongAnswers × 1)
+    const positiveMarks     = totalCorrect * MARKS_CORRECT;         // e.g. 15 × 4 = 60
+    const negativeMarks     = totalWrong  * Math.abs(MARKS_WRONG);  // e.g.  3 × 1 =  3  (stored as positive deduction)
+    const finalScore        = positiveMarks - negativeMarks;        // e.g. 60 - 3  = 57
+    const unansweredQuestions = totalQuestions - totalAttempted;    // e.g. 20 - 18 =  2
+    const percentage        = maximumScore > 0
+      ? Math.round((finalScore / maximumScore) * 10000) / 100       // rounded to 2 dp
+      : 0;
 
     // 4. Save TestResult document in MongoDB
     const testResult = await TestResult.create({
@@ -215,6 +229,11 @@ async function submitExam(req, res) {
       totalAttempted,
       totalCorrect,
       totalWrong,
+      unansweredQuestions,
+      positiveMarks,
+      negativeMarks,
+      maximumScore,
+      percentage,
       status: 'Completed',
       answers: processedAnswers
     });
@@ -222,7 +241,33 @@ async function submitExam(req, res) {
     return res.status(201).json({
       success: true,
       message: 'Exam submitted and evaluated successfully.',
-      data: testResult
+      data: {
+        _id:                  testResult._id,
+        studentId:            testResult.studentId,
+        examId:               testResult.examId,
+        // ── Scoring Breakdown ──────────────────────────────────────
+        totalQuestions:       totalQuestions,
+        attemptedQuestions:   totalAttempted,
+        correctAnswers:       totalCorrect,
+        wrongAnswers:         totalWrong,
+        unansweredQuestions:  unansweredQuestions,
+        // ── Marks ─────────────────────────────────────────────────
+        positiveMarks:        positiveMarks,
+        negativeMarks:        negativeMarks,
+        finalScore:           finalScore,
+        maximumScore:         maximumScore,
+        percentage:           percentage,
+        // ── Legacy Fields (preserved for admin dashboard) ─────────
+        score:                finalScore,
+        totalMarks:           totalMarks,
+        totalAttempted:       totalAttempted,
+        totalCorrect:         totalCorrect,
+        totalWrong:           totalWrong,
+        // ──────────────────────────────────────────────────────────
+        status:               testResult.status,
+        answers:              testResult.answers,
+        createdAt:            testResult.createdAt
+      }
     });
   } catch (error) {
     console.error('Error submitting exam:', error);

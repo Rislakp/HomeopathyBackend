@@ -53,6 +53,31 @@ const testResultSchema = new mongoose.Schema({
     required: true,
     default: 0
   },
+  unansweredQuestions: {
+    type: Number,
+    required: true,
+    default: 0
+  },
+  positiveMarks: {
+    type: Number,
+    required: true,
+    default: 0
+  },
+  negativeMarks: {
+    type: Number,
+    required: true,
+    default: 0
+  },
+  maximumScore: {
+    type: Number,
+    required: true,
+    default: 0
+  },
+  percentage: {
+    type: Number,
+    required: true,
+    default: 0
+  },
   status: {
     type: String,
     enum: ['Completed', 'In Progress', 'Attempted'],
