@@ -118,7 +118,7 @@ async function extractMCQs(req, res) {
  */
 async function createGrandMockExam(req, res) {
   try {
-    const { title, marksPerQuestion, durationMinutes, totalQuestions, questions } = req.body;
+    const { title, marksPerQuestion, negativeMarkPenalty, durationMinutes, totalQuestions, questions } = req.body;
 
     // Validate body
     if (!title || !marksPerQuestion || !durationMinutes || !totalQuestions || !questions) {
@@ -139,6 +139,7 @@ async function createGrandMockExam(req, res) {
     const newExam = await Exam.create({
       title,
       marksPerQuestion,
+      negativeMarkPenalty: (negativeMarkPenalty !== undefined && negativeMarkPenalty !== null) ? Number(negativeMarkPenalty) : 1,
       durationMinutes,
       totalQuestions,
       questions
@@ -221,10 +222,125 @@ async function getGrandMockById(req, res) {
   }
 }
 
+/**
+ * PUT /api/exams/grand-mock/:id
+ * Admin: Update an existing Grand Mock Exam's metadata and/or questions.
+ * All fields are optional — only the fields sent in the body will be updated.
+ */
+async function updateGrandMockExam(req, res) {
+  try {
+    const { id } = req.params;
+
+    if (!mongoose.Types.ObjectId.isValid(id)) {
+      return res.status(400).json({
+        success: false,
+        message: 'Invalid Exam ID format.'
+      });
+    }
+
+    const exam = await Exam.findById(id);
+    if (!exam) {
+      return res.status(404).json({
+        success: false,
+        message: 'Grand Mock Exam not found.'
+      });
+    }
+
+    const allowedFields = ['title', 'marksPerQuestion', 'negativeMarkPenalty', 'durationMinutes', 'totalQuestions', 'questions'];
+    const updates = {};
+
+    for (const field of allowedFields) {
+      if (req.body[field] !== undefined) {
+        updates[field] = req.body[field];
+      }
+    }
+
+    // If questions are replaced, sync totalQuestions automatically
+    if (updates.questions && Array.isArray(updates.questions)) {
+      if (updates.questions.length === 0) {
+        return res.status(400).json({
+          success: false,
+          message: 'questions array must not be empty.'
+        });
+      }
+      if (!updates.totalQuestions) {
+        updates.totalQuestions = updates.questions.length;
+      }
+    }
+
+    if (Object.keys(updates).length === 0) {
+      return res.status(400).json({
+        success: false,
+        message: 'No valid fields provided for update.'
+      });
+    }
+
+    const updatedExam = await Exam.findByIdAndUpdate(
+      id,
+      { $set: updates },
+      { new: true, runValidators: true }
+    );
+
+    return res.status(200).json({
+      success: true,
+      message: 'Grand Mock Exam updated successfully.',
+      exam: updatedExam
+    });
+  } catch (error) {
+    console.error('Error updating Grand Mock Exam:', error);
+    return res.status(500).json({
+      success: false,
+      message: 'Failed to update Grand Mock Exam.',
+      error: error.message
+    });
+  }
+}
+
+/**
+ * DELETE /api/exams/grand-mock/:id
+ * Admin: Permanently delete a Grand Mock Exam from the database.
+ */
+async function deleteGrandMockExam(req, res) {
+  try {
+    const { id } = req.params;
+
+    if (!mongoose.Types.ObjectId.isValid(id)) {
+      return res.status(400).json({
+        success: false,
+        message: 'Invalid Exam ID format.'
+      });
+    }
+
+    const exam = await Exam.findByIdAndDelete(id);
+
+    if (!exam) {
+      return res.status(404).json({
+        success: false,
+        message: 'Grand Mock Exam not found.'
+      });
+    }
+
+    return res.status(200).json({
+      success: true,
+      message: 'Grand Mock Exam deleted successfully.',
+      deletedExamId: id
+    });
+  } catch (error) {
+    console.error('Error deleting Grand Mock Exam:', error);
+    return res.status(500).json({
+      success: false,
+      message: 'Failed to delete Grand Mock Exam.',
+      error: error.message
+    });
+  }
+}
+
 module.exports = {
   extractMCQs,
   createGrandMockExam,
   getAllGrandMocks,
   getGrandMockById,
+  updateGrandMockExam,
+  deleteGrandMockExam,
   parseMCQText // Exported for test verification
 };

@@ -157,15 +157,17 @@ async function submitExam(req, res) {
       });
     }
 
-    // ── Negative-Marking Constants ──────────────────────────────────────
-    // +4 for every correct answer, -1 for every wrong answer, 0 for unanswered
-    const MARKS_CORRECT  = 4;
-    const MARKS_WRONG    = -1;
+    // ── Scoring Rules — read from the exam document stored in MongoDB ──────
+    // marksPerQuestion  : positive marks for each correct answer (e.g. 4)
+    // negativeMarkPenalty: marks deducted for each wrong answer  (e.g. 1)
+    // Unanswered questions always receive 0 marks with no penalty.
+    const MARKS_CORRECT   = exam.marksPerQuestion     || 4; // fallback: 4
+    const MARKS_PENALTY   = exam.negativeMarkPenalty  ?? 1; // fallback: 1
 
     const totalQuestions = exam.questions.length || exam.totalQuestions || 0;
-    // maximumScore is what a student would get if they answered every question correctly
+    // maximumScore: marks if every question is answered correctly
     const maximumScore = totalQuestions * MARKS_CORRECT;
-    // totalMarks kept for backward-compatibility with admin aggregation pipeline
+    // totalMarks: backward-compatible alias for admin aggregation pipeline
     const totalMarks = maximumScore;
 
     // Create lookup map for exam questions by question _id string
@@ -210,14 +212,14 @@ async function submitExam(req, res) {
       }
     }
 
-    // 3. Compute score using negative-marking formula
-    //    finalScore = (correctAnswers × 4) - (wrongAnswers × 1)
-    const positiveMarks     = totalCorrect * MARKS_CORRECT;         // e.g. 15 × 4 = 60
-    const negativeMarks     = totalWrong  * Math.abs(MARKS_WRONG);  // e.g.  3 × 1 =  3  (stored as positive deduction)
-    const finalScore        = positiveMarks - negativeMarks;        // e.g. 60 - 3  = 57
-    const unansweredQuestions = totalQuestions - totalAttempted;    // e.g. 20 - 18 =  2
-    const percentage        = maximumScore > 0
-      ? Math.round((finalScore / maximumScore) * 10000) / 100       // rounded to 2 dp
+    // 3. Compute score using negative-marking formula (values from DB)
+    //    finalScore = (correctAnswers × marksPerQuestion) - (wrongAnswers × negativeMarkPenalty)
+    const positiveMarks       = totalCorrect * MARKS_CORRECT;    // e.g. 15 × 4 = 60
+    const negativeMarks       = totalWrong   * MARKS_PENALTY;    // e.g.  3 × 1 =  3
+    const finalScore          = positiveMarks - negativeMarks;   // e.g. 60 - 3  = 57
+    const unansweredQuestions = totalQuestions - totalAttempted; // e.g. 20 - 18 =  2
+    const percentage          = maximumScore > 0
+      ? Math.round((finalScore / maximumScore) * 10000) / 100    // rounded to 2 dp
       : 0;
 
     // 4. Save TestResult document in MongoDB
@@ -245,6 +247,9 @@ async function submitExam(req, res) {
         _id:                  testResult._id,
         studentId:            testResult.studentId,
         examId:               testResult.examId,
+        // ── Exam Rules Applied ─────────────────────────────────────
+        marksPerQuestion:     MARKS_CORRECT,
+        negativeMarkPenalty:  MARKS_PENALTY,
         // ── Scoring Breakdown ──────────────────────────────────────
         totalQuestions:       totalQuestions,
         attemptedQuestions:   totalAttempted,

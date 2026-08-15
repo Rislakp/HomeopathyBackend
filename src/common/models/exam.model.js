@@ -45,6 +45,11 @@ const examSchema = new mongoose.Schema({
     type: Number,
     required: true
   },
+  negativeMarkPenalty: {
+    type: Number,
+    required: true,
+    default: 1
+  },
   durationMinutes: {
     type: Number,
     required: true
