@@ -18,9 +18,11 @@ router.use('/api/student', requireStudent);
 router.get('/api/student/exams', getAvailableExams);
 
 /**
+ * @route   GET /api/student/exams/:id/start
  * @route   POST /api/student/exams/:id/start
  * @desc    Fetch exam questions (sanitized without correctOption) to begin test
  */
+router.get('/api/student/exams/:id/start', startExam);
 router.post('/api/student/exams/:id/start', startExam);
 
 /**
