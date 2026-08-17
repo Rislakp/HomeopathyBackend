@@ -22,7 +22,7 @@ async function authenticateUser(req, res, next) {
           'white_coat_academy_secret_jwt_key_2026_super_secure';
         const decoded = jwt.verify(token, secret);
         const userId =
-          decoded.userId || decoded.id || decoded._id || decoded.studentId;
+          decoded.userId || decoded.id || decoded._id || decoded.adminId || decoded.studentId;
 
         let userRole = decoded.role;
         if (!userRole && userId) {

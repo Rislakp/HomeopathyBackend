@@ -59,6 +59,7 @@ const requireAuth = async (req, res, next) => {
       decoded.userId ||
       decoded.id ||
       decoded._id ||
+      decoded.adminId ||
       decoded.studentId;
 
     if (!userId) {
@@ -90,9 +91,8 @@ const requireAuth = async (req, res, next) => {
       const adminDoc = await Admin.findById(userId).select('-password');
       if (adminDoc) {
         foundUser = adminDoc;
-        // Admins in this collection carry no explicit role field –
-        // honour the role embedded in the JWT, defaulting to 'admin'.
-        normalizedRole = (decoded.role || 'admin').toString().toLowerCase().trim();
+        // Admins in this collection carry role field (ADMIN / SUPERADMIN)
+        normalizedRole = (adminDoc.role || decoded.role || 'admin').toString().toLowerCase().trim();
       }
     }
 

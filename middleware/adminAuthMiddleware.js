@@ -1,5 +1,7 @@
 const jwt = require('jsonwebtoken');
 const Admin = require('../models/admin.model');
+let User;
+try { User = require('../models/User'); } catch (e) { /* optional */ }
 
 const getJwtSecret = () => {
   return (
@@ -42,7 +44,7 @@ const adminAuthMiddleware = async (req, res, next) => {
       });
     }
 
-    const adminId = decoded.adminId || decoded.id || decoded.userId;
+    const adminId = decoded.adminId || decoded.userId || decoded.id || decoded._id;
 
     if (!adminId) {
       return res.status(401).json({
@@ -51,8 +53,25 @@ const adminAuthMiddleware = async (req, res, next) => {
       });
     }
 
-    // Lookup Admin in the database
-    const admin = await Admin.findById(adminId);
+    // Lookup Admin in the database (Admin collection first, fallback to User collection)
+    let admin = null;
+    if (Admin) {
+      admin = await Admin.findById(adminId);
+    }
+    if (!admin && User) {
+      const userDoc = await User.findById(adminId);
+      if (userDoc) {
+        const userRole = (userDoc.role || '').toUpperCase().trim();
+        if (userRole === 'ADMIN' || userRole === 'SUPERADMIN') {
+          admin = userDoc;
+        } else {
+          return res.status(403).json({
+            success: false,
+            message: 'Forbidden: Admin access only.',
+          });
+        }
+      }
+    }
 
     if (!admin) {
       return res.status(401).json({
@@ -83,6 +102,12 @@ const adminAuthMiddleware = async (req, res, next) => {
       id: admin._id.toString(),
       email: admin.email,
       role: admin.role,
+    };
+    req.user = {
+      id: admin._id.toString(),
+      userId: admin._id.toString(),
+      email: admin.email,
+      role: role.toLowerCase(),
     };
 
     next();

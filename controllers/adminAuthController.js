@@ -77,12 +77,15 @@ const adminLogin = async (req, res) => {
       });
     }
 
-    // 6. Generate JWT payload: adminId, email, role
+    // 6. Generate JWT payload: userId, id, adminId, email, role
+    const adminRole = (admin.role || 'ADMIN').toString().trim();
     const token = jwt.sign(
       {
+        userId: admin._id.toString(),
+        id: admin._id.toString(),
         adminId: admin._id.toString(),
         email: admin.email,
-        role: admin.role || 'ADMIN',
+        role: adminRole.toLowerCase() === 'superadmin' ? 'superadmin' : 'admin',
       },
       getJwtSecret(),
       {
@@ -97,11 +100,27 @@ const adminLogin = async (req, res) => {
       data: {
         admin: {
           _id: admin._id.toString(),
+          id: admin._id.toString(),
+          name: admin.name,
+          email: admin.email,
+          role: admin.role,
+        },
+        user: {
+          _id: admin._id.toString(),
+          id: admin._id.toString(),
           name: admin.name,
           email: admin.email,
           role: admin.role,
         },
         token,
+      },
+      token,
+      user: {
+        _id: admin._id.toString(),
+        id: admin._id.toString(),
+        name: admin.name,
+        email: admin.email,
+        role: admin.role,
       },
     });
   } catch (error) {
