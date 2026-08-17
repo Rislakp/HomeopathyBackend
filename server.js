@@ -24,6 +24,7 @@ const app = express();
 // CORS Allowlist
 const allowedOrigins = [
   'https://whitecoat.academy',
+  'https://www.whitecoat.academy',
   'https://admin.whitecoat.academy',
 ];
 

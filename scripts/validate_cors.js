@@ -17,6 +17,7 @@ async function runValidation() {
 
   const allowedOrigins = [
     'https://whitecoat.academy',
+    'https://www.whitecoat.academy',
     'https://admin.whitecoat.academy',
   ];
 
@@ -109,9 +110,9 @@ async function runValidation() {
       expectedAllowOrigin: 'https://whitecoat.academy'
     },
     {
-      name: '3. Preflight OPTIONS with Origin: https://whitecoat.academy',
+      name: '3. Preflight OPTIONS /api/auth/register with Origin: https://whitecoat.academy',
       method: 'OPTIONS',
-      path: '/api/auth/login',
+      path: '/api/auth/register',
       headers: {
         'Origin': 'https://whitecoat.academy',
         'Access-Control-Request-Method': 'POST',
@@ -121,7 +122,39 @@ async function runValidation() {
       expectedAllowOrigin: 'https://whitecoat.academy'
     },
     {
-      name: '4. Root endpoint with Origin: https://admin.whitecoat.academy',
+      name: '4. Root endpoint with Origin: https://www.whitecoat.academy',
+      method: 'GET',
+      path: '/',
+      headers: { 'Origin': 'https://www.whitecoat.academy' },
+      expectedStatus: 200,
+      expectedAllowOrigin: 'https://www.whitecoat.academy'
+    },
+    {
+      name: '5. Preflight OPTIONS /api/auth/register with Origin: https://www.whitecoat.academy',
+      method: 'OPTIONS',
+      path: '/api/auth/register',
+      headers: {
+        'Origin': 'https://www.whitecoat.academy',
+        'Access-Control-Request-Method': 'POST',
+        'Access-Control-Request-Headers': 'Content-Type,Authorization,Accept'
+      },
+      expectedStatus: [200, 204],
+      expectedAllowOrigin: 'https://www.whitecoat.academy'
+    },
+    {
+      name: '6. Preflight OPTIONS /api/auth/register with Origin: https://admin.whitecoat.academy',
+      method: 'OPTIONS',
+      path: '/api/auth/register',
+      headers: {
+        'Origin': 'https://admin.whitecoat.academy',
+        'Access-Control-Request-Method': 'POST',
+        'Access-Control-Request-Headers': 'Content-Type,Authorization'
+      },
+      expectedStatus: [200, 204],
+      expectedAllowOrigin: 'https://admin.whitecoat.academy'
+    },
+    {
+      name: '7. Root endpoint with Origin: https://admin.whitecoat.academy',
       method: 'GET',
       path: '/',
       headers: { 'Origin': 'https://admin.whitecoat.academy' },
@@ -129,7 +162,7 @@ async function runValidation() {
       expectedAllowOrigin: 'https://admin.whitecoat.academy'
     },
     {
-      name: '5. Preflight OPTIONS with Origin: https://admin.whitecoat.academy',
+      name: '8. Preflight OPTIONS /api/admin/auth/login with Origin: https://admin.whitecoat.academy',
       method: 'OPTIONS',
       path: '/api/admin/auth/login',
       headers: {
@@ -141,7 +174,7 @@ async function runValidation() {
       expectedAllowOrigin: 'https://admin.whitecoat.academy'
     },
     {
-      name: '6. Localhost development Origin: http://localhost:3000',
+      name: '9. Localhost development Origin: http://localhost:3000',
       method: 'GET',
       path: '/',
       headers: { 'Origin': 'http://localhost:3000' },
@@ -149,7 +182,7 @@ async function runValidation() {
       expectedAllowOrigin: 'http://localhost:3000'
     },
     {
-      name: '7. Flutter Web local development Origin: http://localhost:54321',
+      name: '10. Flutter Web local development Origin: http://localhost:54321',
       method: 'OPTIONS',
       path: '/api/courses',
       headers: {
@@ -160,7 +193,7 @@ async function runValidation() {
       expectedAllowOrigin: 'http://localhost:54321'
     },
     {
-      name: '8. 127.0.0.1 local development Origin: http://127.0.0.1:8080',
+      name: '11. 127.0.0.1 local development Origin: http://127.0.0.1:8080',
       method: 'GET',
       path: '/',
       headers: { 'Origin': 'http://127.0.0.1:8080' },
@@ -168,7 +201,7 @@ async function runValidation() {
       expectedAllowOrigin: 'http://127.0.0.1:8080'
     },
     {
-      name: '9. Unauthorized origin rejected: https://unauthorized-domain.com',
+      name: '12. Unauthorized origin rejected: https://unauthorized-domain.com',
       method: 'GET',
       path: '/',
       headers: { 'Origin': 'https://unauthorized-domain.com' },
