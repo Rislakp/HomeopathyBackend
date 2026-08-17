@@ -60,9 +60,13 @@ app.use('/api/v1/admin', adminRoutes);
 app.use('/api/admin', adminRoutes);
 app.use('/api/v1/students', adminRoutes);
 app.use('/api/students', adminRoutes);
+app.use('/api/admin/auth', require('./routes/adminAuthRoutes'));
 
 // MongoDB
-connectDB();
+connectDB().then(() => {
+  const { seedInitialAdmin } = require('./controllers/adminAuthController');
+  seedInitialAdmin();
+});
 
 // Test
 app.get('/', (req, res) => {

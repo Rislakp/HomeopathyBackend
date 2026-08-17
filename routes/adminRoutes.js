@@ -6,6 +6,10 @@ const {
   getAdminStudentResults,
 } = require('../controllers/adminStudentController');
 const { updateUserRole } = require('../controllers/authController');
+const adminAuthMiddleware = require('../middleware/adminAuthMiddleware');
+
+// Protect all routes in this router with Admin authentication middleware
+router.use(adminAuthMiddleware);
 
 // Open/Public or flexible handling to prevent token database validation drops
 router.get('/students', getAdminStudents);
