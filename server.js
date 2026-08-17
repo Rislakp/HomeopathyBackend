@@ -21,12 +21,49 @@ const connectDB = require('./config/db');
 
 const app = express();
 
-// CORS
-app.use(cors({
-  origin: '*',
-  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization', 'x-student-id', 'x-user-id'],
-}));
+// CORS Allowlist
+const allowedOrigins = [
+  'https://whitecoat.academy',
+  'https://admin.whitecoat.academy',
+];
+
+if (process.env.ALLOWED_ORIGINS) {
+  process.env.ALLOWED_ORIGINS.split(',').forEach((origin) => {
+    const trimmed = origin.trim();
+    if (trimmed && !allowedOrigins.includes(trimmed)) {
+      allowedOrigins.push(trimmed);
+    }
+  });
+}
+
+const corsOptions = {
+  origin: (origin, callback) => {
+    // Allow non-browser clients (mobile apps, Postman, curl, server-to-server) where origin is undefined
+    if (!origin) {
+      return callback(null, true);
+    }
+
+    // Check allowlist
+    if (allowedOrigins.includes(origin)) {
+      return callback(null, true);
+    }
+
+    // Allow localhost and 127.0.0.1 on any port (for local dev & Flutter Web)
+    const isLocalhost = /^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/.test(origin);
+    if (isLocalhost) {
+      return callback(null, true);
+    }
+
+    return callback(new Error(`CORS error: Origin ${origin} not allowed by CORS policy`), false);
+  },
+  credentials: true,
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization', 'x-student-id', 'x-user-id', 'Accept', 'Origin', 'X-Requested-With'],
+  optionsSuccessStatus: 200,
+};
+
+app.use(cors(corsOptions));
+app.options('*', cors(corsOptions));
 
 app.use(express.json());
 
