@@ -45,10 +45,17 @@ const examSchema = new mongoose.Schema({
     type: Number,
     required: true
   },
+  negativeMark: {
+    type: Number,
+    default: 0,
+    min: [0, 'Negative mark cannot be negative'],
+    required: false
+  },
   negativeMarkPenalty: {
     type: Number,
-    required: true,
-    default: 1
+    default: 0,
+    min: [0, 'Negative mark penalty cannot be negative'],
+    required: false
   },
   durationMinutes: {
     type: Number,

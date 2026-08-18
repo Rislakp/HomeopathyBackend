@@ -118,14 +118,61 @@ async function extractMCQs(req, res) {
  */
 async function createGrandMockExam(req, res) {
   try {
-    const { title, marksPerQuestion, negativeMarkPenalty, durationMinutes, totalQuestions, questions } = req.body;
+    const {
+      title,
+      marksPerQuestion,
+      negativeMark,
+      negativeMarks,
+      negativeMarkPenalty,
+      durationMinutes,
+      totalQuestions,
+      questions
+    } = req.body;
 
-    // Validate body
-    if (!title || !marksPerQuestion || !durationMinutes || !totalQuestions || !questions) {
+    // Validate required fields
+    if (!title || marksPerQuestion === undefined || durationMinutes === undefined || totalQuestions === undefined || !questions) {
       return res.status(400).json({
         success: false,
         message: 'All fields (title, marksPerQuestion, durationMinutes, totalQuestions, questions) are required.'
       });
+    }
+
+    const parsedMarksPerQuestion = Number(marksPerQuestion);
+    if (isNaN(parsedMarksPerQuestion) || parsedMarksPerQuestion <= 0) {
+      return res.status(400).json({
+        success: false,
+        message: 'marksPerQuestion must be a positive number.'
+      });
+    }
+
+    const parsedDuration = Number(durationMinutes);
+    if (isNaN(parsedDuration) || parsedDuration <= 0) {
+      return res.status(400).json({
+        success: false,
+        message: 'durationMinutes must be a positive number.'
+      });
+    }
+
+    const parsedTotalQuestions = Number(totalQuestions);
+    if (isNaN(parsedTotalQuestions) || parsedTotalQuestions <= 0) {
+      return res.status(400).json({
+        success: false,
+        message: 'totalQuestions must be a positive number.'
+      });
+    }
+
+    // Validate negative mark parameter (supports negativeMark, negativeMarks, and negativeMarkPenalty)
+    const rawNegMark = negativeMark !== undefined ? negativeMark : (negativeMarks !== undefined ? negativeMarks : negativeMarkPenalty);
+    let parsedNegMark = 0;
+
+    if (rawNegMark !== undefined && rawNegMark !== null && rawNegMark !== '') {
+      parsedNegMark = Number(rawNegMark);
+      if (isNaN(parsedNegMark) || parsedNegMark < 0) {
+        return res.status(400).json({
+          success: false,
+          message: 'negativeMark must be a valid non-negative number.'
+        });
+      }
     }
 
     if (!Array.isArray(questions) || questions.length === 0) {
@@ -137,11 +184,12 @@ async function createGrandMockExam(req, res) {
 
     // Create final exam in database
     const newExam = await Exam.create({
-      title,
-      marksPerQuestion,
-      negativeMarkPenalty: (negativeMarkPenalty !== undefined && negativeMarkPenalty !== null) ? Number(negativeMarkPenalty) : 1,
-      durationMinutes,
-      totalQuestions,
+      title: title.trim(),
+      marksPerQuestion: parsedMarksPerQuestion,
+      negativeMark: parsedNegMark,
+      negativeMarkPenalty: parsedNegMark,
+      durationMinutes: parsedDuration,
+      totalQuestions: parsedTotalQuestions,
       questions
     });
 
@@ -168,11 +216,19 @@ async function getAllGrandMocks(req, res) {
   try {
     const exams = await Exam.find()
       .select('-questions')
-      .sort({ createdAt: -1 });
+      .sort({ createdAt: -1 })
+      .lean();
+
+    const formattedExams = exams.map((exam) => ({
+      ...exam,
+      negativeMark: exam.negativeMark !== undefined && exam.negativeMark !== null
+        ? exam.negativeMark
+        : (exam.negativeMarkPenalty ?? 0)
+    }));
 
     return res.status(200).json({
       success: true,
-      data: exams
+      data: formattedExams
     });
   } catch (error) {
     console.error('Error fetching Grand Mock exams:', error);
@@ -199,7 +255,7 @@ async function getGrandMockById(req, res) {
       });
     }
 
-    const exam = await Exam.findById(id);
+    const exam = await Exam.findById(id).lean();
 
     if (!exam) {
       return res.status(404).json({
@@ -208,9 +264,16 @@ async function getGrandMockById(req, res) {
       });
     }
 
+    const formattedExam = {
+      ...exam,
+      negativeMark: exam.negativeMark !== undefined && exam.negativeMark !== null
+        ? exam.negativeMark
+        : (exam.negativeMarkPenalty ?? 0)
+    };
+
     return res.status(200).json({
       success: true,
-      data: exam
+      data: formattedExam
     });
   } catch (error) {
     console.error('Error fetching Grand Mock Exam by ID:', error);
@@ -246,25 +309,57 @@ async function updateGrandMockExam(req, res) {
       });
     }
 
-    const allowedFields = ['title', 'marksPerQuestion', 'negativeMarkPenalty', 'durationMinutes', 'totalQuestions', 'questions'];
     const updates = {};
 
-    for (const field of allowedFields) {
-      if (req.body[field] !== undefined) {
-        updates[field] = req.body[field];
+    if (req.body.title !== undefined) updates.title = req.body.title.trim();
+    if (req.body.marksPerQuestion !== undefined) {
+      const parsedMarks = Number(req.body.marksPerQuestion);
+      if (isNaN(parsedMarks) || parsedMarks <= 0) {
+        return res.status(400).json({ success: false, message: 'marksPerQuestion must be a positive number.' });
       }
+      updates.marksPerQuestion = parsedMarks;
+    }
+    if (req.body.durationMinutes !== undefined) {
+      const parsedDuration = Number(req.body.durationMinutes);
+      if (isNaN(parsedDuration) || parsedDuration <= 0) {
+        return res.status(400).json({ success: false, message: 'durationMinutes must be a positive number.' });
+      }
+      updates.durationMinutes = parsedDuration;
+    }
+    if (req.body.totalQuestions !== undefined) {
+      const parsedTotal = Number(req.body.totalQuestions);
+      if (isNaN(parsedTotal) || parsedTotal <= 0) {
+        return res.status(400).json({ success: false, message: 'totalQuestions must be a positive number.' });
+      }
+      updates.totalQuestions = parsedTotal;
     }
 
-    // If questions are replaced, sync totalQuestions automatically
-    if (updates.questions && Array.isArray(updates.questions)) {
-      if (updates.questions.length === 0) {
+    const rawNegMark = req.body.negativeMark !== undefined
+      ? req.body.negativeMark
+      : (req.body.negativeMarks !== undefined ? req.body.negativeMarks : req.body.negativeMarkPenalty);
+
+    if (rawNegMark !== undefined && rawNegMark !== null && rawNegMark !== '') {
+      const parsedNegMark = Number(rawNegMark);
+      if (isNaN(parsedNegMark) || parsedNegMark < 0) {
+        return res.status(400).json({
+          success: false,
+          message: 'negativeMark must be a valid non-negative number.'
+        });
+      }
+      updates.negativeMark = parsedNegMark;
+      updates.negativeMarkPenalty = parsedNegMark;
+    }
+
+    if (req.body.questions !== undefined) {
+      if (!Array.isArray(req.body.questions) || req.body.questions.length === 0) {
         return res.status(400).json({
           success: false,
           message: 'questions array must not be empty.'
         });
       }
-      if (!updates.totalQuestions) {
-        updates.totalQuestions = updates.questions.length;
+      updates.questions = req.body.questions;
+      if (!updates.totalQuestions && !req.body.totalQuestions) {
+        updates.totalQuestions = req.body.questions.length;
       }
     }
 

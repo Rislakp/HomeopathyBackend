@@ -766,7 +766,7 @@ async function getAdminStudentResults(req, res) {
         { studentId: studentObjectId }
       ]
     })
-      .populate('examId', 'title marksPerQuestion durationMinutes totalQuestions negativeMarkPenalty')
+      .populate('examId', 'title marksPerQuestion durationMinutes totalQuestions negativeMark negativeMarkPenalty')
       .sort({ createdAt: -1 })
       .lean();
 
@@ -776,7 +776,7 @@ async function getAdminStudentResults(req, res) {
       const studentDoc = await Student.findById(studentObjectId).lean();
       if (studentDoc && studentDoc.userId) {
         const resultsByUserId = await TestResult.find({ studentId: studentDoc.userId })
-          .populate('examId', 'title marksPerQuestion durationMinutes totalQuestions negativeMarkPenalty')
+          .populate('examId', 'title marksPerQuestion durationMinutes totalQuestions negativeMark negativeMarkPenalty')
           .sort({ createdAt: -1 })
           .lean();
         return res.status(200).json({
