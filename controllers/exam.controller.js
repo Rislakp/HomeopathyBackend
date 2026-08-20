@@ -392,7 +392,7 @@ async function updateGrandMockExam(req, res) {
 }
 
 /**
- * DELETE /api/exams/grand-mock/:id
+ * DELETE /api/exams/:id or /api/exams/grand-mock/:id
  * Admin: Permanently delete a Grand Mock Exam from the database.
  */
 async function deleteGrandMockExam(req, res) {
@@ -411,24 +411,37 @@ async function deleteGrandMockExam(req, res) {
     if (!exam) {
       return res.status(404).json({
         success: false,
-        message: 'Grand Mock Exam not found.'
+        message: 'Exam not found.'
       });
+    }
+
+    // Clean up any associated test results asynchronously
+    try {
+      const TestResult = mongoose.models.TestResult || require('../src/common/models/testResult.model');
+      if (TestResult) {
+        await TestResult.deleteMany({ examId: id });
+      }
+    } catch (cleanupError) {
+      console.warn('[deleteExam] Could not clean up associated test results:', cleanupError.message);
     }
 
     return res.status(200).json({
       success: true,
-      message: 'Grand Mock Exam deleted successfully.',
-      deletedExamId: id
+      message: 'Exam deleted successfully.',
+      deletedExamId: id,
+      data: exam
     });
   } catch (error) {
-    console.error('Error deleting Grand Mock Exam:', error);
+    console.error('Error deleting Exam:', error);
     return res.status(500).json({
       success: false,
-      message: 'Failed to delete Grand Mock Exam.',
+      message: 'Failed to delete Exam.',
       error: error.message
     });
   }
 }
+
+const deleteExam = deleteGrandMockExam;
 
 module.exports = {
   extractMCQs,
@@ -437,5 +450,7 @@ module.exports = {
   getGrandMockById,
   updateGrandMockExam,
   deleteGrandMockExam,
+  deleteExam,
   parseMCQText // Exported for test verification
 };
+

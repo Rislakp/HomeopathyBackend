@@ -239,9 +239,170 @@ async function getGrandMockById(req, res) {
   }
 }
 
+/**
+ * PUT /api/exams/grand-mock/:id or /api/exams/:id
+ * Admin: Update an existing Grand Mock Exam's metadata and/or questions.
+ */
+async function updateGrandMockExam(req, res) {
+  try {
+    const { id } = req.params;
+
+    if (!mongoose.Types.ObjectId.isValid(id)) {
+      return res.status(400).json({
+        success: false,
+        message: 'Invalid Exam ID format.'
+      });
+    }
+
+    const exam = await Exam.findById(id);
+    if (!exam) {
+      return res.status(404).json({
+        success: false,
+        message: 'Grand Mock Exam not found.'
+      });
+    }
+
+    const updates = {};
+
+    if (req.body.title !== undefined) updates.title = req.body.title.trim();
+    if (req.body.marksPerQuestion !== undefined) {
+      const parsedMarks = Number(req.body.marksPerQuestion);
+      if (isNaN(parsedMarks) || parsedMarks <= 0) {
+        return res.status(400).json({ success: false, message: 'marksPerQuestion must be a positive number.' });
+      }
+      updates.marksPerQuestion = parsedMarks;
+    }
+    if (req.body.durationMinutes !== undefined) {
+      const parsedDuration = Number(req.body.durationMinutes);
+      if (isNaN(parsedDuration) || parsedDuration <= 0) {
+        return res.status(400).json({ success: false, message: 'durationMinutes must be a positive number.' });
+      }
+      updates.durationMinutes = parsedDuration;
+    }
+    if (req.body.totalQuestions !== undefined) {
+      const parsedTotal = Number(req.body.totalQuestions);
+      if (isNaN(parsedTotal) || parsedTotal <= 0) {
+        return res.status(400).json({ success: false, message: 'totalQuestions must be a positive number.' });
+      }
+      updates.totalQuestions = parsedTotal;
+    }
+
+    const rawNegMark = req.body.negativeMark !== undefined
+      ? req.body.negativeMark
+      : (req.body.negativeMarks !== undefined ? req.body.negativeMarks : req.body.negativeMarkPenalty);
+
+    if (rawNegMark !== undefined && rawNegMark !== null && rawNegMark !== '') {
+      const parsedNegMark = Number(rawNegMark);
+      if (isNaN(parsedNegMark) || parsedNegMark < 0) {
+        return res.status(400).json({
+          success: false,
+          message: 'negativeMark must be a valid non-negative number.'
+        });
+      }
+      updates.negativeMark = parsedNegMark;
+      updates.negativeMarkPenalty = parsedNegMark;
+    }
+
+    if (req.body.questions !== undefined) {
+      if (!Array.isArray(req.body.questions) || req.body.questions.length === 0) {
+        return res.status(400).json({
+          success: false,
+          message: 'questions array must not be empty.'
+        });
+      }
+      updates.questions = req.body.questions;
+      if (!updates.totalQuestions && !req.body.totalQuestions) {
+        updates.totalQuestions = req.body.questions.length;
+      }
+    }
+
+    if (Object.keys(updates).length === 0) {
+      return res.status(400).json({
+        success: false,
+        message: 'No valid fields provided for update.'
+      });
+    }
+
+    const updatedExam = await Exam.findByIdAndUpdate(
+      id,
+      { $set: updates },
+      { new: true, runValidators: true }
+    );
+
+    return res.status(200).json({
+      success: true,
+      message: 'Grand Mock Exam updated successfully.',
+      exam: updatedExam
+    });
+  } catch (error) {
+    console.error('Error updating Grand Mock Exam:', error);
+    return res.status(500).json({
+      success: false,
+      message: 'Failed to update Grand Mock Exam.',
+      error: error.message
+    });
+  }
+}
+
+/**
+ * DELETE /api/exams/:id or /api/exams/grand-mock/:id
+ * Admin: Permanently delete a Grand Mock Exam from the database.
+ */
+async function deleteGrandMockExam(req, res) {
+  try {
+    const { id } = req.params;
+
+    if (!mongoose.Types.ObjectId.isValid(id)) {
+      return res.status(400).json({
+        success: false,
+        message: 'Invalid Exam ID format.'
+      });
+    }
+
+    const exam = await Exam.findByIdAndDelete(id);
+
+    if (!exam) {
+      return res.status(404).json({
+        success: false,
+        message: 'Exam not found.'
+      });
+    }
+
+    // Clean up any associated test results asynchronously
+    try {
+      const TestResult = mongoose.models.TestResult || require('../common/models/testResult.model');
+      if (TestResult) {
+        await TestResult.deleteMany({ examId: id });
+      }
+    } catch (cleanupError) {
+      console.warn('[deleteExam] Could not clean up associated test results:', cleanupError.message);
+    }
+
+    return res.status(200).json({
+      success: true,
+      message: 'Exam deleted successfully.',
+      deletedExamId: id,
+      data: exam
+    });
+  } catch (error) {
+    console.error('Error deleting Exam:', error);
+    return res.status(500).json({
+      success: false,
+      message: 'Failed to delete Exam.',
+      error: error.message
+    });
+  }
+}
+
+const deleteExam = deleteGrandMockExam;
+
 module.exports = {
   extractMCQs,
   createGrandMockExam,
   getAllGrandMocks,
-  getGrandMockById
+  getGrandMockById,
+  updateGrandMockExam,
+  deleteGrandMockExam,
+  deleteExam
 };
+
