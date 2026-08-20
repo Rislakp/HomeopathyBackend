@@ -269,7 +269,63 @@ async function runTests() {
     const singleStudentRes = await makeRequest(`/api/v1/students/${studentDoc1._id}`);
     assert('GET /api/v1/students/:id returns 200', singleStudentRes.status === 200);
 
+    // TEST 8.5: Student Profile Update API (PUT /api/v1/admin/students/:id)
+    console.log('\n--- Test 8.5: Student Profile Update API (PUT & PATCH /api/v1/admin/students/:id) ---');
+    const updatePayload = {
+      fullName: `Updated Student Name ${timestamp}`,
+      email: `updated_student_${timestamp}@example.com`,
+      phone: '9998887776',
+      dob: '1998-10-20',
+      qualification: 'MD Homeopathy',
+      course: 'Advanced Organon',
+      subscription: 'Pro',
+      status: 'Active'
+    };
+
+    const updateRes = await makeRequest(`/api/v1/admin/students/${studentDoc1._id}`, 'PUT', {}, updatePayload);
+    assert('PUT /api/v1/admin/students/:id returns 200 OK', updateRes.status === 200);
+    assert('PUT returns success: true', updateRes.data.success === true);
+    assert('PUT returns exact message "Student details updated successfully"', updateRes.data.message === 'Student details updated successfully');
+    assert('Returned data has updated name', updateRes.data.data.name === updatePayload.fullName);
+    assert('Returned data has updated email', updateRes.data.data.email === updatePayload.email);
+    assert('Returned data has updated phone', updateRes.data.data.phone === updatePayload.phone || updateRes.data.data.contactNumber === updatePayload.phone);
+    assert('Returned data has updated dob', updateRes.data.data.dateOfBirth === updatePayload.dob);
+    assert('Returned data has updated qualification', updateRes.data.data.qualification === updatePayload.qualification);
+    assert('Returned data has updated course', updateRes.data.data.course === updatePayload.course);
+    assert('Returned data has updated subscription', updateRes.data.data.subscription === updatePayload.subscription);
+    assert('Returned data has updated status', updateRes.data.data.status === updatePayload.status);
+
+    // Verify DB update
+    const updatedDbStudent = await Student.findById(studentDoc1._id);
+    assert('MongoDB Student document updated name in DB', updatedDbStudent.name === updatePayload.fullName);
+    assert('MongoDB Student document updated email in DB', updatedDbStudent.email === updatePayload.email);
+
+    // Verify linked User document sync
+    const updatedDbUser = await User.findById(studentUser._id);
+    assert('Linked User document synced name in DB', updatedDbUser.name === updatePayload.fullName);
+    assert('Linked User document synced email in DB', updatedDbUser.email === updatePayload.email);
+
+    // Test PATCH method alias
+    const patchPayload = { status: 'Trial' };
+    const patchRes = await makeRequest(`/api/students/${studentDoc1._id}`, 'PATCH', {}, patchPayload);
+    assert('PATCH /api/students/:id returns 200 OK', patchRes.status === 200);
+    assert('PATCH updated status to Trial', patchRes.data.data.status === 'Trial');
+
+    // Test invalid ObjectId
+    const invalidIdRes = await makeRequest('/api/v1/admin/students/invalid-id', 'PUT', {}, updatePayload);
+    assert('PUT with invalid ID format returns 400 Bad Request', invalidIdRes.status === 400);
+
+    // Test non-existent ObjectId
+    const nonExistentId = new mongoose.Types.ObjectId();
+    const notFoundRes = await makeRequest(`/api/v1/admin/students/${nonExistentId}`, 'PUT', {}, updatePayload);
+    assert('PUT with non-existent ID returns 404 Not Found', notFoundRes.status === 404);
+
+    // Test Mongoose Validation Error (e.g. invalid status enum value)
+    const invalidStatusRes = await makeRequest(`/api/v1/admin/students/${studentDoc1._id}`, 'PUT', {}, { status: 'InvalidStatusValue' });
+    assert('PUT with invalid status enum value returns 400 Bad Request', invalidStatusRes.status === 400);
+
     // TEST 9: Student Permanent Deletion API
+
     console.log('\n--- Test 9: Permanent Student Deletion (DELETE /api/v1/admin/students/:id & /api/admin/students/:id) ---');
     
     // 9a. Delete studentDoc1 (linked with studentUser and TestResult)

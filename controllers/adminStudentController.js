@@ -888,11 +888,162 @@ async function deleteAdminStudent(req, res) {
   }
 }
 
+/**
+ * PUT or PATCH /api/v1/admin/students/:id (also /api/admin/students/:id, /api/students/:id)
+ * Updates student details in MongoDB using Mongoose findByIdAndUpdate with runValidators.
+ */
+async function updateAdminStudent(req, res) {
+  try {
+    const { id } = req.params;
+
+    if (!mongoose.Types.ObjectId.isValid(id)) {
+      return res.status(400).json({
+        success: false,
+        message: 'Invalid Student ID format'
+      });
+    }
+
+    const studentObjectId = new mongoose.Types.ObjectId(id);
+
+    // Build update object based on allowed fields from request payload
+    const updateFields = {};
+
+    const nameVal = req.body.name || req.body.fullName;
+    if (nameVal !== undefined && nameVal !== null) {
+      updateFields.name = String(nameVal).trim();
+    }
+
+    if (req.body.email !== undefined && req.body.email !== null) {
+      updateFields.email = String(req.body.email).trim().toLowerCase();
+    }
+
+    const phoneVal = req.body.phone || req.body.contactNumber;
+    if (phoneVal !== undefined && phoneVal !== null) {
+      const cleanPhone = String(phoneVal).trim();
+      updateFields.phone = cleanPhone;
+      updateFields.contactNumber = cleanPhone;
+    }
+
+    const dobVal = req.body.dob || req.body.dateOfBirth;
+    if (dobVal !== undefined && dobVal !== null) {
+      updateFields.dateOfBirth = String(dobVal).trim();
+    }
+
+    if (req.body.qualification !== undefined && req.body.qualification !== null) {
+      updateFields.qualification = String(req.body.qualification).trim();
+    }
+
+    if (req.body.course !== undefined && req.body.course !== null) {
+      updateFields.course = String(req.body.course).trim();
+    }
+
+    if (req.body.subscription !== undefined && req.body.subscription !== null) {
+      updateFields.subscription = String(req.body.subscription).trim();
+    }
+
+    if (req.body.status !== undefined && req.body.status !== null) {
+      updateFields.status = String(req.body.status).trim();
+    }
+
+    if (req.body.profileImage !== undefined && req.body.profileImage !== null) {
+      updateFields.profileImage = String(req.body.profileImage).trim();
+    }
+
+    if (req.body.avatar !== undefined && req.body.avatar !== null) {
+      updateFields.avatar = String(req.body.avatar).trim();
+    }
+
+    // 1. Database Operation: findByIdAndUpdate with runValidators: true and new: true
+    let updatedStudent = await Student.findByIdAndUpdate(
+      studentObjectId,
+      { $set: updateFields },
+      { new: true, runValidators: true }
+    );
+
+    // 2. If not found by Student _id, check if id matches a linked userId
+    if (!updatedStudent) {
+      updatedStudent = await Student.findOneAndUpdate(
+        { userId: studentObjectId },
+        { $set: updateFields },
+        { new: true, runValidators: true }
+      );
+    }
+
+    // If student record does not exist in MongoDB
+    if (!updatedStudent) {
+      return res.status(404).json({
+        success: false,
+        message: 'Student not found'
+      });
+    }
+
+    // 3. Sync updated fields to linked User account if exists
+    try {
+      const userUpdateFields = {};
+      if (updateFields.name) userUpdateFields.name = updateFields.name;
+      if (updateFields.email) userUpdateFields.email = updateFields.email;
+      if (updateFields.phone) {
+        userUpdateFields.phone = updateFields.phone;
+        userUpdateFields.contactNumber = updateFields.phone;
+      }
+      if (updateFields.dateOfBirth) userUpdateFields.dateOfBirth = updateFields.dateOfBirth;
+      if (updateFields.qualification) userUpdateFields.qualification = updateFields.qualification;
+
+      if (Object.keys(userUpdateFields).length > 0) {
+        if (updatedStudent.userId) {
+          await User.findByIdAndUpdate(updatedStudent.userId, { $set: userUpdateFields });
+        } else if (updatedStudent.email) {
+          await User.findOneAndUpdate({ email: updatedStudent.email, role: 'student' }, { $set: userUpdateFields });
+        }
+      }
+    } catch (syncErr) {
+      console.warn('Notice: Sync to User model failed:', syncErr.message);
+    }
+
+    // 4. Response: 200 OK with success: true, message, and updatedStudent object
+    return res.status(200).json({
+      success: true,
+      message: 'Student details updated successfully',
+      data: updatedStudent
+    });
+  } catch (error) {
+    // 400 Bad Request for Mongoose schema validation failure
+    if (error.name === 'ValidationError') {
+      console.warn('Student update validation error:', error.message);
+      return res.status(400).json({
+        success: false,
+        message: error.message,
+        error: error.message
+      });
+    }
+
+    // 400 Bad Request for duplicate email
+    if (error.code === 11000) {
+      console.warn('Student update duplicate email error:', error.message);
+      return res.status(400).json({
+        success: false,
+        message: 'Email already exists',
+        error: 'Duplicate key error'
+      });
+    }
+
+    console.error('Error updating student details:', error);
+    return res.status(500).json({
+      success: false,
+      message: 'Failed to update student details',
+      error: error.message
+    });
+  }
+}
+
 module.exports = {
   getAdminStudents,
   getAdminStudentById,
   getAdminStudentResults,
+  updateAdminStudent,
+  updateStudent: updateAdminStudent,
   deleteAdminStudent,
   deleteStudent: deleteAdminStudent,
 };
+
 

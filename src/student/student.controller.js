@@ -213,8 +213,79 @@ async function startExam(req, res) {
 }
 
 /**
+ * Helper function to normalize any option representation (letter, option string, index, or option text)
+ * into a canonical option key: 'A', 'B', 'C', or 'D'.
+ * Returns null if unattempted, empty, or invalid.
+ */
+function normalizeOptionKey(rawOption, questionOptions) {
+  if (rawOption === null || rawOption === undefined) {
+    return null;
+  }
+
+  // Convert to string and trim whitespace
+  let str = String(rawOption).trim();
+  if (str === '' || str.toLowerCase() === 'null' || str.toLowerCase() === 'undefined') {
+    return null;
+  }
+
+  const uppercaseStr = str.toUpperCase();
+
+  // 1. Direct single letter check ('A', 'B', 'C', 'D')
+  if (['A', 'B', 'C', 'D'].includes(uppercaseStr)) {
+    return uppercaseStr;
+  }
+
+  // 2. Prefix pattern match (e.g., "Option A", "Option_A", "OPT A", "Opt. A", "A)", "A.", "A - ...", "Answer: A")
+  const prefixMatch = uppercaseStr.match(/^(?:OPTION|OPT|ANSWER)?[\s._:-]*([A-D])(?:\)|\.|\s|-|$)/i);
+  if (prefixMatch && ['A', 'B', 'C', 'D'].includes(prefixMatch[1].toUpperCase())) {
+    return prefixMatch[1].toUpperCase();
+  }
+
+  // 3. Numeric index matching (0 -> A, 1 -> B, 2 -> C, 3 -> D)
+  if (/^\d+$/.test(str)) {
+    const num = parseInt(str, 10);
+    if (num === 0) return 'A';
+    if (num === 1) return 'B';
+    if (num === 2) return 'C';
+    if (num === 3) return 'D';
+  }
+
+  // 4. Option text matching against questionOptions { A, B, C, D }
+  if (questionOptions && typeof questionOptions === 'object') {
+    const cleanInput = str.toLowerCase();
+
+    for (const key of ['A', 'B', 'C', 'D']) {
+      const optionText = questionOptions[key];
+      if (optionText && typeof optionText === 'string') {
+        const cleanOptionText = optionText.trim().toLowerCase();
+
+        // Exact option text match
+        if (cleanInput === cleanOptionText) {
+          return key;
+        }
+
+        // Match if input stripped of prefix ("A) ", "A. ") matches option text
+        const strippedInput = cleanInput.replace(/^(?:option|opt)?[\s._:-]*[a-d][\).\s_-]*/i, '').trim();
+        if (strippedInput && strippedInput === cleanOptionText) {
+          return key;
+        }
+
+        // Match if option text stripped of prefix matches input
+        const strippedOptionText = cleanOptionText.replace(/^(?:option|opt)?[\s._:-]*[a-d][\).\s_-]*/i, '').trim();
+        if (strippedOptionText && (cleanInput === strippedOptionText || strippedInput === strippedOptionText)) {
+          return key;
+        }
+      }
+    }
+  }
+
+  return null;
+}
+
+/**
  * POST /api/student/exams/:id/submit
- * Submits student's answers, evaluates against the database, computes final score, and saves TestResult.
+ * Submits student's answers, evaluates against the database with robust answer verification and negative marking calculation,
+ * computes final score, and saves TestResult.
  * Payload: { answers: [{ questionId: "...", selectedOption: "A" }] }
  */
 async function submitExam(req, res) {
@@ -254,57 +325,72 @@ async function submitExam(req, res) {
     }
 
     // ── Scoring Rules — read from the exam document stored in MongoDB ──────
-    // marksPerQuestion: positive marks for each correct answer
-    // negativeMark    : marks deducted for each wrong answer (default: 0)
+    // marksPerQuestion: positive marks for each correct answer (default: 1)
+    // negativeMark    : penalty deducted for each wrong answer (default: 0)
     // Unanswered questions always receive 0 marks with no penalty.
     const MARKS_CORRECT = Number(exam.marksPerQuestion) || 1;
-    const MARKS_PENALTY = exam.negativeMark !== undefined && exam.negativeMark !== null
-      ? Number(exam.negativeMark)
-      : (exam.negativeMarkPenalty !== undefined && exam.negativeMarkPenalty !== null ? Number(exam.negativeMarkPenalty) : 0);
 
-    const totalQuestions = exam.questions.length || exam.totalQuestions || 0;
-    // maximumScore: marks if every question is answered correctly
+    let rawPenalty = 0;
+    if (exam.negativeMark !== undefined && exam.negativeMark !== null) {
+      rawPenalty = Number(exam.negativeMark);
+    } else if (exam.negativeMarks !== undefined && exam.negativeMarks !== null) {
+      rawPenalty = Number(exam.negativeMarks);
+    } else if (exam.negativeMarkPenalty !== undefined && exam.negativeMarkPenalty !== null) {
+      rawPenalty = Number(exam.negativeMarkPenalty);
+    }
+    const MARKS_PENALTY = isNaN(rawPenalty) ? 0 : Math.abs(rawPenalty);
+
+    const totalQuestions = (exam.questions && exam.questions.length) || exam.totalQuestions || 0;
     const maximumScore = totalQuestions * MARKS_CORRECT;
-    // totalMarks: backward-compatible alias for admin aggregation pipeline
     const totalMarks = maximumScore;
 
-    // Create lookup map for exam questions by question _id string
+    // Create lookup map for exam questions by question _id string and index
     const questionMap = new Map();
-    exam.questions.forEach((q, index) => {
-      if (q._id) {
-        questionMap.set(q._id.toString(), q);
-      }
-      // Fallback matching by index if questionId is passed as index
-      questionMap.set(index.toString(), q);
-    });
+    if (Array.isArray(exam.questions)) {
+      exam.questions.forEach((q, index) => {
+        if (q._id) {
+          questionMap.set(q._id.toString(), q);
+        }
+        // Support index-based lookup (0-indexed and 1-indexed)
+        questionMap.set(index.toString(), q);
+        questionMap.set((index + 1).toString(), q);
+      });
+    }
 
     let totalAttempted = 0;
     let totalCorrect = 0;
     let totalWrong = 0;
+    let positiveMarks = 0;
+    let negativeMarks = 0;
     const processedAnswers = [];
 
-    // 2. Evaluate each submitted answer
+    // 2. Evaluate each submitted answer with robust option matching
     for (const ans of answers) {
-      const qId = ans.questionId ? ans.questionId.toString() : null;
+      const qId = ans.questionId !== undefined && ans.questionId !== null ? ans.questionId.toString().trim() : null;
       const targetQuestion = qId ? questionMap.get(qId) : null;
-      const selectedOption = ans.selectedOption ? ans.selectedOption.toString().trim().toUpperCase() : null;
 
       if (targetQuestion) {
-        const isAttempted = selectedOption !== null && selectedOption !== '';
-        const isCorrect = isAttempted && selectedOption === targetQuestion.correctOption.toUpperCase();
+        // Robust option normalization for both selectedOption and correctOption
+        const userOptionKey = normalizeOptionKey(ans.selectedOption, targetQuestion.options);
+        const correctOptionKey = normalizeOptionKey(targetQuestion.correctOption, targetQuestion.options);
+
+        const isAttempted = userOptionKey !== null;
+        const isCorrect = isAttempted && correctOptionKey !== null && userOptionKey === correctOptionKey;
 
         if (isAttempted) {
           totalAttempted++;
           if (isCorrect) {
             totalCorrect++;
+            positiveMarks += MARKS_CORRECT;
           } else {
             totalWrong++;
+            negativeMarks += MARKS_PENALTY;
           }
         }
 
         processedAnswers.push({
           questionId: targetQuestion._id || (mongoose.Types.ObjectId.isValid(qId) ? qId : null),
-          selectedOption: selectedOption,
+          selectedOption: userOptionKey, // Guaranteed 'A', 'B', 'C', 'D' or null
           isCorrect: isCorrect
         });
       }
@@ -312,11 +398,10 @@ async function submitExam(req, res) {
 
     // 3. Compute score using negative-marking formula (values from DB)
     //    finalScore = (correctAnswers × marksPerQuestion) - (wrongAnswers × negativeMark)
-    const positiveMarks       = totalCorrect * MARKS_CORRECT;
-    const negativeMarks       = totalWrong   * MARKS_PENALTY;
-    const finalScore          = positiveMarks - negativeMarks;
-    const unansweredQuestions = totalQuestions - totalAttempted;
-    const percentage          = maximumScore > 0
+    const rawFinalScore = positiveMarks - negativeMarks;
+    const finalScore = Math.round(rawFinalScore * 100) / 100;
+    const unansweredQuestions = Math.max(0, totalQuestions - totalAttempted);
+    const percentage = maximumScore > 0
       ? Math.round((finalScore / maximumScore) * 10000) / 100
       : 0;
 
@@ -330,8 +415,8 @@ async function submitExam(req, res) {
       totalCorrect,
       totalWrong,
       unansweredQuestions,
-      positiveMarks,
-      negativeMarks,
+      positiveMarks: Math.round(positiveMarks * 100) / 100,
+      negativeMarks: Math.round(negativeMarks * 100) / 100,
       maximumScore,
       percentage,
       status: 'Completed',
@@ -356,12 +441,12 @@ async function submitExam(req, res) {
         wrongAnswers:         totalWrong,
         unansweredQuestions:  unansweredQuestions,
         // ── Marks ─────────────────────────────────────────────────
-        positiveMarks:        positiveMarks,
-        negativeMarks:        negativeMarks,
+        positiveMarks:        Math.round(positiveMarks * 100) / 100,
+        negativeMarks:        Math.round(negativeMarks * 100) / 100,
         finalScore:           finalScore,
         maximumScore:         maximumScore,
         percentage:           percentage,
-        // ── Legacy Fields (preserved for admin dashboard) ─────────
+        // ── Legacy Fields (preserved for backwards compatibility) ──
         score:                finalScore,
         totalMarks:           totalMarks,
         totalAttempted:       totalAttempted,
