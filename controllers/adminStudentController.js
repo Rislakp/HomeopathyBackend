@@ -761,12 +761,12 @@ async function getAdminStudentResults(req, res) {
 
     // The testresults collection stores studentId which can reference either
     // the Student document _id OR the linked User _id. We try both.
-    const results = await TestResult.find({
+    let results = await TestResult.find({
       $or: [
         { studentId: studentObjectId }
       ]
     })
-      .populate('examId', 'title marksPerQuestion durationMinutes totalQuestions negativeMark negativeMarkPenalty')
+      .populate('examId', 'title marksPerQuestion durationMinutes totalQuestions negativeMark negativeMarkPenalty questions')
       .sort({ createdAt: -1 })
       .lean();
 
@@ -775,22 +775,59 @@ async function getAdminStudentResults(req, res) {
     if (results.length === 0) {
       const studentDoc = await Student.findById(studentObjectId).lean();
       if (studentDoc && studentDoc.userId) {
-        const resultsByUserId = await TestResult.find({ studentId: studentDoc.userId })
-          .populate('examId', 'title marksPerQuestion durationMinutes totalQuestions negativeMark negativeMarkPenalty')
+        results = await TestResult.find({ studentId: studentDoc.userId })
+          .populate('examId', 'title marksPerQuestion durationMinutes totalQuestions negativeMark negativeMarkPenalty questions')
           .sort({ createdAt: -1 })
           .lean();
-        return res.status(200).json({
-          success: true,
-          count: resultsByUserId.length,
-          data: resultsByUserId
-        });
       }
     }
 
+    const formattedResults = results.map((result) => {
+      const exam = result.examId;
+      const questionMap = new Map();
+      if (exam && Array.isArray(exam.questions)) {
+        exam.questions.forEach((q, index) => {
+          if (q._id) {
+            questionMap.set(q._id.toString(), q);
+          }
+          questionMap.set(index.toString(), q);
+          questionMap.set((index + 1).toString(), q);
+        });
+      }
+
+      const formattedAnswers = (result.answers || []).map((ans) => {
+        let correctOpt = ans.correctOption || ans.correctAnswer || null;
+        if (!correctOpt && ans.questionId) {
+          const targetQ = questionMap.get(ans.questionId.toString());
+          if (targetQ) {
+            correctOpt = targetQ.correctOption;
+          }
+        }
+        return {
+          questionId: ans.questionId,
+          selectedOption: ans.selectedOption !== undefined ? ans.selectedOption : null,
+          correctOption: correctOpt || null,
+          isCorrect: ans.isCorrect
+        };
+      });
+
+      let examMetadata = exam;
+      if (exam && exam.questions) {
+        const { questions, ...restExam } = exam;
+        examMetadata = restExam;
+      }
+
+      return {
+        ...result,
+        examId: examMetadata,
+        answers: formattedAnswers
+      };
+    });
+
     return res.status(200).json({
       success: true,
-      count: results.length,
-      data: results
+      count: formattedResults.length,
+      data: formattedResults
     });
   } catch (error) {
     console.error('Error fetching student exam results by ID:', error);

@@ -391,6 +391,7 @@ async function submitExam(req, res) {
         processedAnswers.push({
           questionId: targetQuestion._id || (mongoose.Types.ObjectId.isValid(qId) ? qId : null),
           selectedOption: userOptionKey, // Guaranteed 'A', 'B', 'C', 'D' or null
+          correctOption: correctOptionKey || (targetQuestion.correctOption ? targetQuestion.correctOption.toString().toUpperCase() : null),
           isCorrect: isCorrect
         });
       }
@@ -484,13 +485,56 @@ async function getStudentResults(req, res) {
     }
 
     const results = await TestResult.find({ studentId })
-      .populate('examId', 'title marksPerQuestion negativeMark negativeMarkPenalty durationMinutes totalQuestions')
-      .sort({ createdAt: -1 });
+      .populate('examId', 'title marksPerQuestion negativeMark negativeMarkPenalty durationMinutes totalQuestions questions')
+      .sort({ createdAt: -1 })
+      .lean();
+
+    const formattedResults = results.map((result) => {
+      const exam = result.examId;
+      const questionMap = new Map();
+      if (exam && Array.isArray(exam.questions)) {
+        exam.questions.forEach((q, index) => {
+          if (q._id) {
+            questionMap.set(q._id.toString(), q);
+          }
+          questionMap.set(index.toString(), q);
+          questionMap.set((index + 1).toString(), q);
+        });
+      }
+
+      const formattedAnswers = (result.answers || []).map((ans) => {
+        let correctOpt = ans.correctOption || ans.correctAnswer || null;
+        if (!correctOpt && ans.questionId) {
+          const targetQ = questionMap.get(ans.questionId.toString());
+          if (targetQ) {
+            correctOpt = normalizeOptionKey(targetQ.correctOption, targetQ.options) || targetQ.correctOption;
+          }
+        }
+        return {
+          questionId: ans.questionId,
+          selectedOption: ans.selectedOption !== undefined ? ans.selectedOption : null,
+          correctOption: correctOpt || null,
+          isCorrect: ans.isCorrect
+        };
+      });
+
+      let examMetadata = exam;
+      if (exam && exam.questions) {
+        const { questions, ...restExam } = exam;
+        examMetadata = restExam;
+      }
+
+      return {
+        ...result,
+        examId: examMetadata,
+        answers: formattedAnswers
+      };
+    });
 
     return res.status(200).json({
       success: true,
-      count: results.length,
-      data: results
+      count: formattedResults.length,
+      data: formattedResults
     });
   } catch (error) {
     console.error('Error fetching student test results:', error);

@@ -10,6 +10,11 @@ const answerSchema = new mongoose.Schema({
     enum: ['A', 'B', 'C', 'D', null, ''],
     default: null
   },
+  correctOption: {
+    type: String,
+    enum: ['A', 'B', 'C', 'D', null, ''],
+    default: null
+  },
   isCorrect: {
     type: Boolean,
     required: true,
