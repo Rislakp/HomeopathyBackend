@@ -802,8 +802,97 @@ async function getAdminStudentResults(req, res) {
   }
 }
 
+/**
+ * DELETE /api/v1/admin/students/:id
+ * Permanently deletes a student document, linked User account, and associated test results from MongoDB database.
+ */
+async function deleteAdminStudent(req, res) {
+  try {
+    const { id } = req.params;
+
+    if (!mongoose.Types.ObjectId.isValid(id)) {
+      return res.status(400).json({
+        success: false,
+        message: 'Invalid Student ID format'
+      });
+    }
+
+    const studentObjectId = new mongoose.Types.ObjectId(id);
+
+    // 1. Find Student document by _id or userId
+    const studentDoc = await Student.findOne({
+      $or: [
+        { _id: studentObjectId },
+        { userId: studentObjectId }
+      ]
+    });
+
+    // 2. Find User document by _id or by studentDoc.userId / email
+    let userDoc = null;
+    if (studentDoc) {
+      if (studentDoc.userId) {
+        userDoc = await User.findById(studentDoc.userId);
+      }
+      if (!userDoc && studentDoc.email) {
+        userDoc = await User.findOne({ email: studentDoc.email, role: 'student' });
+      }
+    } else {
+      userDoc = await User.findOne({ _id: studentObjectId, role: 'student' });
+    }
+
+    // If neither Student document nor student User account exists
+    if (!studentDoc && !userDoc) {
+      return res.status(404).json({
+        success: false,
+        message: 'Student not found'
+      });
+    }
+
+    // Collect all related ObjectIds for permanent deletion
+    const studentDocId = studentDoc ? studentDoc._id : null;
+    const userDocId = userDoc ? userDoc._id : (studentDoc && studentDoc.userId ? studentDoc.userId : null);
+
+    // 3. Permanent deletion from Student collection using findByIdAndDelete / findOneAndDelete
+    if (studentDocId) {
+      await Student.findByIdAndDelete(studentDocId);
+    } else {
+      await Student.findOneAndDelete({ userId: studentObjectId });
+    }
+
+    // 4. Permanent deletion from User collection if it's a student account
+    if (userDocId) {
+      await User.findOneAndDelete({ _id: userDocId, role: 'student' });
+    }
+
+    // 5. Cleanup related test history / submissions
+    const deleteConditions = [];
+    if (studentDocId) deleteConditions.push({ studentId: studentDocId });
+    if (userDocId) deleteConditions.push({ studentId: userDocId });
+    deleteConditions.push({ studentId: studentObjectId });
+
+    if (deleteConditions.length > 0) {
+      await TestResult.deleteMany({ $or: deleteConditions });
+    }
+
+    return res.status(200).json({
+      success: true,
+      message: 'Student permanently deleted from database'
+    });
+  } catch (error) {
+    console.error('Error permanently deleting student:', error);
+    return res.status(500).json({
+      success: false,
+      message: 'Failed to delete student',
+      error: error.message
+    });
+  }
+}
+
 module.exports = {
   getAdminStudents,
   getAdminStudentById,
   getAdminStudentResults,
+  deleteAdminStudent,
+  deleteStudent: deleteAdminStudent,
 };
+

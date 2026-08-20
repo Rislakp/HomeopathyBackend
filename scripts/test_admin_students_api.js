@@ -4,6 +4,8 @@ const express = require('cors');
 const mongoose = require('mongoose');
 const connectDB = require('../config/db');
 
+const jwt = require('jsonwebtoken');
+const Admin = require('../models/admin.model');
 const User = require('../models/User');
 const Student = require('../models/Student');
 const Course = require('../models/Course');
@@ -29,16 +31,24 @@ expressApp.use((err, req, res, next) => {
 
 let server;
 let serverPort = 5055;
+let adminToken = '';
 
 function makeRequest(path, method = 'GET', headers = {}, body = null) {
   return new Promise((resolve, reject) => {
+    const defaultHeaders = {
+      'Content-Type': 'application/json',
+    };
+    if (adminToken) {
+      defaultHeaders['Authorization'] = `Bearer ${adminToken}`;
+    }
+
     const options = {
       hostname: '127.0.0.1',
       port: serverPort,
       path: path,
       method: method,
       headers: {
-        'Content-Type': 'application/json',
+        ...defaultHeaders,
         ...headers
       }
     };
@@ -69,7 +79,7 @@ function makeRequest(path, method = 'GET', headers = {}, body = null) {
 
 async function runTests() {
   console.log('====================================================');
-  console.log('🚀 RUNNING PUBLIC STUDENTS API VERIFICATION TESTS');
+  console.log('🚀 RUNNING ADMIN STUDENTS API VERIFICATION TESTS');
   console.log('====================================================\n');
 
   await connectDB();
@@ -85,7 +95,17 @@ async function runTests() {
   const timestamp = Date.now();
 
   try {
-    console.log('📝 Setting up test data (Students, Course, Exam, Test Results)...');
+    console.log('📝 Setting up test data (Admin, Students, Course, Exam, Test Results)...');
+
+    const adminUser = await Admin.create({
+      name: `Test Admin ${timestamp}`,
+      email: `admin_${timestamp}@example.com`,
+      password: 'AdminPassword123!',
+      role: 'ADMIN'
+    });
+
+    const jwtSecret = process.env.JWT_SECRET || 'white_coat_academy_secret_jwt_key_2026_super_secure';
+    adminToken = jwt.sign({ adminId: adminUser._id, role: 'ADMIN' }, jwtSecret, { expiresIn: '1h' });
 
     const studentUser = await User.create({
       name: `Public Test Student ${timestamp}`,
@@ -249,13 +269,45 @@ async function runTests() {
     const singleStudentRes = await makeRequest(`/api/v1/students/${studentDoc1._id}`);
     assert('GET /api/v1/students/:id returns 200', singleStudentRes.status === 200);
 
-    // Clean up
-    console.log('\n🧹 Cleaning up test data...');
-    await User.deleteOne({ _id: studentUser._id });
+    // TEST 9: Student Permanent Deletion API
+    console.log('\n--- Test 9: Permanent Student Deletion (DELETE /api/v1/admin/students/:id & /api/admin/students/:id) ---');
+    
+    // 9a. Delete studentDoc1 (linked with studentUser and TestResult)
+    const deleteRes = await makeRequest(`/api/v1/admin/students/${studentDoc1._id}`, 'DELETE');
+    assert('DELETE /api/v1/admin/students/:id returns status 200', deleteRes.status === 200);
+    assert('DELETE returns success: true', deleteRes.data.success === true);
+    assert('DELETE returns exact message "Student permanently deleted from database"', deleteRes.data.message === 'Student permanently deleted from database');
+
+    // 9b. Verify DB records are completely removed
+    const dbStudentCheck = await Student.findById(studentDoc1._id);
+    assert('Student document completely removed from Student collection in MongoDB', dbStudentCheck === null);
+
+    const dbUserCheck = await User.findById(studentUser._id);
+    assert('Linked User document completely removed from User collection in MongoDB', dbUserCheck === null);
+
+    const dbResultsCheck = await TestResult.find({ studentId: studentUser._id });
+    assert('Associated TestResults completely removed from MongoDB', dbResultsCheck.length === 0);
+
+    // 9c. Subsequent lookup should return 404
+    const subsequentGetRes = await makeRequest(`/api/v1/admin/students/${studentDoc1._id}`);
+    assert('Subsequent GET returns 404 Student not found', subsequentGetRes.status === 404);
+
+    // 9d. Subsequent DELETE should return 404
+    const subsequentDeleteRes = await makeRequest(`/api/v1/admin/students/${studentDoc1._id}`, 'DELETE');
+    assert('Subsequent DELETE returns 404 Student not found', subsequentDeleteRes.status === 404);
+
+    // 9e. Invalid ID format should return 400
+    const invalidDeleteRes = await makeRequest('/api/v1/admin/students/invalid-id-format', 'DELETE');
+    assert('DELETE with invalid ID format returns 400', invalidDeleteRes.status === 400);
+
+    // Clean up remaining test records
+    console.log('\n🧹 Cleaning up remaining test data...');
+    await Admin.deleteMany({ _id: adminUser._id });
+    await User.deleteMany({ _id: studentUser._id });
     await Student.deleteMany({ _id: { $in: [studentDoc1._id, studentDoc2._id, studentDoc3._id] } });
-    await Course.deleteOne({ _id: course._id });
-    await Exam.deleteOne({ _id: exam1._id });
-    await TestResult.deleteOne({ studentId: studentUser._id });
+    await Course.deleteMany({ _id: course._id });
+    await Exam.deleteMany({ _id: exam1._id });
+    await TestResult.deleteMany({ studentId: studentUser._id });
 
     console.log('\n====================================================');
     console.log(`📊 TEST SUMMARY: Passed: ${testsPassed}, Failed: ${testsFailed}`);
