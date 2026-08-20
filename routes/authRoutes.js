@@ -8,6 +8,7 @@ const {
   adminLogin,
   getMe,
   updateUserRole,
+  resetPassword,
 } = require('../controllers/authController');
 
 const { requireAuth, requireAdmin } = require('../middleware/rbac');
@@ -31,6 +32,14 @@ router.post('/student/login', studentLogin);
 
 // Dedicated Admin Login (enforces admin / superadmin role)
 router.post('/admin/login', adminLogin);
+
+// -----------------------------
+// PASSWORD MANAGEMENT (Direct Reset / Update without OTP)
+// -----------------------------
+router.post('/reset-password', resetPassword);
+router.put('/reset-password', resetPassword);
+router.post('/update-password', resetPassword);
+router.put('/update-password', resetPassword);
 
 // -----------------------------
 // USER PROFILE ENDPOINT

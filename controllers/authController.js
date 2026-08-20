@@ -458,6 +458,118 @@ const updateUserRole = async (req, res) => {
   }
 };
 
+/**
+ * @route   POST /api/auth/reset-password
+ * @route   PUT  /api/auth/reset-password
+ * @route   POST /api/auth/update-password
+ * @route   PUT  /api/auth/update-password
+ * @desc    Direct password reset/update without OTP verification
+ * @access  Public
+ */
+const resetPassword = async (req, res) => {
+  try {
+    const {
+      email,
+      newPassword,
+      password,
+      confirmPassword,
+      confirmNewPassword,
+    } = req.body;
+
+    // 1. Email validation
+    if (!email || typeof email !== 'string' || !email.trim()) {
+      return res.status(400).json({
+        success: false,
+        message: 'Please provide a valid email address',
+      });
+    }
+
+    const cleanEmail = email.trim().toLowerCase();
+    if (!EMAIL_REGEX.test(cleanEmail)) {
+      return res.status(400).json({
+        success: false,
+        message: 'Please provide a valid email address',
+      });
+    }
+
+    // 2. New Password validation
+    const targetPassword = newPassword || password;
+    if (
+      !targetPassword ||
+      typeof targetPassword !== 'string' ||
+      !targetPassword.trim()
+    ) {
+      return res.status(400).json({
+        success: false,
+        message: 'Please provide a new password',
+      });
+    }
+
+    if (targetPassword.length < 6) {
+      return res.status(400).json({
+        success: false,
+        message: 'Password must be at least 6 characters long',
+      });
+    }
+
+    // 3. Confirm Password check (if provided)
+    const targetConfirmPassword =
+      confirmPassword !== undefined ? confirmPassword : confirmNewPassword;
+    if (
+      targetConfirmPassword !== undefined &&
+      targetConfirmPassword !== null &&
+      targetConfirmPassword !== '' &&
+      targetPassword !== targetConfirmPassword
+    ) {
+      return res.status(400).json({
+        success: false,
+        message: 'New password and confirm password do not match',
+      });
+    }
+
+    // 4. Check user existence in DB
+    const user = await User.findOne({ email: cleanEmail });
+    let admin = null;
+
+    try {
+      const Admin = require('../models/admin.model');
+      admin = await Admin.findOne({ email: cleanEmail });
+    } catch (e) {
+      // Admin model lookup is supplementary
+    }
+
+    if (!user && !admin) {
+      return res.status(404).json({
+        success: false,
+        message: 'User not found with this email',
+      });
+    }
+
+    // 5. Update and securely save (pre-save hook hashes with bcrypt automatically)
+    if (user) {
+      user.password = targetPassword;
+      await user.save();
+    }
+
+    if (admin) {
+      admin.password = targetPassword;
+      await admin.save();
+    }
+
+    return res.status(200).json({
+      success: true,
+      message: 'Password updated successfully',
+    });
+  } catch (error) {
+    console.error('Reset/Update Password Error:', error);
+    return res.status(500).json({
+      success: false,
+      message: 'Internal server error while updating password',
+      error: error.message,
+    });
+  }
+};
+
 module.exports = {
   signup: registerStudent,
   register: registerStudent,
@@ -468,5 +580,8 @@ module.exports = {
   adminLogin,
   getMe,
   updateUserRole,
+  resetPassword,
+  updatePassword: resetPassword,
+  resetPasswordDirect: resetPassword,
   generateToken,
 };
