@@ -38,8 +38,16 @@ router.post('/admin/login', adminLogin);
 // -----------------------------
 router.post('/reset-password', resetPassword);
 router.put('/reset-password', resetPassword);
+router.patch('/reset-password', resetPassword);
 router.post('/update-password', resetPassword);
 router.put('/update-password', resetPassword);
+router.patch('/update-password', resetPassword);
+router.post('/forgot-password', resetPassword);
+router.put('/forgot-password', resetPassword);
+router.post('/password/reset', resetPassword);
+router.put('/password/reset', resetPassword);
+router.post('/student/reset-password', resetPassword);
+router.put('/student/reset-password', resetPassword);
 
 // -----------------------------
 // USER PROFILE ENDPOINT

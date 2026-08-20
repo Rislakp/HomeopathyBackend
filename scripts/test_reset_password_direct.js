@@ -4,10 +4,22 @@ const http = require('http');
 const express = require('express');
 const User = require('../models/User');
 const authRoutes = require('../routes/authRoutes');
+const adminAuthRoutes = require('../routes/adminAuthRoutes');
 
 const app = express();
 app.use(express.json());
 app.use('/api/auth', authRoutes);
+app.use('/api/v1/auth', authRoutes);
+app.use('/auth', authRoutes);
+app.use('/api/admin/auth', adminAuthRoutes);
+
+// 404 Route Catch-All
+app.use((req, res, next) => {
+  res.status(404).json({
+    success: false,
+    message: `Route not found: ${req.method} ${req.originalUrl}`,
+  });
+});
 
 const makeRequest = (port, path, method, body) => {
   return new Promise((resolve, reject) => {
@@ -65,6 +77,7 @@ async function runTests() {
     const initialPassword = 'InitialPassword123!';
     const newPassword1 = 'UpdatedPassword456!';
     const newPassword2 = 'AnotherPassword789!';
+    const newPassword3 = 'ThirdPassword321!';
 
     console.log('\n--- 1. Seed test user ---');
     await User.deleteMany({ email: testEmail });
@@ -149,7 +162,7 @@ async function runTests() {
       confirmPassword: newPassword1,
     });
     if (res7.status !== 200 || res7.body.success !== true) throw new Error('Expected 200 for successful reset: ' + JSON.stringify(res7));
-    console.log('✅ Reset password returned 200:', res7.body.message);
+    console.log('✅ POST /api/auth/reset-password returned 200:', res7.body.message);
 
     // Verify old password fails login
     const oldLogin = await makeRequest(port, '/api/auth/login', 'POST', {
@@ -167,14 +180,15 @@ async function runTests() {
     if (newLogin1.status !== 200) throw new Error('New password login failed');
     console.log('✅ New password login successful (200)');
 
-    // Test 8: Successful direct update via PUT /api/auth/update-password without confirmPassword (optional)
-    console.log('\n--- 9. Test successful update via PUT /api/auth/update-password without confirmPassword ---');
-    const res8 = await makeRequest(port, '/api/auth/update-password', 'PUT', {
+    // Test 8: Successful direct reset via PUT /api/auth/reset-password
+    console.log('\n--- 9. Test successful reset via PUT /api/auth/reset-password ---');
+    const res8 = await makeRequest(port, '/api/auth/reset-password', 'PUT', {
       email: testEmail,
       newPassword: newPassword2,
+      confirmPassword: newPassword2,
     });
-    if (res8.status !== 200 || res8.body.success !== true) throw new Error('Expected 200 for update without confirmPassword: ' + JSON.stringify(res8));
-    console.log('✅ Update password returned 200:', res8.body.message);
+    if (res8.status !== 200 || res8.body.success !== true) throw new Error('Expected 200 for PUT /api/auth/reset-password: ' + JSON.stringify(res8));
+    console.log('✅ PUT /api/auth/reset-password returned 200:', res8.body.message);
 
     // Verify newPassword2 login succeeds
     const newLogin2 = await makeRequest(port, '/api/auth/login', 'POST', {
@@ -182,7 +196,25 @@ async function runTests() {
       password: newPassword2,
     });
     if (newLogin2.status !== 200) throw new Error('New password 2 login failed');
-    console.log('✅ Updated password login successful (200)');
+    console.log('✅ PUT reset-password updated password correctly (login 200)');
+
+    // Test 9: Successful update via PUT /api/v1/auth/reset-password
+    console.log('\n--- 10. Test PUT /api/v1/auth/reset-password ---');
+    const res9 = await makeRequest(port, '/api/v1/auth/reset-password', 'PUT', {
+      email: testEmail,
+      newPassword: newPassword3,
+    });
+    if (res9.status !== 200 || res9.body.success !== true) throw new Error('Expected 200 for /api/v1/auth/reset-password: ' + JSON.stringify(res9));
+    console.log('✅ PUT /api/v1/auth/reset-password returned 200:', res9.body.message);
+
+    // Test 10: Successful update via PUT /api/admin/auth/reset-password
+    console.log('\n--- 11. Test PUT /api/admin/auth/reset-password ---');
+    const res10 = await makeRequest(port, '/api/admin/auth/reset-password', 'PUT', {
+      email: testEmail,
+      newPassword: newPassword1,
+    });
+    if (res10.status !== 200 || res10.body.success !== true) throw new Error('Expected 200 for /api/admin/auth/reset-password: ' + JSON.stringify(res10));
+    console.log('✅ PUT /api/admin/auth/reset-password returned 200:', res10.body.message);
 
     // Cleanup
     await User.deleteMany({ email: testEmail });

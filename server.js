@@ -83,7 +83,10 @@ app.use((req, res, next) => {
 });
 
 // Routes
-app.use('/api/auth', require('./routes/authRoutes'));
+const authRoutes = require('./routes/authRoutes');
+app.use('/api/auth', authRoutes);
+app.use('/api/v1/auth', authRoutes);
+app.use('/auth', authRoutes);
 app.use('/api/courses', require('./routes/courseRoutes'));
 const lessonRoutes = require('./routes/lesson.routes');
 app.use(lessonRoutes);
