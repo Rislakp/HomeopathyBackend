@@ -116,15 +116,22 @@ exports.deleteCourse = async (req, res) => {
   try {
     const { id } = req.params;
 
+    //  DEBUG LOG: See exactly what the frontend is sending in the URL
+    console.log(`[DELETE API] Frontend is trying to delete ID: "${id}"`);
+
     const deletedCourse = await Course.findOneAndDelete({ courseId: id });
 
     if (!deletedCourse) {
+      //  DEBUG LOG: Confirm the failure
+      console.log(`[DELETE API] Failed! Could not find any course where courseId === "${id}"`);
+      
       return res.status(404).json({
         success: false,
         message: 'Course not found',
       });
     }
 
+    console.log(`[DELETE API] Success! Deleted course: ${deletedCourse.courseId}`);
     return res.status(200).json({
       success: true,
       message: 'Course deleted successfully',

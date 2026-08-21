@@ -1,6 +1,43 @@
 const mongoose = require('mongoose');
 const Counter = require('./Counter');
 
+const lessonSchema = new mongoose.Schema({
+  lessonTitle: {
+    type: String,
+    required: true,
+    trim: true,
+    minlength: 3,
+    maxlength: 150
+  },
+  mediaContent: {
+    type: String,
+    required: true,
+    trim: true
+  },
+  lessonType: {
+    type: String,
+    required: true,
+    enum: ['video', 'pdf', 'link', 'document', 'audio', 'Live Class']
+  }
+}, {
+  timestamps: true
+});
+
+const moduleSchema = new mongoose.Schema({
+  moduleId: {
+    type: String,
+    required: true
+  },
+  moduleTitle: {
+    type: String,
+    required: true,
+    trim: true
+  },
+  lessons: [lessonSchema]
+}, {
+  timestamps: true
+});
+
 const courseSchema = new mongoose.Schema({
   courseId: {
     type: String,
@@ -26,7 +63,8 @@ const courseSchema = new mongoose.Schema({
     type: Number,
     required: [true, 'Please specify a price'],
     min: [0, 'Price must be at least 0']
-  }
+  },
+  modules: [moduleSchema]
 }, {
   timestamps: true
 });

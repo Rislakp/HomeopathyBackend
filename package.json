@@ -21,7 +21,10 @@
     "cors": "^2.8.6",
     "dotenv": "^16.4.5",
     "express": "^4.19.2",
-    "mongoose": "^8.2.1"
+    "jsonwebtoken": "^9.0.3",
+    "mongoose": "^8.2.1",
+    "multer": "^2.2.0",
+    "pdf-parse": "^1.1.1"
   },
   "devDependencies": {
     "nodemon": "^3.1.0"

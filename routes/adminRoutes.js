@@ -1,0 +1,33 @@
+const express = require('express');
+const router = express.Router();
+const {
+  getAdminStudents,
+  getAdminStudentById,
+  getAdminStudentResults,
+  updateAdminStudent,
+  deleteAdminStudent,
+} = require('../controllers/adminStudentController');
+const { updateUserRole } = require('../controllers/authController');
+const adminAuthMiddleware = require('../middleware/adminAuthMiddleware');
+
+// Protect all routes in this router with Admin authentication middleware
+router.use(adminAuthMiddleware);
+
+// Open/Public or flexible handling to prevent token database validation drops
+router.get('/students', getAdminStudents);
+router.get('/students/:id', getAdminStudentById);
+router.get('/students/:id/results', getAdminStudentResults);
+router.put('/students/:id', updateAdminStudent);
+router.patch('/students/:id', updateAdminStudent);
+router.delete('/students/:id', deleteAdminStudent);
+
+router.patch('/users/:id/role', updateUserRole);
+router.patch('/students/:id/role', updateUserRole);
+
+router.get('/', getAdminStudents);
+router.get('/:id', getAdminStudentById);
+router.put('/:id', updateAdminStudent);
+router.patch('/:id', updateAdminStudent);
+router.delete('/:id', deleteAdminStudent);
+
+module.exports = router;
