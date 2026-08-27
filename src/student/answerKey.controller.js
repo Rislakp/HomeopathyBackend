@@ -16,8 +16,8 @@ function generateWatermarkedAnswerKeyPDF(exam, user) {
     try {
       const doc = new PDFDocument({
         size: 'A4',
-        margin: 40,
-        bufferPages: true // Enables post-processing of all pages for watermarking & footers
+        margins: { top: 40, bottom: 25, left: 40, right: 40 },
+        bufferPages: true // Enables post-processing of all pages for watermarking, headers & footers
       });
 
       const buffers = [];
@@ -25,12 +25,19 @@ function generateWatermarkedAnswerKeyPDF(exam, user) {
       doc.on('end', () => resolve(Buffer.concat(buffers)));
       doc.on('error', (err) => reject(err));
 
+      // Pre-register fonts on Page 1 to ensure PDFKit embeds font dictionaries cleanly
+      doc.font('Helvetica');
+      doc.font('Helvetica-Bold');
+      doc.font('Helvetica-Oblique');
+
       const PAGE_WIDTH = 595.28;
       const PAGE_HEIGHT = 841.89;
       const MARGIN = 40;
       const CONTENT_WIDTH = PAGE_WIDTH - MARGIN * 2;
+      // Safe threshold for question content flow before manual page break
+      const BOTTOM_MARGIN_THRESHOLD = PAGE_HEIGHT - 65;
 
-      // ── Header Section ──────────────────────────────────────────────────────────
+      // ── Main Page 1 Header Section ──────────────────────────────────────────────
       doc.fillColor('#1A365D')
          .fontSize(22)
          .font('Helvetica-Bold')
@@ -93,17 +100,16 @@ function generateWatermarkedAnswerKeyPDF(exam, user) {
            .font('Helvetica-Oblique')
            .text('No questions found for this exam.', MARGIN, doc.y);
       } else {
-        const BOTTOM_THRESHOLD = PAGE_HEIGHT - MARGIN - 45;
-
         questions.forEach((q, index) => {
           const correctKey = (q.correctOption || '').toString().trim().toUpperCase();
           const options = q.options || {};
           const correctText = options[correctKey] || 'N/A';
           const explanation = (q.explanation || q.explanationText || '').trim();
 
-          // Only create a new page if current Y position is near bottom margin
-          if (doc.y > BOTTOM_THRESHOLD) {
+          // Only create a new page if current Y position exceeds threshold
+          if (doc.y > BOTTOM_MARGIN_THRESHOLD) {
             doc.addPage();
+            doc.y = MARGIN + 25; // Content top position on Page 2+ (leaving space for running header)
           }
 
           // 1. Question Number & Text
@@ -114,7 +120,7 @@ function generateWatermarkedAnswerKeyPDF(exam, user) {
 
           doc.moveDown(0.2);
 
-          // 2. Strictly Correct Answer Only (No incorrect options or empty space padding)
+          // 2. Strictly Correct Answer Only
           doc.fillColor('#22543D')
              .fontSize(9.5)
              .font('Helvetica-Bold')
@@ -129,14 +135,14 @@ function generateWatermarkedAnswerKeyPDF(exam, user) {
                .text(`Explanation: ${explanation}`, MARGIN + 12, doc.y, { width: CONTENT_WIDTH - 12 });
           }
 
-          // Space between questions (except after the final question to avoid trailing empty height)
+          // Space between questions (except after final question)
           if (index < questions.length - 1) {
             doc.moveDown(0.45);
           }
         });
       }
 
-      // ── Post-Processing Loop: Watermark & Page Footers on EVERY Page ────────────
+      // ── Post-Processing Loop: Headers, Watermarks & Footers on EVERY Page ────────
       const range = doc.bufferedPageRange();
       const totalPages = range.count;
 
@@ -145,7 +151,28 @@ function generateWatermarkedAnswerKeyPDF(exam, user) {
       for (let i = range.start; i < range.start + totalPages; i++) {
         doc.switchToPage(i);
 
-        // 1. Draw Diagonal Semi-Transparent Watermark across page center
+        // 1. Running Header for Page 2+
+        if (i > 0) {
+          doc.save();
+          doc.fillColor('#1A365D')
+             .fontSize(9)
+             .font('Helvetica-Bold')
+             .text('WHITE COAT ACADEMY — OFFICIAL ANSWER KEY', MARGIN, 20, { width: CONTENT_WIDTH, align: 'left' });
+
+          doc.fillColor('#4A5568')
+             .fontSize(8)
+             .font('Helvetica')
+             .text(`${exam.title || 'Answer Key'}   |   Issued To: ${userName}`, MARGIN, 20, { width: CONTENT_WIDTH, align: 'right' });
+
+          doc.strokeColor('#E2E8F0')
+             .lineWidth(0.75)
+             .moveTo(MARGIN, 34)
+             .lineTo(PAGE_WIDTH - MARGIN, 34)
+             .stroke();
+          doc.restore();
+        }
+
+        // 2. Diagonal Semi-Transparent Watermark across page center
         doc.save();
         doc.opacity(0.14);
         doc.fillColor('#4A5568');
@@ -155,7 +182,6 @@ function generateWatermarkedAnswerKeyPDF(exam, user) {
         const centerX = PAGE_WIDTH / 2;
         const centerY = PAGE_HEIGHT / 2;
 
-        // Rotate around center of page
         doc.rotate(-45, { origin: [centerX, centerY] });
         doc.text(watermarkText, centerX - 300, centerY, {
           width: 600,
@@ -163,7 +189,7 @@ function generateWatermarkedAnswerKeyPDF(exam, user) {
         });
         doc.restore();
 
-        // 2. Draw Page Footer
+        // 3. Running Footer on ALL pages
         doc.save();
         doc.opacity(0.75);
         doc.fillColor('#718096');
@@ -172,7 +198,7 @@ function generateWatermarkedAnswerKeyPDF(exam, user) {
         doc.text(
           `White Coat Academy — Confidential & Watermarked Answer Key   |   Page ${i + 1} of ${totalPages}`,
           MARGIN,
-          PAGE_HEIGHT - 28,
+          805,
           { width: CONTENT_WIDTH, align: 'center' }
         );
         doc.restore();
