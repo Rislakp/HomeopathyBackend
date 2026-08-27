@@ -1,6 +1,6 @@
 const express = require('express');
 const router = express.Router();
-const { requireStudent } = require('../../middleware/rbac');
+const { requireRole, requireStudent } = require('../../middleware/rbac');
 const {
   getStudentProfile,
   getAvailableExams,
@@ -8,8 +8,20 @@ const {
   submitExam,
   getStudentResults,
 } = require('./student.controller');
+const { downloadAnswerKey } = require('./answerKey.controller');
 
-// Protect all student routes strictly under /api/student with student role authentication
+const requireStudentOrAdmin = requireRole('student', 'admin', 'superadmin');
+
+/**
+ * @route   GET /api/student/exams/:id/answer-key/download
+ * @route   POST /api/student/exams/:id/answer-key/download
+ * @desc    Generate and serve watermarked answer key PDF
+ * @access  Private (Student, Admin, Superadmin)
+ */
+router.get('/api/student/exams/:id/answer-key/download', requireStudentOrAdmin, downloadAnswerKey);
+router.post('/api/student/exams/:id/answer-key/download', requireStudentOrAdmin, downloadAnswerKey);
+
+// Protect remaining student routes strictly under /api/student with student role authentication
 router.use('/api/student', requireStudent);
 
 /**

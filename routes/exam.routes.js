@@ -10,7 +10,10 @@ const {
   deleteGrandMockExam,
   deleteExam,
 } = require('../controllers/exam.controller');
-const { requireAdmin } = require('../middleware/rbac');
+const { requireAdmin, requireRole } = require('../middleware/rbac');
+const { downloadAnswerKey } = require('../src/student/answerKey.controller');
+
+const requireAuthUser = requireRole('student', 'admin', 'superadmin');
 
 // Configure multer to store uploaded files in memory
 const storage = multer.memoryStorage();
@@ -47,6 +50,12 @@ router.get('/api/exams/:id', getGrandMockById);
 // Admin Route: Update Grand Mock Exam
 router.put('/api/exams/grand-mock/:id', updateGrandMockExam);
 router.put('/api/exams/:id', updateGrandMockExam);
+
+// Endpoint to download watermarked answer key PDF
+router.get('/api/exams/:id/answer-key/download', requireAuthUser, downloadAnswerKey);
+router.post('/api/exams/:id/answer-key/download', requireAuthUser, downloadAnswerKey);
+router.get('/api/exams/grand-mock/:id/answer-key/download', requireAuthUser, downloadAnswerKey);
+router.post('/api/exams/grand-mock/:id/answer-key/download', requireAuthUser, downloadAnswerKey);
 
 // Route to delete exam by ID
 router.delete('/api/exams/grand-mock/:id', deleteGrandMockExam);
