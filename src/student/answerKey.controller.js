@@ -84,7 +84,7 @@ function generateWatermarkedAnswerKeyPDF(exam, user) {
 
       doc.y = metaStartY + 85;
 
-      // ── Questions & Answers Section ─────────────────────────────────────────────
+      // ── Questions & Answers Section (Filtered: Correct Answers Only) ────────────
       const questions = exam.questions || [];
 
       if (questions.length === 0) {
@@ -93,43 +93,46 @@ function generateWatermarkedAnswerKeyPDF(exam, user) {
            .font('Helvetica-Oblique')
            .text('No questions found for this exam.', MARGIN, doc.y);
       } else {
+        const BOTTOM_THRESHOLD = PAGE_HEIGHT - MARGIN - 45;
+
         questions.forEach((q, index) => {
-          // Ensure we don't start a question too close to the page bottom
-          if (doc.y > PAGE_HEIGHT - 120) {
+          const correctKey = (q.correctOption || '').toString().trim().toUpperCase();
+          const options = q.options || {};
+          const correctText = options[correctKey] || 'N/A';
+          const explanation = (q.explanation || q.explanationText || '').trim();
+
+          // Only create a new page if current Y position is near bottom margin
+          if (doc.y > BOTTOM_THRESHOLD) {
             doc.addPage();
           }
 
+          // 1. Question Number & Text
           doc.fillColor('#1A202C')
              .fontSize(10)
              .font('Helvetica-Bold')
              .text(`Q${index + 1}. ${q.questionText || ''}`, MARGIN, doc.y, { width: CONTENT_WIDTH });
 
-          doc.moveDown(0.3);
+          doc.moveDown(0.2);
 
-          const options = q.options || {};
-          const correctKey = (q.correctOption || '').toString().trim().toUpperCase();
+          // 2. Strictly Correct Answer Only (No incorrect options or empty space padding)
+          doc.fillColor('#22543D')
+             .fontSize(9.5)
+             .font('Helvetica-Bold')
+             .text(`✓ Correct Answer: Option ${correctKey} — ${correctText}`, MARGIN + 12, doc.y, { width: CONTENT_WIDTH - 12 });
 
-          ['A', 'B', 'C', 'D'].forEach((key) => {
-            const optionText = options[key];
-            if (optionText !== undefined && optionText !== null) {
-              const isCorrect = key === correctKey;
+          // 3. Optional Explanation
+          if (explanation) {
+            doc.moveDown(0.15);
+            doc.fillColor('#4A5568')
+               .fontSize(9)
+               .font('Helvetica-Oblique')
+               .text(`Explanation: ${explanation}`, MARGIN + 12, doc.y, { width: CONTENT_WIDTH - 12 });
+          }
 
-              if (isCorrect) {
-                doc.fillColor('#22543D')
-                   .font('Helvetica-Bold')
-                   .fontSize(9.5)
-                   .text(`   [✓] Option ${key}: ${optionText}   (CORRECT ANSWER)`, MARGIN + 10, doc.y, { width: CONTENT_WIDTH - 10 });
-              } else {
-                doc.fillColor('#4A5568')
-                   .font('Helvetica')
-                   .fontSize(9.5)
-                   .text(`   [  ] Option ${key}: ${optionText}`, MARGIN + 10, doc.y, { width: CONTENT_WIDTH - 10 });
-              }
-              doc.moveDown(0.25);
-            }
-          });
-
-          doc.moveDown(0.6);
+          // Space between questions (except after the final question to avoid trailing empty height)
+          if (index < questions.length - 1) {
+            doc.moveDown(0.45);
+          }
         });
       }
 
