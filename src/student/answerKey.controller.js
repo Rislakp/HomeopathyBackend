@@ -35,7 +35,7 @@ function generateWatermarkedAnswerKeyPDF(exam, user) {
       const MARGIN = 40;
       const CONTENT_WIDTH = PAGE_WIDTH - MARGIN * 2;
       // Safe threshold for question content flow before manual page break
-      const BOTTOM_MARGIN_THRESHOLD = PAGE_HEIGHT - 65;
+      const BOTTOM_MARGIN_THRESHOLD = PAGE_HEIGHT - 75;
 
       // ── Main Page 1 Header Section ──────────────────────────────────────────────
       doc.fillColor('#1A365D')
@@ -91,7 +91,7 @@ function generateWatermarkedAnswerKeyPDF(exam, user) {
 
       doc.y = metaStartY + 85;
 
-      // ── Questions & Answers Section (Filtered: Correct Answers Only) ────────────
+      // ── Questions & Answers Section (All Options Displayed + Highlighted Correct Answer) ─
       const questions = exam.questions || [];
 
       if (questions.length === 0) {
@@ -103,7 +103,6 @@ function generateWatermarkedAnswerKeyPDF(exam, user) {
         questions.forEach((q, index) => {
           const correctKey = (q.correctOption || '').toString().trim().toUpperCase();
           const options = q.options || {};
-          const correctText = options[correctKey] || 'N/A';
           const explanation = (q.explanation || q.explanationText || '').trim();
 
           // Only create a new page if current Y position exceeds threshold
@@ -118,21 +117,38 @@ function generateWatermarkedAnswerKeyPDF(exam, user) {
              .font('Helvetica-Bold')
              .text(`Q${index + 1}. ${q.questionText || ''}`, MARGIN, doc.y, { width: CONTENT_WIDTH });
 
-          doc.moveDown(0.2);
+          doc.moveDown(0.25);
 
-          // 2. Strictly Correct Answer Only
-          doc.fillColor('#22543D')
-             .fontSize(9.5)
-             .font('Helvetica-Bold')
-             .text(`✓ Correct Answer: Option ${correctKey} — ${correctText}`, MARGIN + 12, doc.y, { width: CONTENT_WIDTH - 12 });
+          // 2. Loop through and display all available options (A, B, C, D)
+          ['A', 'B', 'C', 'D'].forEach((key) => {
+            const optionText = options[key];
+            if (optionText !== undefined && optionText !== null) {
+              const isCorrect = key === correctKey;
+
+              if (isCorrect) {
+                // Highlighted Correct Answer (Bold Green text with checkmark indicator)
+                doc.fillColor('#22543D')
+                   .fontSize(9.5)
+                   .font('Helvetica-Bold')
+                   .text(`   [✓] Option ${key}: ${optionText}   (CORRECT ANSWER)`, MARGIN + 10, doc.y, { width: CONTENT_WIDTH - 10 });
+              } else {
+                // Standard Choice Option
+                doc.fillColor('#4A5568')
+                   .fontSize(9.5)
+                   .font('Helvetica')
+                   .text(`   [  ] Option ${key}: ${optionText}`, MARGIN + 10, doc.y, { width: CONTENT_WIDTH - 10 });
+              }
+              doc.moveDown(0.2);
+            }
+          });
 
           // 3. Optional Explanation
           if (explanation) {
             doc.moveDown(0.15);
-            doc.fillColor('#4A5568')
+            doc.fillColor('#2B6CB0')
                .fontSize(9)
                .font('Helvetica-Oblique')
-               .text(`Explanation: ${explanation}`, MARGIN + 12, doc.y, { width: CONTENT_WIDTH - 12 });
+               .text(`   Explanation: ${explanation}`, MARGIN + 10, doc.y, { width: CONTENT_WIDTH - 10 });
           }
 
           // Space between questions (except after final question)
