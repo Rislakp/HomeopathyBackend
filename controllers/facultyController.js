@@ -2,6 +2,31 @@ const mongoose = require('mongoose');
 const Faculty = require('../models/Faculty');
 
 /**
+ * Format faculty document to include standard API response fields (id, _id, aliases)
+ */
+const formatFacultyResponse = (facultyDoc) => {
+  if (!facultyDoc) return null;
+  const doc = facultyDoc.toObject ? facultyDoc.toObject() : facultyDoc;
+  const idStr = doc._id ? doc._id.toString() : (doc.id ? doc.id.toString() : '');
+  return {
+    id: idStr,
+    _id: idStr,
+    fullName: doc.fullName || doc.name || '',
+    name: doc.fullName || doc.name || '',
+    email: doc.email || '',
+    phoneNumber: doc.phoneNumber || doc.phone || doc.contactNumber || '',
+    phone: doc.phoneNumber || doc.phone || doc.contactNumber || '',
+    contactNumber: doc.phoneNumber || doc.phone || doc.contactNumber || '',
+    department: doc.department || doc.dept || '',
+    role: doc.role || doc.designation || '',
+    status: doc.status || 'Active',
+    qualification: doc.qualification || doc.degree || '',
+    createdAt: doc.createdAt,
+    updatedAt: doc.updatedAt,
+  };
+};
+
+/**
  * @desc    Create a new Faculty member
  * @route   POST /api/admin/faculty
  * @access  Private (Admin only)
@@ -79,7 +104,7 @@ const createFaculty = async (req, res) => {
     return res.status(201).json({
       success: true,
       message: 'Faculty member created successfully.',
-      data: savedFaculty,
+      data: formatFacultyResponse(savedFaculty),
     });
   } catch (error) {
     console.error('Error creating faculty member:', error);
@@ -150,11 +175,20 @@ const getAllFaculty = async (req, res) => {
 
     return res.status(200).json({
       success: true,
+      message: 'Faculty members fetched successfully.',
       count: facultyMembers.length,
       total,
       page,
       pages,
-      data: facultyMembers,
+      pagination: {
+        total,
+        page,
+        limit,
+        total_pages: pages,
+        has_next: page < pages,
+        has_prev: page > 1,
+      },
+      data: facultyMembers.map(formatFacultyResponse),
     });
   } catch (error) {
     console.error('Error fetching faculty members:', error);
@@ -192,7 +226,8 @@ const getFacultyById = async (req, res) => {
 
     return res.status(200).json({
       success: true,
-      data: faculty,
+      message: 'Faculty member fetched successfully.',
+      data: formatFacultyResponse(faculty),
     });
   } catch (error) {
     console.error('Error fetching single faculty member:', error);
@@ -284,7 +319,7 @@ const updateFaculty = async (req, res) => {
     return res.status(200).json({
       success: true,
       message: 'Faculty member updated successfully.',
-      data: updatedFaculty,
+      data: formatFacultyResponse(updatedFaculty),
     });
   } catch (error) {
     console.error('Error updating faculty member:', error);
