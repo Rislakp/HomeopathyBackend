@@ -3,8 +3,9 @@ const router = express.Router();
 const courseController = require('../controllers/courseController');
 const { requireAdmin } = require('../middleware/rbac');
 
-// Public course catalog view
+// Public course routes
 router.get('/', courseController.getCourses);
+router.get('/:id', courseController.getCourseById);
 
 // Admin-only course management operations
 router.post('/', requireAdmin, courseController.createCourse);

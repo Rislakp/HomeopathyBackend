@@ -1,12 +1,41 @@
+const mongoose = require('mongoose');
 const Course = require('../models/Course');
 
-// GET ALL COURSES
+// Helper to determine query filter (supports MongoDB ObjectId _id or custom courseId)
+const getQueryById = (id) => {
+  return mongoose.Types.ObjectId.isValid(id)
+    ? { _id: id }
+    : { courseId: id };
+};
+
+// 1. GET ALL COURSES (with optional search and filtering)
+// GET /api/courses?category=...&status=...&search=...
 exports.getCourses = async (req, res) => {
   try {
-    const courses = await Course.find().sort({ createdAt: -1 });
+    const { category, status, search } = req.query;
+    const filter = {};
+
+    if (category) {
+      filter.category = { $regex: new RegExp(category, 'i') };
+    }
+
+    if (status) {
+      filter.status = status;
+    }
+
+    if (search) {
+      filter.$or = [
+        { courseTitle: { $regex: search, $options: 'i' } },
+        { instructor: { $regex: search, $options: 'i' } },
+        { description: { $regex: search, $options: 'i' } },
+      ];
+    }
+
+    const courses = await Course.find(filter).sort({ createdAt: -1 });
 
     return res.status(200).json({
       success: true,
+      count: courses.length,
       data: courses,
     });
   } catch (error) {
@@ -20,21 +49,59 @@ exports.getCourses = async (req, res) => {
   }
 };
 
-// CREATE COURSE
+// 2. GET SINGLE COURSE
+// GET /api/courses/:id
+exports.getCourseById = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const query = getQueryById(id);
+
+    const course = await Course.findOne(query);
+
+    if (!course) {
+      return res.status(404).json({
+        success: false,
+        message: 'Course not found',
+      });
+    }
+
+    return res.status(200).json({
+      success: true,
+      data: course,
+    });
+  } catch (error) {
+    console.error('Get Single Course Error:', error);
+
+    return res.status(500).json({
+      success: false,
+      message: 'Error fetching course details',
+      error: error.message,
+    });
+  }
+};
+
+// 3. CREATE COURSE
+// POST /api/courses
 exports.createCourse = async (req, res) => {
   try {
     const {
       courseTitle,
       instructor,
-      category,
       price,
+      duration,
+      category,
+      status,
+      description,
     } = req.body;
 
     const newCourse = new Course({
       courseTitle,
       instructor,
-      category,
       price,
+      duration,
+      category,
+      status: status || 'Published',
+      description,
     });
 
     await newCourse.save();
@@ -69,19 +136,21 @@ exports.createCourse = async (req, res) => {
   }
 };
 
-// UPDATE COURSE
+// 4. UPDATE COURSE
+// PUT /api/courses/:id
 exports.updateCourse = async (req, res) => {
   try {
     const { id } = req.params;
+    const query = getQueryById(id);
 
     const updateData = {
       ...req.body,
     };
 
-    delete updateData.courseId;
+    delete updateData.courseId; // Prevent mutating auto-generated courseId
 
     const updatedCourse = await Course.findOneAndUpdate(
-      { courseId: id },
+      query,
       updateData,
       {
         new: true,
@@ -104,6 +173,20 @@ exports.updateCourse = async (req, res) => {
   } catch (error) {
     console.error('Update Course Error:', error);
 
+    if (error.name === 'ValidationError') {
+      const errors = {};
+
+      Object.keys(error.errors).forEach((key) => {
+        errors[key] = error.errors[key].message;
+      });
+
+      return res.status(400).json({
+        success: false,
+        message: 'Validation failed',
+        errors,
+      });
+    }
+
     return res.status(500).json({
       success: false,
       message: error.message || 'Error updating course',
@@ -111,27 +194,22 @@ exports.updateCourse = async (req, res) => {
   }
 };
 
-// DELETE COURSE
+// 5. DELETE COURSE
+// DELETE /api/courses/:id
 exports.deleteCourse = async (req, res) => {
   try {
     const { id } = req.params;
+    const query = getQueryById(id);
 
-    //  DEBUG LOG: See exactly what the frontend is sending in the URL
-    console.log(`[DELETE API] Frontend is trying to delete ID: "${id}"`);
-
-    const deletedCourse = await Course.findOneAndDelete({ courseId: id });
+    const deletedCourse = await Course.findOneAndDelete(query);
 
     if (!deletedCourse) {
-      //  DEBUG LOG: Confirm the failure
-      console.log(`[DELETE API] Failed! Could not find any course where courseId === "${id}"`);
-      
       return res.status(404).json({
         success: false,
         message: 'Course not found',
       });
     }
 
-    console.log(`[DELETE API] Success! Deleted course: ${deletedCourse.courseId}`);
     return res.status(200).json({
       success: true,
       message: 'Course deleted successfully',

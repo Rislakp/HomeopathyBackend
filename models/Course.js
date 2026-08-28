@@ -54,15 +54,30 @@ const courseSchema = new mongoose.Schema({
     required: [true, 'Please add an instructor name'],
     trim: true
   },
+  price: {
+    type: Number,
+    required: [true, 'Please specify a price'],
+    min: [0, 'Price must be at least 0']
+  },
+  duration: {
+    type: String,
+    required: [true, 'Please specify a duration'],
+    trim: true
+  },
   category: {
     type: String,
     required: [true, 'Please specify a category'],
     trim: true
   },
-  price: {
-    type: Number,
-    required: [true, 'Please specify a price'],
-    min: [0, 'Price must be at least 0']
+  status: {
+    type: String,
+    enum: ['Published', 'Draft', 'Archived'],
+    default: 'Published'
+  },
+  description: {
+    type: String,
+    required: [true, 'Please add a description'],
+    trim: true
   },
   modules: [moduleSchema]
 }, {
