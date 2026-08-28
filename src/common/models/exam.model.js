@@ -6,6 +6,23 @@ const questionSchema = new mongoose.Schema({
     required: true,
     trim: true
   },
+  passage: {
+    type: String,
+    trim: true,
+    required: false,
+    default: null
+  },
+  imageUrl: {
+    type: String,
+    trim: true,
+    required: false,
+    default: null
+  },
+  tableData: {
+    type: mongoose.Schema.Types.Mixed,
+    required: false,
+    default: null
+  },
   options: {
     A: {
       type: String,

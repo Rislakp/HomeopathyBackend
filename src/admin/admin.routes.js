@@ -9,6 +9,9 @@ const {
   updateGrandMockExam,
   deleteGrandMockExam,
   deleteExam,
+  addQuestionToExam,
+  updateQuestionInExam,
+  deleteQuestionFromExam,
 } = require('./admin.controller');
 const { requireAdmin } = require('../../middleware/rbac');
 
@@ -46,6 +49,16 @@ router.get('/api/exams/:id', getGrandMockById);
 // Admin Route: Update Grand Mock Exam
 router.put('/api/exams/grand-mock/:id', updateGrandMockExam);
 router.put('/api/exams/:id', updateGrandMockExam);
+
+// Admin Routes: Granular Question operations
+router.post('/api/exams/:id/questions', requireAdmin, addQuestionToExam);
+router.post('/api/exams/grand-mock/:id/questions', requireAdmin, addQuestionToExam);
+
+router.put('/api/exams/:id/questions/:questionId', requireAdmin, updateQuestionInExam);
+router.put('/api/exams/grand-mock/:id/questions/:questionId', requireAdmin, updateQuestionInExam);
+
+router.delete('/api/exams/:id/questions/:questionId', requireAdmin, deleteQuestionFromExam);
+router.delete('/api/exams/grand-mock/:id/questions/:questionId', requireAdmin, deleteQuestionFromExam);
 
 // Admin Route: Delete Grand Mock Exam
 router.delete('/api/exams/grand-mock/:id', deleteGrandMockExam);

@@ -119,6 +119,34 @@ function generateWatermarkedAnswerKeyPDF(exam, user) {
 
           doc.moveDown(0.25);
 
+          // Optional Passage
+          if (q.passage) {
+            doc.fillColor('#2D3748')
+               .fontSize(9)
+               .font('Helvetica-Oblique')
+               .text(`Passage: ${q.passage}`, MARGIN + 10, doc.y, { width: CONTENT_WIDTH - 10 });
+            doc.moveDown(0.25);
+          }
+
+          // Optional Image URL
+          if (q.imageUrl) {
+            doc.fillColor('#4A5568')
+               .fontSize(8.5)
+               .font('Helvetica')
+               .text(`[Image: ${q.imageUrl}]`, MARGIN + 10, doc.y, { width: CONTENT_WIDTH - 10 });
+            doc.moveDown(0.2);
+          }
+
+          // Optional Table Data
+          if (q.tableData) {
+            let tableStr = typeof q.tableData === 'string' ? q.tableData : JSON.stringify(q.tableData);
+            doc.fillColor('#4A5568')
+               .fontSize(8.5)
+               .font('Helvetica-Bold')
+               .text(`[Table Data]: ${tableStr}`, MARGIN + 10, doc.y, { width: CONTENT_WIDTH - 10 });
+            doc.moveDown(0.2);
+          }
+
           // 2. Loop through and display all available options (A, B, C, D)
           ['A', 'B', 'C', 'D'].forEach((key) => {
             const optionText = options[key];

@@ -3,6 +3,107 @@ const pdfParse = require('pdf-parse');
 const Exam = require('../common/models/exam.model');
 
 /**
+ * Helper to validate and sanitize a single question object.
+ * Supports multi-format fields: passage (String), imageUrl (String), tableData (JSON/Array).
+ * Returns { valid: boolean, error?: string, question?: object }
+ */
+function validateAndSanitizeQuestion(q, index = 0) {
+  if (!q || typeof q !== 'object') {
+    return { valid: false, error: `Question at index ${index} must be an object.` };
+  }
+
+  const rawQuestionText = q.questionText || q.text;
+  if (!rawQuestionText || typeof rawQuestionText !== 'string' || !rawQuestionText.trim()) {
+    return { valid: false, error: `Question ${index + 1} is missing a valid questionText.` };
+  }
+
+  if (!q.options || typeof q.options !== 'object') {
+    return { valid: false, error: `Question ${index + 1} is missing valid options.` };
+  }
+
+  const sanitizedOptions = {};
+  for (const opt of ['A', 'B', 'C', 'D']) {
+    const val = q.options[opt];
+    if (val === undefined || val === null || String(val).trim() === '') {
+      return { valid: false, error: `Question ${index + 1} is missing option ${opt}.` };
+    }
+    sanitizedOptions[opt] = String(val).trim();
+  }
+
+  const rawCorrect = q.correctOption !== undefined ? q.correctOption : q.correctAnswer;
+  const normalizedCorrect = rawCorrect ? String(rawCorrect).trim().toUpperCase() : '';
+  if (!['A', 'B', 'C', 'D'].includes(normalizedCorrect)) {
+    return { valid: false, error: `Question ${index + 1} must have correctOption as 'A', 'B', 'C', or 'D'.` };
+  }
+
+  const sanitizedQuestion = {
+    questionText: rawQuestionText.trim(),
+    options: sanitizedOptions,
+    correctOption: normalizedCorrect,
+    passage: null,
+    imageUrl: null,
+    tableData: null
+  };
+
+  if (q._id && mongoose.Types.ObjectId.isValid(q._id)) {
+    sanitizedQuestion._id = q._id;
+  }
+
+  // passage (optional String)
+  if (q.passage !== undefined && q.passage !== null && q.passage !== '') {
+    if (typeof q.passage !== 'string') {
+      return { valid: false, error: `Question ${index + 1}: passage must be a string.` };
+    }
+    sanitizedQuestion.passage = q.passage.trim();
+  }
+
+  // imageUrl (optional String)
+  if (q.imageUrl !== undefined && q.imageUrl !== null && q.imageUrl !== '') {
+    if (typeof q.imageUrl !== 'string') {
+      return { valid: false, error: `Question ${index + 1}: imageUrl must be a string.` };
+    }
+    sanitizedQuestion.imageUrl = q.imageUrl.trim();
+  }
+
+  // tableData (optional JSON/Array structure)
+  if (q.tableData !== undefined && q.tableData !== null && q.tableData !== '') {
+    if (typeof q.tableData === 'string') {
+      try {
+        sanitizedQuestion.tableData = JSON.parse(q.tableData);
+      } catch (e) {
+        return { valid: false, error: `Question ${index + 1}: tableData must be a valid JSON or Array structure.` };
+      }
+    } else if (Array.isArray(q.tableData) || typeof q.tableData === 'object') {
+      sanitizedQuestion.tableData = q.tableData;
+    } else {
+      return { valid: false, error: `Question ${index + 1}: tableData must be a JSON object or Array.` };
+    }
+  }
+
+  return { valid: true, question: sanitizedQuestion };
+}
+
+/**
+ * Helper to validate an array of question objects.
+ */
+function validateAndSanitizeQuestions(questions) {
+  if (!Array.isArray(questions) || questions.length === 0) {
+    return { valid: false, error: 'questions field must be a non-empty array.' };
+  }
+
+  const sanitizedQuestions = [];
+  for (let i = 0; i < questions.length; i++) {
+    const res = validateAndSanitizeQuestion(questions[i], i);
+    if (!res.valid) {
+      return { valid: false, error: res.error };
+    }
+    sanitizedQuestions.push(res.question);
+  }
+
+  return { valid: true, questions: sanitizedQuestions };
+}
+
+/**
  * POST /api/exams/extract-mcqs
  * Extracts MCQs from uploaded PDF file buffer.
  */
@@ -130,10 +231,11 @@ async function createGrandMockExam(req, res) {
       }
     }
 
-    if (!Array.isArray(questions) || questions.length === 0) {
+    const questionValidation = validateAndSanitizeQuestions(questions);
+    if (!questionValidation.valid) {
       return res.status(400).json({
         success: false,
-        message: 'questions field must be a non-empty array.'
+        message: questionValidation.error
       });
     }
 
@@ -144,7 +246,7 @@ async function createGrandMockExam(req, res) {
       negativeMarkPenalty: parsedNegMark,
       durationMinutes: parsedDuration,
       totalQuestions: parsedTotalQuestions,
-      questions
+      questions: questionValidation.questions
     });
 
     return res.status(201).json({
@@ -304,15 +406,16 @@ async function updateGrandMockExam(req, res) {
     }
 
     if (req.body.questions !== undefined) {
-      if (!Array.isArray(req.body.questions) || req.body.questions.length === 0) {
+      const questionValidation = validateAndSanitizeQuestions(req.body.questions);
+      if (!questionValidation.valid) {
         return res.status(400).json({
           success: false,
-          message: 'questions array must not be empty.'
+          message: questionValidation.error
         });
       }
-      updates.questions = req.body.questions;
+      updates.questions = questionValidation.questions;
       if (!updates.totalQuestions && !req.body.totalQuestions) {
-        updates.totalQuestions = req.body.questions.length;
+        updates.totalQuestions = questionValidation.questions.length;
       }
     }
 
@@ -394,6 +497,132 @@ async function deleteGrandMockExam(req, res) {
   }
 }
 
+/**
+ * POST /api/exams/:id/questions
+ * Add a single multi-format question to an existing exam.
+ */
+async function addQuestionToExam(req, res) {
+  try {
+    const { id } = req.params;
+    if (!mongoose.Types.ObjectId.isValid(id)) {
+      return res.status(400).json({ success: false, message: 'Invalid Exam ID format.' });
+    }
+
+    const exam = await Exam.findById(id);
+    if (!exam) {
+      return res.status(404).json({ success: false, message: 'Grand Mock Exam not found.' });
+    }
+
+    const validation = validateAndSanitizeQuestion(req.body, exam.questions.length);
+    if (!validation.valid) {
+      return res.status(400).json({ success: false, message: validation.error });
+    }
+
+    exam.questions.push(validation.question);
+    exam.totalQuestions = exam.questions.length;
+    await exam.save();
+
+    const addedQuestion = exam.questions[exam.questions.length - 1];
+
+    return res.status(201).json({
+      success: true,
+      message: 'Question added successfully.',
+      question: addedQuestion,
+      totalQuestions: exam.totalQuestions
+    });
+  } catch (error) {
+    console.error('Error adding question to exam:', error);
+    return res.status(500).json({ success: false, message: 'Failed to add question to exam.', error: error.message });
+  }
+}
+
+/**
+ * PUT /api/exams/:id/questions/:questionId
+ * Edit a specific question within an exam.
+ */
+async function updateQuestionInExam(req, res) {
+  try {
+    const { id, questionId } = req.params;
+    if (!mongoose.Types.ObjectId.isValid(id) || !mongoose.Types.ObjectId.isValid(questionId)) {
+      return res.status(400).json({ success: false, message: 'Invalid Exam ID or Question ID format.' });
+    }
+
+    const exam = await Exam.findById(id);
+    if (!exam) {
+      return res.status(404).json({ success: false, message: 'Grand Mock Exam not found.' });
+    }
+
+    const qSubDoc = exam.questions.id(questionId);
+    if (!qSubDoc) {
+      return res.status(404).json({ success: false, message: 'Question not found in exam.' });
+    }
+
+    const mergedInput = {
+      ...qSubDoc.toObject(),
+      ...req.body
+    };
+
+    const validation = validateAndSanitizeQuestion(mergedInput);
+    if (!validation.valid) {
+      return res.status(400).json({ success: false, message: validation.error });
+    }
+
+    qSubDoc.questionText = validation.question.questionText;
+    qSubDoc.options = validation.question.options;
+    qSubDoc.correctOption = validation.question.correctOption;
+    qSubDoc.passage = validation.question.passage;
+    qSubDoc.imageUrl = validation.question.imageUrl;
+    qSubDoc.tableData = validation.question.tableData;
+
+    await exam.save();
+
+    return res.status(200).json({
+      success: true,
+      message: 'Question updated successfully.',
+      question: qSubDoc
+    });
+  } catch (error) {
+    console.error('Error updating question in exam:', error);
+    return res.status(500).json({ success: false, message: 'Failed to update question in exam.', error: error.message });
+  }
+}
+
+/**
+ * DELETE /api/exams/:id/questions/:questionId
+ * Delete a specific question from an exam.
+ */
+async function deleteQuestionFromExam(req, res) {
+  try {
+    const { id, questionId } = req.params;
+    if (!mongoose.Types.ObjectId.isValid(id) || !mongoose.Types.ObjectId.isValid(questionId)) {
+      return res.status(400).json({ success: false, message: 'Invalid Exam ID or Question ID format.' });
+    }
+
+    const exam = await Exam.findById(id);
+    if (!exam) {
+      return res.status(404).json({ success: false, message: 'Grand Mock Exam not found.' });
+    }
+
+    const qSubDoc = exam.questions.id(questionId);
+    if (!qSubDoc) {
+      return res.status(404).json({ success: false, message: 'Question not found in exam.' });
+    }
+
+    qSubDoc.deleteOne();
+    exam.totalQuestions = exam.questions.length;
+    await exam.save();
+
+    return res.status(200).json({
+      success: true,
+      message: 'Question deleted successfully.',
+      totalQuestions: exam.totalQuestions
+    });
+  } catch (error) {
+    console.error('Error deleting question from exam:', error);
+    return res.status(500).json({ success: false, message: 'Failed to delete question from exam.', error: error.message });
+  }
+}
+
 const deleteExam = deleteGrandMockExam;
 
 module.exports = {
@@ -403,6 +632,11 @@ module.exports = {
   getGrandMockById,
   updateGrandMockExam,
   deleteGrandMockExam,
-  deleteExam
+  deleteExam,
+  addQuestionToExam,
+  updateQuestionInExam,
+  deleteQuestionFromExam,
+  validateAndSanitizeQuestion,
+  validateAndSanitizeQuestions
 };
 

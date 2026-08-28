@@ -9,6 +9,9 @@ const {
   updateGrandMockExam,
   deleteGrandMockExam,
   deleteExam,
+  addQuestionToExam,
+  updateQuestionInExam,
+  deleteQuestionFromExam,
 } = require('../controllers/exam.controller');
 const { requireAdmin, requireRole } = require('../middleware/rbac');
 const { downloadAnswerKey } = require('../src/student/answerKey.controller');
@@ -50,6 +53,16 @@ router.get('/api/exams/:id', getGrandMockById);
 // Admin Route: Update Grand Mock Exam
 router.put('/api/exams/grand-mock/:id', updateGrandMockExam);
 router.put('/api/exams/:id', updateGrandMockExam);
+
+// Admin Routes: Granular Question operations
+router.post('/api/exams/:id/questions', requireAdmin, addQuestionToExam);
+router.post('/api/exams/grand-mock/:id/questions', requireAdmin, addQuestionToExam);
+
+router.put('/api/exams/:id/questions/:questionId', requireAdmin, updateQuestionInExam);
+router.put('/api/exams/grand-mock/:id/questions/:questionId', requireAdmin, updateQuestionInExam);
+
+router.delete('/api/exams/:id/questions/:questionId', requireAdmin, deleteQuestionFromExam);
+router.delete('/api/exams/grand-mock/:id/questions/:questionId', requireAdmin, deleteQuestionFromExam);
 
 // Endpoint to download watermarked answer key PDF
 router.get('/api/exams/:id/answer-key/download', requireAuthUser, downloadAnswerKey);
