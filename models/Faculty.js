@@ -46,6 +46,14 @@ const facultySchema = new mongoose.Schema(
       required: [true, 'Qualification is required'],
       trim: true,
     },
+    profileImage: {
+      type: String,
+      default: '',
+    },
+    avatar: {
+      type: String,
+      default: '',
+    },
   },
   {
     timestamps: true,

@@ -8,6 +8,7 @@ const formatFacultyResponse = (facultyDoc) => {
   if (!facultyDoc) return null;
   const doc = facultyDoc.toObject ? facultyDoc.toObject() : facultyDoc;
   const idStr = doc._id ? doc._id.toString() : (doc.id ? doc.id.toString() : '');
+  const imageVal = doc.profileImage || doc.avatar || doc.avatarUrl || doc.image || '';
   return {
     id: idStr,
     _id: idStr,
@@ -21,6 +22,8 @@ const formatFacultyResponse = (facultyDoc) => {
     role: doc.role || doc.designation || '',
     status: doc.status || 'Active',
     qualification: doc.qualification || doc.degree || '',
+    profileImage: imageVal,
+    avatar: imageVal,
     createdAt: doc.createdAt,
     updatedAt: doc.updatedAt,
   };
@@ -98,6 +101,8 @@ const createFaculty = async (req, res) => {
       });
     }
 
+    const imageVal = (body.profileImage || body.avatar || body.avatarUrl || body.image || '').toString();
+
     // Create new faculty member
     const faculty = new Faculty({
       fullName: finalFullName,
@@ -107,6 +112,8 @@ const createFaculty = async (req, res) => {
       role: finalRole,
       status: finalStatus || 'Active',
       qualification: finalQualification,
+      profileImage: imageVal,
+      avatar: imageVal,
     });
 
     const savedFaculty = await faculty.save();
@@ -317,12 +324,18 @@ const updateFaculty = async (req, res) => {
       faculty.email = normalizedEmail;
     }
 
+    const newImage = body.profileImage !== undefined ? body.profileImage : (body.avatar !== undefined ? body.avatar : (body.avatarUrl !== undefined ? body.avatarUrl : body.image));
+
     if (newFullName !== undefined && newFullName !== null) faculty.fullName = newFullName.toString().trim();
     if (newPhoneNumber !== undefined && newPhoneNumber !== null) faculty.phoneNumber = newPhoneNumber.toString().trim();
     if (newDepartment !== undefined && newDepartment !== null) faculty.department = newDepartment.toString().trim();
     if (newRole !== undefined && newRole !== null) faculty.role = newRole.toString().trim();
     if (newStatus !== undefined && newStatus !== null) faculty.status = newStatus.toString().trim();
     if (newQualification !== undefined && newQualification !== null) faculty.qualification = newQualification.toString().trim();
+    if (newImage !== undefined && newImage !== null) {
+      faculty.profileImage = newImage.toString();
+      faculty.avatar = newImage.toString();
+    }
 
     const updatedFaculty = await faculty.save();
 
