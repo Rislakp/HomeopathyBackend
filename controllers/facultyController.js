@@ -72,9 +72,19 @@ const createFaculty = async (req, res) => {
       !finalRole ||
       !finalQualification
     ) {
+      const missingFields = [];
+      if (!finalFullName) missingFields.push('fullName');
+      if (!finalEmail) missingFields.push('email');
+      if (!finalPhoneNumber) missingFields.push('phoneNumber');
+      if (!finalDepartment) missingFields.push('department');
+      if (!finalRole) missingFields.push('role');
+      if (!finalQualification) missingFields.push('qualification');
+
       return res.status(400).json({
         success: false,
         message: 'Please provide all required fields: fullName, email, phoneNumber, department, role, qualification.',
+        missingFields,
+        receivedKeys: Object.keys(body),
       });
     }
 
