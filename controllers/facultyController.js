@@ -8,6 +8,17 @@ const Faculty = require('../models/Faculty');
  */
 const createFaculty = async (req, res) => {
   try {
+    // Parse body if it comes as JSON string or handle undefined req.body safely
+    let body = req.body;
+    if (typeof body === 'string') {
+      try {
+        body = JSON.parse(body);
+      } catch (e) {
+        // preserve original body string
+      }
+    }
+    body = body || {};
+
     const {
       fullName,
       email,
@@ -16,10 +27,26 @@ const createFaculty = async (req, res) => {
       role,
       status,
       qualification,
-    } = req.body;
+    } = body;
+
+    // Destructure required fields with fallback to common alias names
+    const finalFullName = (fullName || body.name || body.fullname || '').toString().trim();
+    const finalEmail = (email || '').toString().trim();
+    const finalPhoneNumber = (phoneNumber || body.phone || body.phonenumber || body.mobile || body.contactNumber || '').toString().trim();
+    const finalDepartment = (department || body.dept || '').toString().trim();
+    const finalRole = (role || body.designation || '').toString().trim();
+    const finalStatus = (status || body.status || 'Active').toString().trim();
+    const finalQualification = (qualification || body.qualifications || body.degree || '').toString().trim();
 
     // Validate required fields
-    if (!fullName || !email || !phoneNumber || !department || !role || !qualification) {
+    if (
+      !finalFullName ||
+      !finalEmail ||
+      !finalPhoneNumber ||
+      !finalDepartment ||
+      !finalRole ||
+      !finalQualification
+    ) {
       return res.status(400).json({
         success: false,
         message: 'Please provide all required fields: fullName, email, phoneNumber, department, role, qualification.',
@@ -27,7 +54,7 @@ const createFaculty = async (req, res) => {
     }
 
     // Check if email already exists
-    const normalizedEmail = email.toLowerCase().trim();
+    const normalizedEmail = finalEmail.toLowerCase();
     const existingFaculty = await Faculty.findOne({ email: normalizedEmail });
     if (existingFaculty) {
       return res.status(400).json({
@@ -38,13 +65,13 @@ const createFaculty = async (req, res) => {
 
     // Create new faculty member
     const faculty = new Faculty({
-      fullName: fullName.trim(),
+      fullName: finalFullName,
       email: normalizedEmail,
-      phoneNumber: phoneNumber.trim(),
-      department: department.trim(),
-      role: role.trim(),
-      status: status || 'Active',
-      qualification: qualification.trim(),
+      phoneNumber: finalPhoneNumber,
+      department: finalDepartment,
+      role: finalRole,
+      status: finalStatus || 'Active',
+      qualification: finalQualification,
     });
 
     const savedFaculty = await faculty.save();
@@ -201,6 +228,16 @@ const updateFaculty = async (req, res) => {
       });
     }
 
+    let body = req.body;
+    if (typeof body === 'string') {
+      try {
+        body = JSON.parse(body);
+      } catch (e) {
+        // preserve original body string
+      }
+    }
+    body = body || {};
+
     const {
       fullName,
       email,
@@ -209,11 +246,19 @@ const updateFaculty = async (req, res) => {
       role,
       status,
       qualification,
-    } = req.body;
+    } = body;
+
+    const newEmail = email !== undefined ? email : body.email;
+    const newFullName = fullName !== undefined ? fullName : (body.name !== undefined ? body.name : body.fullname);
+    const newPhoneNumber = phoneNumber !== undefined ? phoneNumber : (body.phone !== undefined ? body.phone : (body.phonenumber !== undefined ? body.phonenumber : (body.mobile !== undefined ? body.mobile : body.contactNumber)));
+    const newDepartment = department !== undefined ? department : body.dept;
+    const newRole = role !== undefined ? role : body.designation;
+    const newStatus = status !== undefined ? status : body.status;
+    const newQualification = qualification !== undefined ? qualification : (body.qualifications !== undefined ? body.qualifications : body.degree);
 
     // Check unique email if email is being updated
-    if (email && email.toLowerCase().trim() !== faculty.email) {
-      const normalizedEmail = email.toLowerCase().trim();
+    if (newEmail && newEmail.toString().toLowerCase().trim() !== faculty.email) {
+      const normalizedEmail = newEmail.toString().toLowerCase().trim();
       const existingFaculty = await Faculty.findOne({
         email: normalizedEmail,
         _id: { $ne: id },
@@ -227,12 +272,12 @@ const updateFaculty = async (req, res) => {
       faculty.email = normalizedEmail;
     }
 
-    if (fullName !== undefined) faculty.fullName = fullName.trim();
-    if (phoneNumber !== undefined) faculty.phoneNumber = phoneNumber.trim();
-    if (department !== undefined) faculty.department = department.trim();
-    if (role !== undefined) faculty.role = role.trim();
-    if (status !== undefined) faculty.status = status;
-    if (qualification !== undefined) faculty.qualification = qualification.trim();
+    if (newFullName !== undefined && newFullName !== null) faculty.fullName = newFullName.toString().trim();
+    if (newPhoneNumber !== undefined && newPhoneNumber !== null) faculty.phoneNumber = newPhoneNumber.toString().trim();
+    if (newDepartment !== undefined && newDepartment !== null) faculty.department = newDepartment.toString().trim();
+    if (newRole !== undefined && newRole !== null) faculty.role = newRole.toString().trim();
+    if (newStatus !== undefined && newStatus !== null) faculty.status = newStatus.toString().trim();
+    if (newQualification !== undefined && newQualification !== null) faculty.qualification = newQualification.toString().trim();
 
     const updatedFaculty = await faculty.save();
 
