@@ -27,7 +27,8 @@ exports.getCourses = async (req, res) => {
       filter.$or = [
         { courseTitle: { $regex: search, $options: 'i' } },
         { instructor: { $regex: search, $options: 'i' } },
-        { description: { $regex: search, $options: 'i' } },
+        { shortDescription: { $regex: search, $options: 'i' } },
+        { category: { $regex: search, $options: 'i' } },
       ];
     }
 
@@ -86,22 +87,58 @@ exports.createCourse = async (req, res) => {
   try {
     const {
       courseTitle,
+      shortDescription,
+      description,
+      category,
+      duration,
       instructor,
       price,
-      duration,
-      category,
       status,
-      description,
+      thumbnail,
+      modules,
     } = req.body;
+
+    const actualShortDescription = shortDescription || description;
+
+    // Validate required fields
+    if (
+      !courseTitle ||
+      !actualShortDescription ||
+      !category ||
+      !duration ||
+      !instructor ||
+      price === undefined ||
+      price === null
+    ) {
+      return res.status(400).json({
+        success: false,
+        message:
+          'Validation failed: Missing required fields (courseTitle, shortDescription, category, duration, instructor, price)',
+      });
+    }
+
+    const formattedModules = Array.isArray(modules)
+      ? modules.map((m) => ({
+          moduleName: m.moduleName || m.moduleTitle || '',
+          duration: m.duration || '',
+          description: m.description || '',
+          assignedSubjects: Array.isArray(m.assignedSubjects)
+            ? m.assignedSubjects
+            : [],
+          lessons: Array.isArray(m.lessons) ? m.lessons : [],
+        }))
+      : [];
 
     const newCourse = new Course({
       courseTitle,
-      instructor,
-      price,
-      duration,
+      shortDescription: actualShortDescription,
       category,
+      duration,
+      instructor,
+      price: Number(price),
       status: status || 'Published',
-      description,
+      thumbnail: thumbnail || '',
+      modules: formattedModules,
     });
 
     await newCourse.save();
@@ -148,6 +185,23 @@ exports.updateCourse = async (req, res) => {
     };
 
     delete updateData.courseId; // Prevent mutating auto-generated courseId
+
+    if (!updateData.shortDescription && updateData.description) {
+      updateData.shortDescription = updateData.description;
+    }
+
+    if (Array.isArray(updateData.modules)) {
+      updateData.modules = updateData.modules.map((m) => ({
+        moduleName: m.moduleName || m.moduleTitle || '',
+        duration: m.duration || '',
+        description: m.description || '',
+        assignedSubjects: Array.isArray(m.assignedSubjects)
+          ? m.assignedSubjects
+          : [],
+        lessons: Array.isArray(m.lessons) ? m.lessons : [],
+        ...(m._id ? { _id: m._id } : {}),
+      }));
+    }
 
     const updatedCourse = await Course.findOneAndUpdate(
       query,
@@ -223,3 +277,4 @@ exports.deleteCourse = async (req, res) => {
     });
   }
 };
+
