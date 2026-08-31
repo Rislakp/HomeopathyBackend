@@ -1,88 +1,104 @@
 const mongoose = require('mongoose');
 const Counter = require('./Counter');
 
-const lessonSchema = new mongoose.Schema({
-  lessonTitle: {
+const moduleSchema = new mongoose.Schema({
+  moduleName: {
     type: String,
-    required: true,
+    required: [true, 'Please add a module name'],
     trim: true,
-    minlength: 3,
-    maxlength: 150
   },
-  mediaContent: {
+  duration: {
     type: String,
-    required: true,
-    trim: true
+    required: [true, 'Please specify module duration'],
+    trim: true,
   },
-  lessonType: {
+  description: {
     type: String,
-    required: true,
-    enum: ['video', 'pdf', 'link', 'document', 'audio', 'Live Class']
-  }
+    required: [true, 'Please add a module description'],
+    trim: true,
+  },
+  assignedSubjects: {
+    type: [String],
+    default: [],
+  },
+  lessons: {
+    type: Array,
+    default: [],
+  },
 }, {
-  timestamps: true
+  timestamps: true,
+  toJSON: { virtuals: true },
+  toObject: { virtuals: true },
 });
 
-const moduleSchema = new mongoose.Schema({
-  moduleId: {
-    type: String,
-    required: true
-  },
-  moduleTitle: {
-    type: String,
-    required: true,
-    trim: true
-  },
-  lessons: [lessonSchema]
-}, {
-  timestamps: true
-});
+// Virtual aliases for backwards compatibility
+moduleSchema.virtual('moduleTitle')
+  .get(function() { return this.moduleName; })
+  .set(function(val) { this.moduleName = val; });
+
+moduleSchema.virtual('moduleId')
+  .get(function() { return this._id ? this._id.toString() : undefined; });
 
 const courseSchema = new mongoose.Schema({
   courseId: {
     type: String,
     required: true,
-    unique: true
+    unique: true,
   },
   courseTitle: {
     type: String,
     required: [true, 'Please add a course title'],
-    trim: true
+    trim: true,
   },
-  instructor: {
+  shortDescription: {
     type: String,
-    required: [true, 'Please add an instructor name'],
-    trim: true
-  },
-  price: {
-    type: Number,
-    required: [true, 'Please specify a price'],
-    min: [0, 'Price must be at least 0']
-  },
-  duration: {
-    type: String,
-    required: [true, 'Please specify a duration'],
-    trim: true
+    required: [true, 'Please add a short description'],
+    trim: true,
   },
   category: {
     type: String,
     required: [true, 'Please specify a category'],
-    trim: true
+    trim: true,
+  },
+  duration: {
+    type: String,
+    required: [true, 'Please specify a duration'],
+    trim: true,
+  },
+  instructor: {
+    type: String,
+    required: [true, 'Please add an instructor name'],
+    trim: true,
+  },
+  price: {
+    type: Number,
+    required: [true, 'Please specify a price'],
+    min: [0, 'Price must be at least 0'],
   },
   status: {
     type: String,
     enum: ['Published', 'Draft', 'Archived'],
-    default: 'Published'
+    default: 'Published',
   },
-  description: {
+  thumbnail: {
     type: String,
-    required: [true, 'Please add a description'],
-    trim: true
+    trim: true,
+    default: '',
   },
-  modules: [moduleSchema]
+  modules: {
+    type: [moduleSchema],
+    default: [],
+  },
 }, {
-  timestamps: true
+  timestamps: true,
+  toJSON: { virtuals: true },
+  toObject: { virtuals: true },
 });
+
+// Virtual alias for description -> shortDescription
+courseSchema.virtual('description')
+  .get(function() { return this.shortDescription; })
+  .set(function(val) { this.shortDescription = val; });
 
 // Auto-generate unique courseId before validation
 courseSchema.pre('validate', async function(next) {
@@ -94,9 +110,7 @@ courseSchema.pre('validate', async function(next) {
         { new: true, upsert: true }
       );
       
-      // FIXED: Added backticks around the template literal
       this.courseId = `CRS-${String(counter.seq).padStart(6, '0')}`;
-      
       next();
     } catch (error) {
       next(error);
