@@ -9,7 +9,7 @@ const {
   getStudentResults,
 } = require('./student.controller');
 const { downloadAnswerKey } = require('./answerKey.controller');
-const { getAllFaculty } = require('../../controllers/facultyController');
+const { getAllFaculty, getFacultyById } = require('../../controllers/facultyController');
 
 const requireStudentOrAdmin = requireRole('student', 'admin', 'superadmin');
 
@@ -22,22 +22,22 @@ const requireStudentOrAdmin = requireRole('student', 'admin', 'superadmin');
 router.get('/api/student/exams/:id/answer-key/download', requireStudentOrAdmin, downloadAnswerKey);
 router.post('/api/student/exams/:id/answer-key/download', requireStudentOrAdmin, downloadAnswerKey);
 
-// Protect remaining student routes strictly under /api/student with student role authentication
-router.use('/api/student', requireStudent);
-
-/**
- * @route   GET /api/student/profile
- * @route   GET /api/student/me
- * @desc    Fetch authenticated student's profile details
- */
-router.get('/api/student/profile', getStudentProfile);
-router.get('/api/student/me', getStudentProfile);
-
 /**
  * @route   GET /api/student/faculty
  * @desc    Fetch faculty members list for students
+ * @access  Public
  */
 router.get('/api/student/faculty', getAllFaculty);
+
+/**
+ * @route   GET /api/student/faculty/:id
+ * @desc    Fetch single faculty member by ID for students
+ * @access  Public
+ */
+router.get('/api/student/faculty/:id', getFacultyById);
+
+// Protect remaining student routes strictly under /api/student with student role authentication
+router.use('/api/student', requireStudent);
 
 /**
  * @route   GET /api/student/exams
