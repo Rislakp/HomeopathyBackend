@@ -9,6 +9,7 @@ const {
   getStudentResults,
 } = require('./student.controller');
 const { downloadAnswerKey } = require('./answerKey.controller');
+const { getAllFaculty } = require('../../controllers/facultyController');
 
 const requireStudentOrAdmin = requireRole('student', 'admin', 'superadmin');
 
@@ -31,6 +32,12 @@ router.use('/api/student', requireStudent);
  */
 router.get('/api/student/profile', getStudentProfile);
 router.get('/api/student/me', getStudentProfile);
+
+/**
+ * @route   GET /api/student/faculty
+ * @desc    Fetch faculty members list for students
+ */
+router.get('/api/student/faculty', getAllFaculty);
 
 /**
  * @route   GET /api/student/exams
