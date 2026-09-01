@@ -98,6 +98,35 @@ async function testAddModuleValidation() {
     console.error('❌ Module creation failed for valid payload:', status2, body2);
   }
 
+  // Test 3: Module without optional duration and description
+  const mockReqNoDurationDesc = {
+    params: { id: 'CRS-000001' },
+    body: {
+      moduleName: 'Minimal Module'
+      // duration and description intentionally omitted
+    }
+  };
+
+  let status3 = 0;
+  let body3 = null;
+  const mockRes3 = {
+    status(code) { status3 = code; return this; },
+    json(data) { body3 = data; return this; }
+  };
+
+  Course.findOne = async () => dummyCourse;
+  await courseController.addModule(mockReqNoDurationDesc, mockRes3);
+  Course.findOne = originalFindOne;
+
+  if (status3 === 201 && body3 && body3.success) {
+    console.log('✓ Module without optional duration & description created successfully (Status 201)');
+    console.log('  - Module Name:', body3.data.moduleName);
+    console.log('  - Duration:', JSON.stringify(body3.data.duration));
+    console.log('  - Description:', JSON.stringify(body3.data.description));
+  } else {
+    console.error('❌ Module creation failed without optional fields:', status3, body3);
+  }
+
   console.log('--- All Module Validation Tests Passed ---');
 }
 

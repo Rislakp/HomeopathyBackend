@@ -9,13 +9,13 @@ const moduleSchema = new mongoose.Schema({
   },
   duration: {
     type: String,
-    required: [true, 'Please specify module duration'],
     trim: true,
+    default: '',
   },
   description: {
     type: String,
-    required: [true, 'Please add a module description'],
     trim: true,
+    default: '',
   },
   assignedSubjects: {
     type: [String],
