@@ -101,11 +101,16 @@ async function addModuleToCourse(req, res) {
 
 async function addLessonToModule(req, res) {
   try {
-    const { courseId } = req.params;
-    const { moduleTitle, lessonTitle, lessonType, mediaContent } = req.body;
+    const { courseId, id, moduleId } = req.params;
+    const targetCourseId = courseId || id;
+    const { moduleTitle, moduleName, lessonTitle, title, lessonType, mediaContent, uploadFileOrLink, duration, fileOrLink } = req.body;
 
-    // 1. Find the Course by courseId
-    const course = await Course.findOne({ courseId });
+    const query = require('mongoose').Types.ObjectId.isValid(targetCourseId)
+      ? { _id: targetCourseId }
+      : { courseId: targetCourseId };
+
+    // 1. Find the Course
+    const course = await Course.findOne(query);
     if (!course) {
       return res.status(404).json({
         success: false,
@@ -113,10 +118,26 @@ async function addLessonToModule(req, res) {
       });
     }
 
-    // 2. Find the specific module inside the course's modules array where the title exactly matches the provided moduleTitle
-    const courseModule = course.modules.find(
-      (m) => m.moduleTitle === moduleTitle
-    );
+    // 2. Find the specific module inside course.modules
+    const targetModuleName = moduleTitle || moduleName;
+    let courseModule;
+
+    if (moduleId) {
+      courseModule = course.modules.find(
+        (m) => (m._id && m._id.toString() === moduleId) || m.moduleId === moduleId
+      );
+    }
+
+    if (!courseModule && targetModuleName) {
+      courseModule = course.modules.find(
+        (m) => m.moduleName === targetModuleName || m.moduleTitle === targetModuleName
+      );
+    }
+
+    if (!courseModule && course.modules.length > 0 && !moduleId && !targetModuleName) {
+      courseModule = course.modules[0];
+    }
+
     if (!courseModule) {
       return res.status(404).json({
         success: false,
@@ -124,31 +145,42 @@ async function addLessonToModule(req, res) {
       });
     }
 
-    // 3. Push the new lesson object into that module's lessons array
-    courseModule.lessons.push({
-      lessonTitle,
-      lessonType,
-      mediaContent
-    });
+    const actualLessonTitle = lessonTitle || title;
+    const actualMediaContent = mediaContent || uploadFileOrLink || fileOrLink || '';
 
-    // 4. Save the parent Course document
+    // 3. Push lesson object into module's lessons array
+    const newLesson = {
+      lessonTitle: actualLessonTitle,
+      lessonType: lessonType || 'Recorded Video',
+      duration: duration || '',
+      fileOrLink: actualMediaContent,
+      mediaContent: actualMediaContent
+    };
+
+    courseModule.lessons.push(newLesson);
+
+    // 4. Save course
     await course.save();
 
-    // 5. Success response (201) with exact requested fields
+    const addedLesson = courseModule.lessons[courseModule.lessons.length - 1];
+
     return res.status(201).json({
+      success: true,
       message: "Lesson added successfully",
+      data: addedLesson,
+      course,
       courseId: course.courseId,
-      moduleTitle: courseModule.moduleTitle,
-      lessonTitle,
-      lessonType,
-      mediaContent
+      moduleId: courseModule._id || courseModule.moduleId,
+      lessonTitle: actualLessonTitle,
+      lessonType: newLesson.lessonType,
+      mediaContent: actualMediaContent
     });
 
   } catch (error) {
     console.error("addLessonToModule error:", error);
     return res.status(500).json({
       success: false,
-      message: "Something went wrong while adding the lesson to the module"
+      message: error.message || "Something went wrong while adding the lesson to the module"
     });
   }
 }
@@ -188,8 +220,10 @@ async function getLesson(req, res) {
 
     // 4. Return success response: courseId, moduleId, and the full lesson object
     return res.status(200).json({
+      success: true,
+      data: lesson,
       courseId: course.courseId,
-      moduleId: courseModule.moduleId,
+      moduleId: courseModule._id || courseModule.moduleId,
       lesson
     });
 
@@ -256,8 +290,11 @@ async function updateLesson(req, res) {
 
     // 6. Return response: success message and the updated lesson object
     return res.status(200).json({
+      success: true,
       message: "Lesson updated successfully",
-      lesson
+      data: lesson,
+      lesson,
+      course
     });
 
   } catch (error) {
@@ -311,8 +348,11 @@ async function deleteLesson(req, res) {
 
     // 6. Return response: "message": "Lesson deleted successfully" and the deleted lessonId
     return res.status(200).json({
+      success: true,
       message: "Lesson deleted successfully",
-      lessonId
+      data: { lessonId },
+      lessonId,
+      course
     });
 
   } catch (error) {

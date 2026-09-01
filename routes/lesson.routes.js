@@ -18,6 +18,12 @@ router.post(
   addModuleToCourse
 );
 router.post(
+  '/api/courses/:courseId/modules/:moduleId/lessons',
+  requireAdmin,
+  validateLesson,
+  addLessonToModule
+);
+router.post(
   '/api/courses/:courseId/lessons',
   requireAdmin,
   validateLesson,

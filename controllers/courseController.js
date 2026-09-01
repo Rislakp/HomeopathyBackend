@@ -140,6 +140,7 @@ exports.createCourse = async (req, res) => {
       success: true,
       message: 'Course created successfully',
       data: newCourse,
+      course: newCourse,
     });
   } catch (error) {
     console.error('Create Course Error:', error);
@@ -221,6 +222,7 @@ exports.updateCourse = async (req, res) => {
       success: true,
       message: 'Course updated successfully',
       data: updatedCourse,
+      course: updatedCourse,
     });
   } catch (error) {
     console.error('Update Course Error:', error);
