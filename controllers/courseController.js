@@ -4,7 +4,7 @@ const Course = require('../models/Course');
 // Helper to determine query filter (supports MongoDB ObjectId _id or custom courseId)
 const getQueryById = (id) => {
   return mongoose.Types.ObjectId.isValid(id)
-    ? { _id: id }
+    ? { $or: [{ _id: id }, { courseId: id }] }
     : { courseId: id };
 };
 
