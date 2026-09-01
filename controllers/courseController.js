@@ -9,15 +9,11 @@ const getQueryById = (id) => {
 };
 
 // 1. GET ALL COURSES (with optional search and filtering)
-// GET /api/courses?category=...&status=...&search=...
+// GET /api/courses?status=...&search=...
 exports.getCourses = async (req, res) => {
   try {
-    const { category, status, search } = req.query;
+    const { status, search } = req.query;
     const filter = {};
-
-    if (category) {
-      filter.category = { $regex: new RegExp(category, 'i') };
-    }
 
     if (status) {
       filter.status = status;
@@ -28,7 +24,6 @@ exports.getCourses = async (req, res) => {
         { courseTitle: { $regex: search, $options: 'i' } },
         { instructor: { $regex: search, $options: 'i' } },
         { shortDescription: { $regex: search, $options: 'i' } },
-        { category: { $regex: search, $options: 'i' } },
       ];
     }
 
@@ -90,7 +85,6 @@ exports.createCourse = async (req, res) => {
       shortDescription,
       description,
       courseDescription,
-      category,
       duration,
       instructor,
       price,
@@ -105,7 +99,6 @@ exports.createCourse = async (req, res) => {
     if (
       !courseTitle ||
       !actualShortDescription ||
-      !category ||
       !duration ||
       !instructor ||
       price === undefined ||
@@ -114,7 +107,7 @@ exports.createCourse = async (req, res) => {
       return res.status(400).json({
         success: false,
         message:
-          'Validation failed: Missing required fields (courseTitle, shortDescription, category, duration, instructor, price)',
+          'Validation failed: Missing required fields (courseTitle, shortDescription, duration, instructor, price)',
       });
     }
 
@@ -133,7 +126,6 @@ exports.createCourse = async (req, res) => {
     const newCourse = new Course({
       courseTitle,
       shortDescription: actualShortDescription,
-      category,
       duration,
       instructor,
       price: Number(price),
@@ -186,6 +178,7 @@ exports.updateCourse = async (req, res) => {
     };
 
     delete updateData.courseId; // Prevent mutating auto-generated courseId
+    delete updateData.category; // Ensure category field in request body is ignored/dropped
 
     if (!updateData.shortDescription) {
       if (updateData.description) {

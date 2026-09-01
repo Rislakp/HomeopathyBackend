@@ -55,11 +55,6 @@ const courseSchema = new mongoose.Schema({
     required: [true, 'Please add a short description'],
     trim: true,
   },
-  category: {
-    type: String,
-    required: [true, 'Please specify a category'],
-    trim: true,
-  },
   duration: {
     type: String,
     required: [true, 'Please specify a duration'],

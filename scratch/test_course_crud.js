@@ -10,7 +10,6 @@ async function testCourseModelAndControllers() {
     courseId: 'CRS-000001',
     courseTitle: 'Organon & Philosophy Masterclass',
     shortDescription: 'In-depth study of Homeopathic principles and aphorisms.',
-    category: 'Organon Philosophy',
     duration: '12 Weeks',
     instructor: 'Dr. Samuel Hahnemann',
     price: 4999,
@@ -41,7 +40,6 @@ async function testCourseModelAndControllers() {
     console.log('  - courseTitle:', courseDoc.courseTitle);
     console.log('  - shortDescription:', courseDoc.shortDescription);
     console.log('  - description (virtual):', courseDoc.description);
-    console.log('  - category:', courseDoc.category);
     console.log('  - duration:', courseDoc.duration);
     console.log('  - instructor:', courseDoc.instructor);
     console.log('  - price:', courseDoc.price);
