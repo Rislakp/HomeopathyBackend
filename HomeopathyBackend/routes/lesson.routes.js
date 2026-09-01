@@ -1,8 +1,11 @@
 const express = require('express');
 const router = express.Router();
-const { validateLesson } = require('../middlewares/validateLesson.middleware');
-const { addModuleToCourse } = require('../controllers/lesson.controller');
+const courseController = require('../controllers/courseController');
 
-router.post('/api/courses/:courseId/modules', validateLesson, addModuleToCourse);
+// Subdocument module and lesson routes
+router.post('/api/courses/:courseId/modules', courseController.addModule);
+router.post('/api/courses/:courseId/modules/:moduleId/lessons', courseController.addLesson);
+router.put('/api/courses/:courseId/modules/:moduleId/lessons/:lessonId', courseController.updateLesson);
+router.delete('/api/courses/:courseId/modules/:moduleId/lessons/:lessonId', courseController.deleteLesson);
 
 module.exports = router;
