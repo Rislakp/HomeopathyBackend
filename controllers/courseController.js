@@ -89,6 +89,7 @@ exports.createCourse = async (req, res) => {
       courseTitle,
       shortDescription,
       description,
+      courseDescription,
       category,
       duration,
       instructor,
@@ -98,7 +99,7 @@ exports.createCourse = async (req, res) => {
       modules,
     } = req.body;
 
-    const actualShortDescription = shortDescription || description;
+    const actualShortDescription = shortDescription || description || courseDescription;
 
     // Validate required fields
     if (
@@ -186,8 +187,12 @@ exports.updateCourse = async (req, res) => {
 
     delete updateData.courseId; // Prevent mutating auto-generated courseId
 
-    if (!updateData.shortDescription && updateData.description) {
-      updateData.shortDescription = updateData.description;
+    if (!updateData.shortDescription) {
+      if (updateData.description) {
+        updateData.shortDescription = updateData.description;
+      } else if (updateData.courseDescription) {
+        updateData.shortDescription = updateData.courseDescription;
+      }
     }
 
     if (Array.isArray(updateData.modules)) {
