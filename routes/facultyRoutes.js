@@ -1,23 +1,15 @@
 const express = require('express');
 const router = express.Router();
-const {
-  createFaculty,
-  getAllFaculty,
-  getFacultyById,
-  updateFaculty,
-  deleteFaculty,
-} = require('../controllers/facultyController');
-const { requireAdmin } = require('../middleware/rbac');
+const facultyController = require('../controllers/facultyController');
 
-// Protect all faculty endpoints with requireAdmin middleware
-router.use(requireAdmin);
+// Student-facing faculty endpoints
+router.get('/student', facultyController.getStudentFaculty);
+router.get('/student/:id', facultyController.getStudentFacultyById);
 
-// Faculty CRUD endpoints
-router.post('/', createFaculty);
-router.get('/', getAllFaculty);
-router.get('/:id', getFacultyById);
-router.put('/:id', updateFaculty);
-router.patch('/:id', updateFaculty);
-router.delete('/:id', deleteFaculty);
+// Admin-facing faculty endpoints
+router.get('/', facultyController.getAllFacultyAdmin);
+router.post('/', facultyController.createFaculty);
+router.put('/:id', facultyController.updateFaculty);
+router.delete('/:id', facultyController.deleteFaculty);
 
 module.exports = router;

@@ -1,7 +1,7 @@
 const express = require('express');
 const router = express.Router();
-const adminStudentController = require('../controllers/adminStudent.controller');
-const { adminAuth } = require('../middlewares/adminAuth.middleware');
+const adminStudentController = require('../controllers/adminStudentController');
+const { adminAuth } = require('../middleware/adminAuth.middleware');
 
 // Apply admin authentication middleware to all admin student endpoints
 router.use(adminAuth);

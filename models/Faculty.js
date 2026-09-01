@@ -4,54 +4,58 @@ const facultySchema = new mongoose.Schema(
   {
     fullName: {
       type: String,
-      required: [true, 'Full name is required'],
+      required: [true, 'Please provide faculty full name'],
       trim: true,
     },
     email: {
       type: String,
-      required: [true, 'Email is required'],
+      required: [true, 'Please provide faculty email'],
       unique: true,
-      lowercase: true,
       trim: true,
+      lowercase: true,
       match: [
-        /^[^\s@]+@[^\s@]+\.[^\s@]+$/,
+        /^\w+([\.-]?\w+)*@\w+([\.-]?\w+)*(\.\w{2,3})+$/,
         'Please provide a valid email address',
       ],
     },
-    phoneNumber: {
-      type: String,
-      required: [true, 'Phone number is required'],
-      trim: true,
-    },
     department: {
       type: String,
-      required: [true, 'Department is required'],
+      required: [true, 'Please provide department name'],
       trim: true,
     },
     role: {
       type: String,
-      required: [true, 'Role is required'],
+      required: [true, 'Please provide faculty role or designation'],
+      trim: true,
+    },
+    qualification: {
+      type: String,
+      required: [true, 'Please provide faculty qualification'],
       trim: true,
     },
     status: {
       type: String,
-      enum: {
-        values: ['Active', 'On Leave', 'Inactive'],
-        message: '{VALUE} is not a valid status',
-      },
+      enum: ['Active', 'Inactive'],
       default: 'Active',
     },
-    qualification: {
+    phone: {
       type: String,
-      required: [true, 'Qualification is required'],
       trim: true,
-    },
-    profileImage: {
-      type: String,
       default: '',
     },
-    avatar: {
+    bio: {
       type: String,
+      trim: true,
+      default: '',
+    },
+    avatarUrl: {
+      type: String,
+      trim: true,
+      default: '',
+    },
+    experience: {
+      type: String,
+      trim: true,
       default: '',
     },
   },
@@ -60,13 +64,8 @@ const facultySchema = new mongoose.Schema(
   }
 );
 
-// Add text index for search support across key string fields
-facultySchema.index({
-  fullName: 'text',
-  email: 'text',
-  department: 'text',
-  role: 'text',
-  qualification: 'text',
-});
+// Indexes for high-performance searching
+facultySchema.index({ fullName: 'text', department: 'text', role: 'text', qualification: 'text' });
+facultySchema.index({ status: 1, department: 1 });
 
-module.exports = mongoose.models.Faculty || mongoose.model('Faculty', facultySchema);
+module.exports = mongoose.model('Faculty', facultySchema);

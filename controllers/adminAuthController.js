@@ -1,4 +1,5 @@
 const jwt = require('jsonwebtoken');
+const bcrypt = require('bcryptjs');
 const Admin = require('../models/admin.model');
 
 const getJwtSecret = () => {
@@ -160,7 +161,53 @@ const seedInitialAdmin = async () => {
   }
 };
 
+const registerAdmin = async (req, res) => {
+  try {
+    const { name, email, password } = req.body;
+
+    if (!name || !email || !password) {
+      return res.status(400).json({
+        message: 'Name, email and password are required',
+      });
+    }
+
+    const existingAdmin = await Admin.findOne({ email });
+
+    if (existingAdmin) {
+      return res.status(400).json({
+        message: 'Admin already exists',
+      });
+    }
+
+    const hashedPassword = await bcrypt.hash(password, 10);
+
+    const admin = await Admin.create({
+      name,
+      email,
+      password: hashedPassword,
+    });
+
+    res.status(201).json({
+      message: 'Admin registered successfully',
+      admin: {
+        id: admin._id,
+        name: admin.name,
+        email: admin.email,
+      },
+    });
+  } catch (error) {
+    console.error('Register error:', error);
+
+    res.status(500).json({
+      message: 'Registration failed',
+      error: error.message,
+    });
+  }
+};
+
 module.exports = {
   adminLogin,
   seedInitialAdmin,
+  registerAdmin,
 };
+

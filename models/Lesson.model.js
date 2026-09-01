@@ -21,7 +21,7 @@ const lessonSchema = new mongoose.Schema({
   lessonType: {
     type: String,
     required: true,
-    enum: ['video', 'pdf', 'link', 'document', 'audio', 'Live Class']
+    enum: ['video', 'pdf', 'link', 'document', 'audio']
   }
 }, {
   timestamps: true

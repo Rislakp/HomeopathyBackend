@@ -86,12 +86,21 @@ app.use((req, res, next) => {
 
 // Routes
 const authRoutes = require('./routes/authRoutes');
+
 app.use('/api/auth', authRoutes);
 app.use('/api/v1/auth', authRoutes);
 app.use('/auth', authRoutes);
+
 app.use('/api/courses', require('./routes/courseRoutes'));
 const lessonRoutes = require('./routes/lesson.routes');
 app.use(lessonRoutes);
+
+const studentFacultyRoutes = require('./routes/studentFacultyRoutes');
+app.use('/api/student/faculty', studentFacultyRoutes);
+app.use('/api/student_new', require('./routes/studentRoutes'));
+app.use('/api/faculty_new', require('./routes/facultyRoutes'));
+app.use('/api/admin/students', require('./routes/adminStudentRoutes'));
+
 const examRoutes = require('./routes/exam.routes');
 app.use(examRoutes);
 const studentRoutes = require('./src/student/student.routes');

@@ -17,60 +17,74 @@ const studentSchema = new mongoose.Schema({
       'Please add a valid email'
     ]
   },
-  dateOfBirth: {
-    type: String,
-    trim: true
-  },
-  contactNumber: {
-    type: String,
-    trim: true
-  },
-  qualification: {
-    type: String,
-    trim: true
-  },
   phone: {
     type: String,
+    required: [true, 'Please add a phone number'],
+    unique: true,
     trim: true
-  },
-  userId: {
-    type: mongoose.Schema.Types.ObjectId,
-    ref: 'User'
   },
   course: {
     type: String,
-    trim: true,
-    default: 'General'
+    required: [true, 'Please specify a course'],
+    trim: true
   },
   subscription: {
     type: String,
-    trim: true,
-    default: 'Free'
+    required: [true, 'Please specify a subscription level'],
+    trim: true
   },
+  courseId: {
+    type: String,
+    trim: true,
+    default: ''
+  },
+  examScores: [
+    {
+      examTitle: {
+        type: String,
+        trim: true,
+        default: 'General Assessment'
+      },
+      score: {
+        type: Number,
+        default: 0
+      },
+      maxScore: {
+        type: Number,
+        default: 100
+      },
+      percentage: {
+        type: Number,
+        default: function() {
+          return this.maxScore > 0 ? Math.round((this.score / this.maxScore) * 100) : 0;
+        }
+      },
+      grade: {
+        type: String,
+        trim: true,
+        default: ''
+      },
+      date: {
+        type: Date,
+        default: Date.now
+      }
+    }
+  ],
   status: {
     type: String,
+    required: true,
     enum: ['Active', 'Inactive', 'Trial', 'Expired'],
     default: 'Active'
   },
   joinedDate: {
     type: Date,
     default: Date.now
-  },
-  avatar: {
-    type: String,
-    trim: true,
-    default: ''
-  },
-  profileImage: {
-    type: String,
-    trim: true,
-    default: ''
   }
 }, {
   timestamps: true,
   toJSON: {
     transform: function(doc, ret) {
-      ret.id = ret._id ? ret._id.toString() : ret.id;
+      ret.id = ret._id.toString();
       delete ret._id;
       delete ret.__v;
       return ret;
@@ -78,7 +92,7 @@ const studentSchema = new mongoose.Schema({
   },
   toObject: {
     transform: function(doc, ret) {
-      ret.id = ret._id ? ret._id.toString() : ret.id;
+      ret.id = ret._id.toString();
       delete ret._id;
       delete ret.__v;
       return ret;
@@ -86,14 +100,4 @@ const studentSchema = new mongoose.Schema({
   }
 });
 
-// Indexes for performance optimization (email already has unique index)
-studentSchema.index({ userId: 1 });
-studentSchema.index({ status: 1 });
-studentSchema.index({ course: 1 });
-studentSchema.index({ name: 1 });
-studentSchema.index({ phone: 1 });
-studentSchema.index({ contactNumber: 1 });
-studentSchema.index({ createdAt: -1 });
-studentSchema.index({ status: 1, course: 1, createdAt: -1 });
-
-module.exports = mongoose.models.Student || mongoose.model('Student', studentSchema);
+module.exports = mongoose.model('Student', studentSchema);
