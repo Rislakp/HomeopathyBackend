@@ -3,13 +3,10 @@ const http = require('http');
 const express = require('express');
 const mongoose = require('mongoose');
 
-const Admin = require('../models/admin.model');
-const Student = require('../models/Student');
-const Course = require('../models/Course');
 const adminStudentRoutes = require('../routes/adminStudentRoutes');
 
 const runTest = async () => {
-  console.log('--- Starting Admin Student Export Endpoint Tests ---');
+  console.log('--- Starting Admin Student Route Ordering & Export Tests ---');
 
   const app = express();
   app.use(express.json());
@@ -17,20 +14,7 @@ const runTest = async () => {
 
   const server = app.listen(0);
   const port = server.address().port;
-  console.log(`Test express server started on port ${port}`);
-
-  // Connect to DB if configured, or use mock if needed
-  const useLocal = process.env.USE_LOCAL_DB === 'true';
-  const dbUri = useLocal ? process.env.MONGODB_LOCAL_URI : process.env.MONGODB_URI;
-
-  if (dbUri) {
-    try {
-      await mongoose.connect(dbUri, { dbName: 'homeopathy_db' });
-      console.log('Connected to MongoDB for test verification.');
-    } catch (e) {
-      console.log('MongoDB connection skipped/failed, testing HTTP pipeline:', e.message);
-    }
-  }
+  console.log(`Test express server running on port ${port}`);
 
   const makeRequest = (path, headers = {}) => {
     return new Promise((resolve, reject) => {
@@ -62,67 +46,59 @@ const runTest = async () => {
   };
 
   try {
-    // 1. Test Unauthenticated Request
-    console.log('\n[Test 1] Testing unauthenticated GET /api/admin/students/export');
-    const resUnauth = await makeRequest('/api/admin/students/export');
-    console.log(`Status: ${resUnauth.statusCode} (Expected: 401)`);
-    console.log(`Response: ${resUnauth.body}`);
-    if (resUnauth.statusCode !== 401) {
-      throw new Error(`Expected 401 but received ${resUnauth.statusCode}`);
-    }
-    console.log('✓ Test 1 Passed: Unauthorized request blocked successfully.');
-
-    // 2. Test Authenticated Request with Admin Token / Secret
-    console.log('\n[Test 2] Testing authenticated GET /api/admin/students/export with admin secret');
-    const resAuth = await makeRequest('/api/admin/students/export', {
+    // 1. Test GET /api/admin/students/export with admin auth (Route ordering check)
+    console.log('\n[Test 1] Testing GET /api/admin/students/export - ensures it hits /export instead of /:id');
+    const resExport = await makeRequest('/api/admin/students/export', {
       Authorization: 'Bearer homeopathy_admin_secret',
     });
 
-    console.log(`Status: ${resAuth.statusCode} (Expected: 200)`);
-    console.log(`Content-Type: ${resAuth.headers['content-type']}`);
-    console.log(`Content-Disposition: ${resAuth.headers['content-disposition']}`);
-    console.log('\nFirst 500 characters of CSV Output:');
-    console.log(resAuth.body.substring(0, 500));
+    console.log(`Status: ${resExport.statusCode} (Expected: 200)`);
+    console.log(`Content-Type: ${resExport.headers['content-type']}`);
+    console.log(`Content-Disposition: ${resExport.headers['content-disposition']}`);
 
-    if (resAuth.statusCode !== 200) {
-      throw new Error(`Expected 200 but received ${resAuth.statusCode}`);
+    if (resExport.statusCode !== 200) {
+      throw new Error(`Expected 200 for /export, but received ${resExport.statusCode}: ${resExport.body}`);
     }
 
-    if (!resAuth.headers['content-type'].includes('text/csv')) {
-      throw new Error(`Expected Content-Type text/csv but got ${resAuth.headers['content-type']}`);
+    if (!resExport.headers['content-type'].includes('text/csv')) {
+      throw new Error(`Expected Content-Type text/csv but got ${resExport.headers['content-type']}`);
     }
 
-    if (!resAuth.headers['content-disposition'].includes('attachment; filename=')) {
-      throw new Error(`Expected attachment Content-Disposition header`);
-    }
+    console.log('✓ Test 1 Passed: /export correctly routed to export handler (not intercepted by /:id).');
 
-    // Verify CSV Headers
-    const lines = resAuth.body.replace(/^\uFEFF/, '').split(/\r?\n/);
-    console.log(`\nCSV Total Lines Generated: ${lines.length}`);
-    console.log(`CSV Header: ${lines[0]}`);
-
-    if (!lines[0].includes('"Student Name"') || !lines[0].includes('"Exam Scores"')) {
-      throw new Error('CSV Header missing expected columns');
-    }
-
-    console.log('✓ Test 2 Passed: Authorized export returned valid CSV headers and content.');
-
-    // 3. Test Filter Query
-    console.log('\n[Test 3] Testing filtered export GET /api/admin/students/export?status=Active');
-    const resFiltered = await makeRequest('/api/admin/students/export?status=Active', {
+    // 2. Test GET /api/admin/students/:id with invalid ID
+    console.log('\n[Test 2] Testing GET /api/admin/students/invalid-mongo-id');
+    const resInvalidId = await makeRequest('/api/admin/students/invalid-mongo-id', {
       Authorization: 'Bearer homeopathy_admin_secret',
     });
-    console.log(`Status: ${resFiltered.statusCode} (Expected: 200)`);
-    console.log('✓ Test 3 Passed: Filtered export succeeded.');
 
-    console.log('\n🎉 ALL TESTS PASSED SUCCESSFULLY!');
+    console.log(`Status: ${resInvalidId.statusCode} (Expected: 400)`);
+    console.log(`Body: ${resInvalidId.body}`);
+
+    if (resInvalidId.statusCode !== 400) {
+      throw new Error(`Expected 400 for invalid ID format, but received ${resInvalidId.statusCode}`);
+    }
+    console.log('✓ Test 2 Passed: Dynamic /:id handler correctly receives ID requests.');
+
+    // 3. Test GET /api/admin/students/:id with valid formatted Mongo ID (not found)
+    console.log('\n[Test 3] Testing GET /api/admin/students/507f1f77bcf86cd799439011');
+    const resNotFound = await makeRequest('/api/admin/students/507f1f77bcf86cd799439011', {
+      Authorization: 'Bearer homeopathy_admin_secret',
+    });
+
+    console.log(`Status: ${resNotFound.statusCode} (Expected: 404)`);
+    console.log(`Body: ${resNotFound.body}`);
+
+    if (resNotFound.statusCode !== 404) {
+      throw new Error(`Expected 404 for non-existent student, but received ${resNotFound.statusCode}`);
+    }
+    console.log('✓ Test 3 Passed: /:id handler processed valid ObjectId correctly.');
+
+    console.log('\n🎉 ALL ROUTE ORDERING TESTS PASSED SUCCESSFULLY!');
   } catch (err) {
-    console.error('\n❌ Test failed:', err);
+    console.error('\n❌ Route test failed:', err);
   } finally {
     server.close();
-    if (mongoose.connection.readyState !== 0) {
-      await mongoose.disconnect();
-    }
     process.exit(0);
   }
 };

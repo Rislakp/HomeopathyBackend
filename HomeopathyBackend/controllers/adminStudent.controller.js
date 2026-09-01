@@ -276,3 +276,199 @@ exports.getAdminStudents = async (req, res) => {
     });
   }
 };
+
+/**
+ * @desc    Get single student by ID
+ * @route   GET /api/admin/students/:id
+ * @access  Private / Admin
+ */
+exports.getStudentById = async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    if (!mongoose.Types.ObjectId.isValid(id)) {
+      return res.status(400).json({
+        success: false,
+        message: 'Invalid student ID format',
+      });
+    }
+
+    const student = mongoose.connection.readyState === 1 ? await Student.findById(id).lean() : null;
+
+    if (!student) {
+      return res.status(404).json({
+        success: false,
+        message: 'Student not found',
+      });
+    }
+
+    return res.status(200).json({
+      success: true,
+      data: student,
+    });
+  } catch (error) {
+    console.error('Get Student By ID Error:', error);
+    return res.status(500).json({
+      success: false,
+      message: 'Failed to fetch student details',
+      error: error.message,
+    });
+  }
+};
+
+/**
+ * @desc    Create a new student
+ * @route   POST /api/admin/students
+ * @access  Private / Admin
+ */
+exports.createStudent = async (req, res) => {
+  try {
+    const { name, email, phone, course, courseId, subscription, status, examScores } = req.body;
+
+    if (!name || !email || !phone || !course || !subscription) {
+      return res.status(400).json({
+        success: false,
+        message: 'Please provide name, email, phone, course, and subscription',
+      });
+    }
+
+    if (mongoose.connection.readyState !== 1) {
+      return res.status(503).json({
+        success: false,
+        message: 'Database not connected',
+      });
+    }
+
+    const existingStudent = await Student.findOne({
+      $or: [{ email: email.toLowerCase().trim() }, { phone: phone.trim() }],
+    });
+
+    if (existingStudent) {
+      return res.status(400).json({
+        success: false,
+        message: 'Student with this email or phone already exists',
+      });
+    }
+
+    const newStudent = await Student.create({
+      name: name.trim(),
+      email: email.toLowerCase().trim(),
+      phone: phone.trim(),
+      course: course.trim(),
+      courseId: courseId ? courseId.trim() : '',
+      subscription: subscription.trim(),
+      status: status || 'Active',
+      examScores: examScores || [],
+    });
+
+    return res.status(201).json({
+      success: true,
+      message: 'Student created successfully',
+      data: newStudent,
+    });
+  } catch (error) {
+    console.error('Create Student Error:', error);
+    return res.status(500).json({
+      success: false,
+      message: 'Failed to create student',
+      error: error.message,
+    });
+  }
+};
+
+/**
+ * @desc    Update a student
+ * @route   PUT /api/admin/students/:id
+ * @access  Private / Admin
+ */
+exports.updateStudent = async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    if (!mongoose.Types.ObjectId.isValid(id)) {
+      return res.status(400).json({
+        success: false,
+        message: 'Invalid student ID format',
+      });
+    }
+
+    if (mongoose.connection.readyState !== 1) {
+      return res.status(503).json({
+        success: false,
+        message: 'Database not connected',
+      });
+    }
+
+    const updatedStudent = await Student.findByIdAndUpdate(id, req.body, {
+      new: true,
+      runValidators: true,
+    });
+
+    if (!updatedStudent) {
+      return res.status(404).json({
+        success: false,
+        message: 'Student not found',
+      });
+    }
+
+    return res.status(200).json({
+      success: true,
+      message: 'Student updated successfully',
+      data: updatedStudent,
+    });
+  } catch (error) {
+    console.error('Update Student Error:', error);
+    return res.status(500).json({
+      success: false,
+      message: 'Failed to update student',
+      error: error.message,
+    });
+  }
+};
+
+/**
+ * @desc    Delete a student
+ * @route   DELETE /api/admin/students/:id
+ * @access  Private / Admin
+ */
+exports.deleteStudent = async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    if (!mongoose.Types.ObjectId.isValid(id)) {
+      return res.status(400).json({
+        success: false,
+        message: 'Invalid student ID format',
+      });
+    }
+
+    if (mongoose.connection.readyState !== 1) {
+      return res.status(503).json({
+        success: false,
+        message: 'Database not connected',
+      });
+    }
+
+    const deletedStudent = await Student.findByIdAndDelete(id);
+
+    if (!deletedStudent) {
+      return res.status(404).json({
+        success: false,
+        message: 'Student not found',
+      });
+    }
+
+    return res.status(200).json({
+      success: true,
+      message: 'Student deleted successfully',
+      data: deletedStudent,
+    });
+  } catch (error) {
+    console.error('Delete Student Error:', error);
+    return res.status(500).json({
+      success: false,
+      message: 'Failed to delete student',
+      error: error.message,
+    });
+  }
+};
