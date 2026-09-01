@@ -28,16 +28,16 @@ const adminLogin = async (req, res) => {
 
     // 1. Validate request fields
     if (!email || typeof email !== 'string' || !email.trim()) {
-      return res.status(401).json({
+      return res.status(400).json({
         success: false,
-        message: 'Invalid email or password',
+        message: 'Email is required',
       });
     }
 
     if (!password || typeof password !== 'string' || !password.trim()) {
-      return res.status(401).json({
+      return res.status(400).json({
         success: false,
-        message: 'Invalid email or password',
+        message: 'Password is required',
       });
     }
 
@@ -45,9 +45,9 @@ const adminLogin = async (req, res) => {
 
     // Validate email format
     if (!EMAIL_REGEX.test(cleanEmail)) {
-      return res.status(401).json({
+      return res.status(400).json({
         success: false,
-        message: 'Invalid email or password',
+        message: 'Invalid email format',
       });
     }
 
@@ -61,16 +61,8 @@ const adminLogin = async (req, res) => {
       });
     }
 
-    // 4. Check isActive
-    if (admin.isActive === false) {
-      return res.status(403).json({
-        success: false,
-        message: 'Admin account is inactive',
-      });
-    }
-
-    // 5. Compare password using comparePassword instance method
-    const isMatch = await admin.comparePassword(password);
+    // 5. Compare password securely using bcrypt
+    const isMatch = await bcrypt.compare(password, admin.password);
     if (!isMatch) {
       return res.status(401).json({
         success: false,
@@ -104,14 +96,7 @@ const adminLogin = async (req, res) => {
           id: admin._id.toString(),
           name: admin.name,
           email: admin.email,
-          role: admin.role,
-        },
-        user: {
-          _id: admin._id.toString(),
-          id: admin._id.toString(),
-          name: admin.name,
-          email: admin.email,
-          role: admin.role,
+          role: adminRole,
         },
         token,
       },
@@ -121,11 +106,11 @@ const adminLogin = async (req, res) => {
         id: admin._id.toString(),
         name: admin.name,
         email: admin.email,
-        role: admin.role,
+        role: adminRole,
       },
     });
   } catch (error) {
-    console.error('Admin Login Error:', error);
+    console.error('Login error:', error);
     return res.status(500).json({
       success: false,
       message: 'Internal server error during login',
