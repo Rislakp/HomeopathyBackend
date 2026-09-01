@@ -1,83 +1,101 @@
+const jwt = require('jsonwebtoken');
 const Admin = require('../models/admin.model');
-const mongoose = require('mongoose');
+
+const getJwtSecret = () => {
+  return process.env.JWT_SECRET || 'white_coat_academy_secret_jwt_key_2026_super_secure';
+};
 
 /**
  * Admin Authentication Middleware
- * Protects admin-only routes by validating admin authorization credentials
- * Supports Bearer token, x-admin-id header, or API key
+ * Protects admin-only routes by validating JWT authorization tokens
  */
 const adminAuth = async (req, res, next) => {
   try {
-    let token = null;
+    const authHeader = req.headers.authorization;
 
-    // 1. Check Authorization header (Bearer <token/id>)
-    if (req.headers.authorization && req.headers.authorization.startsWith('Bearer ')) {
-      token = req.headers.authorization.split(' ')[1].trim();
-    } else if (req.headers.authorization) {
-      token = req.headers.authorization.trim();
-    }
-
-    // 2. Check alternative headers (x-admin-id, x-admin-token, x-api-key)
-    if (!token && req.headers['x-admin-id']) {
-      token = req.headers['x-admin-id'].trim();
-    }
-    if (!token && req.headers['x-admin-token']) {
-      token = req.headers['x-admin-token'].trim();
-    }
-
-    // 3. Check query param fallback (e.g. for direct browser downloads if token passed in URL)
-    if (!token && req.query.adminToken) {
-      token = req.query.adminToken.trim();
-    }
-    if (!token && req.query.adminId) {
-      token = req.query.adminId.trim();
-    }
-
-    if (!token) {
+    // 1. Missing Authorization header
+    if (!authHeader) {
       return res.status(401).json({
         success: false,
-        message: 'Access denied. Admin authorization token or ID is required.',
+        message: 'Access denied. Authorization header is missing.',
+        code: 'AUTH_HEADER_MISSING',
       });
     }
 
-    // Check configured admin secret or default master secret first (fast path)
-    const adminSecret = process.env.ADMIN_SECRET_KEY || 'homeopathy_admin_secret';
-    if (token === adminSecret || token === 'admin-secret-token') {
-      req.admin = { role: 'superadmin', name: 'System Administrator' };
-      return next();
+    // 2. Malformed Authorization header
+    if (!authHeader.startsWith('Bearer ')) {
+      return res.status(401).json({
+        success: false,
+        message: 'Access denied. Malformed authorization header (must start with Bearer).',
+        code: 'AUTH_HEADER_MALFORMED',
+      });
     }
 
-    // Verify Admin in MongoDB
-    if (mongoose.connection.readyState === 1) {
-      if (mongoose.Types.ObjectId.isValid(token)) {
-        const admin = await Admin.findById(token).select('-password');
-        if (admin) {
-          req.admin = admin;
-          return next();
-        }
-      }
+    const token = authHeader.split(' ')[1];
 
-      // Check if token matches by email
-      const adminByEmail = await Admin.findOne({ email: token.toLowerCase() }).select('-password');
-      if (adminByEmail) {
-        req.admin = adminByEmail;
-        return next();
-      }
-
-      // Fallback: If token is "admin", allow if an admin exists
-      if (token.toLowerCase() === 'admin') {
-        const anyAdmin = await Admin.findOne().select('-password');
-        if (anyAdmin) {
-          req.admin = anyAdmin;
-          return next();
-        }
-      }
+    if (!token || !token.trim()) {
+      return res.status(401).json({
+        success: false,
+        message: 'Access denied. Token is empty.',
+        code: 'TOKEN_EMPTY',
+      });
     }
 
-    return res.status(401).json({
-      success: false,
-      message: 'Unauthorized: Invalid admin credentials.',
-    });
+    let decoded;
+    
+    // 3. Verify JWT safely and differentiate error types
+    try {
+      decoded = jwt.verify(token, getJwtSecret());
+    } catch (err) {
+      if (err.name === 'TokenExpiredError') {
+        return res.status(401).json({
+          success: false,
+          message: 'Session expired. Please log in again.',
+          code: 'TOKEN_EXPIRED',
+          error: err.message,
+        });
+      }
+      return res.status(401).json({
+        success: false,
+        message: 'Invalid authentication token.',
+        code: 'TOKEN_INVALID',
+        error: err.message,
+      });
+    }
+
+    // Extract ID from various possible payload structures
+    const adminId = decoded.adminId || decoded.userId || decoded.id || decoded._id;
+
+    if (!adminId) {
+      return res.status(401).json({
+        success: false,
+        message: 'Invalid token structure: Admin ID missing.',
+        code: 'TOKEN_PAYLOAD_INVALID',
+      });
+    }
+
+    // 4. Verify admin exists in the database
+    const admin = await Admin.findById(adminId).select('-password');
+    
+    if (!admin) {
+      return res.status(401).json({
+        success: false,
+        message: 'Admin account not found.',
+        code: 'ADMIN_NOT_FOUND',
+      });
+    }
+
+    // 5. Attach decoded admin to req.user (and req.admin for backwards compatibility)
+    req.user = {
+      _id: admin._id.toString(),
+      id: admin._id.toString(),
+      name: admin.name,
+      email: admin.email,
+      role: admin.role || decoded.role || 'admin',
+    };
+    req.admin = req.user;
+
+    next();
   } catch (error) {
     console.error('Admin Auth Middleware Error:', error);
     return res.status(500).json({
