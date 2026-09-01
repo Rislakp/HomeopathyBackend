@@ -1,129 +1,77 @@
 const mongoose = require('mongoose');
 const Counter = require('./Counter');
 
+// Subdocument Schema for Video Parts (for multi-part recorded videos)
+const videoPartSchema = new mongoose.Schema({
+  partTitle: {
+    type: String,
+    trim: true,
+  },
+  partUrl: {
+    type: String,
+    trim: true,
+  }
+});
+
 // Subdocument Schema for Lessons
-const lessonSchema = new mongoose.Schema(
-  {
-    lessonTitle: {
-      type: String,
-      required: [true, 'Please provide a lesson title'],
-      trim: true,
-    },
-    lessonType: {
-      type: String,
-      required: [true, 'Please specify a lesson type'],
-      enum: {
-        values: ['Live Class', 'Recorded Video', 'PDF Notes', 'Assignment'],
-        message: '{VALUE} is not a valid lesson type',
-      },
-    },
-    fileOrLink: {
-      type: String,
-      trim: true,
-      default: '',
+const lessonSchema = new mongoose.Schema({
+  lessonTitle: {
+    type: String,
+    required: [true, 'Please provide a lesson title'],
+    trim: true,
+  },
+  lessonType: {
+    type: String,
+    required: [true, 'Please specify a lesson type'],
+    enum: {
+      values: ['Live Class', 'Recorded Video', 'PDF Notes', 'Assignment'],
+      message: '{VALUE} is not a valid lesson type',
     },
   },
-  duration: {
+  durationOrPages: {
     type: String,
     trim: true,
     default: '',
   },
-  description: {
+  status: {
+    type: String,
+    enum: ['Published', 'Draft'],
+    default: 'Published',
+  },
+  mediaUrlOrPath: {
     type: String,
     trim: true,
     default: '',
   },
-  assignedSubjects: {
-    type: [String],
+  videoParts: {
+    type: [videoPartSchema],
     default: [],
-  },
-  lessons: {
-    type: Array,
-    default: [],
-  },
+  }
 }, {
   timestamps: true,
-  toJSON: { virtuals: true },
-  toObject: { virtuals: true },
 });
-  {
-    timestamps: true,
-  }
-);
 
 // Subdocument Schema for Modules
-const moduleSchema = new mongoose.Schema(
-  {
-    moduleName: {
-      type: String,
-      required: [true, 'Please provide a module name'],
-      trim: true,
-    },
-    lessons: [lessonSchema],
+const moduleSchema = new mongoose.Schema({
+  moduleName: {
+    type: String,
+    required: [true, 'Please provide a module name'],
+    trim: true,
   },
-  {
-    timestamps: true,
+  lessons: {
+    type: [lessonSchema],
+    default: [],
   }
-);
+}, {
+  timestamps: true,
+});
 
 // Main Course Schema
-const courseSchema = new mongoose.Schema(
-  {
-    courseId: {
-      type: String,
-      unique: true,
-      sparse: true,
-    },
-    courseBanner: {
-      type: String,
-      trim: true,
-      default: '',
-    },
-    courseTitle: {
-      type: String,
-      required: [true, 'Please add a course title'],
-      trim: true,
-    },
-    instructor: {
-      type: String,
-      required: [true, 'Please add an instructor name'],
-      trim: true,
-    },
-    price: {
-      type: Number,
-      required: [true, 'Please specify a course price'],
-      min: [0, 'Price must be a positive number'],
-    },
-    courseDescription: {
-      type: String,
-      required: [true, 'Please enter course overview and summary'],
-      trim: true,
-    },
-    status: {
-      type: String,
-      enum: ['Published', 'Draft'],
-      default: 'Published',
-    },
-    category: {
-      type: String,
-      trim: true,
-      default: 'Homeopathy',
-    },
-    modules: {
-      type: [moduleSchema],
-      default: [],
-    },
-  },
-  {
-    timestamps: true,
-  }
-);
-
 const courseSchema = new mongoose.Schema({
   courseId: {
     type: String,
-    required: true,
     unique: true,
+    sparse: true,
   },
   courseTitle: {
     type: String,
@@ -155,6 +103,11 @@ const courseSchema = new mongoose.Schema({
     enum: ['Published', 'Draft', 'Archived'],
     default: 'Published',
   },
+  category: {
+    type: String,
+    trim: true,
+    default: 'Homeopathy',
+  },
   thumbnail: {
     type: String,
     trim: true,
@@ -183,11 +136,8 @@ bannerAliasFields.forEach((field) => {
     .set(function(val) { this.thumbnail = val; });
 });
 
-
 // Auto-generate unique courseId before validation
 courseSchema.pre('validate', async function(next) {
-// Auto-generate unique courseId (CRS-000001) before validation if not provided
-courseSchema.pre('validate', async function (next) {
   if (this.isNew && !this.courseId) {
     try {
       const counter = await Counter.findByIdAndUpdate(

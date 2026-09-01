@@ -92,8 +92,6 @@ app.use('/api/v1/auth', authRoutes);
 app.use('/auth', authRoutes);
 
 app.use('/api/courses', require('./routes/courseRoutes'));
-const lessonRoutes = require('./routes/lesson.routes');
-app.use(lessonRoutes);
 
 const studentFacultyRoutes = require('./routes/studentFacultyRoutes');
 app.use('/api/student/faculty', studentFacultyRoutes);
