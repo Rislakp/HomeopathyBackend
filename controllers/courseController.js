@@ -434,14 +434,100 @@ exports.getModules = async (req, res) => {
       });
     }
 
-    const modulesList = course.modules || [];
+    const rawModules = Array.isArray(course.modules) ? course.modules : [];
+
+    // Format modules and nested lessons array
+    let modulesList = rawModules.map((m) => {
+      const modObj = m && typeof m.toObject === 'function' ? m.toObject({ virtuals: true }) : { ...(m || {}) };
+      const rawLessons = Array.isArray(modObj.lessons) ? modObj.lessons : [];
+
+      const formattedLessons = rawLessons.map((l) => {
+        const lessObj = l && typeof l.toObject === 'function' ? l.toObject({ virtuals: true }) : { ...(l || {}) };
+        const lessonId = lessObj._id
+          ? lessObj._id.toString()
+          : (lessObj.id ? lessObj.id.toString() : new mongoose.Types.ObjectId().toString());
+        const lessonTitle = (lessObj.lessonTitle || lessObj.title || lessObj.lessonName || '').trim();
+        const lessonType = lessObj.lessonType || lessObj.type || 'Recorded Video';
+        const fileOrLink = (
+          lessObj.fileOrLink ||
+          lessObj.uploadFileOrLink ||
+          lessObj.mediaContent ||
+          lessObj.fileUrlOrLink ||
+          lessObj.link ||
+          ''
+        ).trim();
+
+        return {
+          _id: lessonId,
+          lessonTitle,
+          lessonType,
+          fileOrLink,
+          ...(lessObj.duration ? { duration: lessObj.duration } : {}),
+          ...(lessObj.mediaContent ? { mediaContent: lessObj.mediaContent } : {}),
+        };
+      });
+
+      const moduleId = modObj._id
+        ? modObj._id.toString()
+        : (modObj.id ? modObj.id.toString() : new mongoose.Types.ObjectId().toString());
+      const moduleName = (modObj.moduleName || modObj.moduleTitle || '').trim();
+
+      return {
+        _id: moduleId,
+        moduleName,
+        ...(modObj.duration ? { duration: modObj.duration } : {}),
+        ...(modObj.description ? { description: modObj.description } : {}),
+        ...(Array.isArray(modObj.assignedSubjects) ? { assignedSubjects: modObj.assignedSubjects } : {}),
+        lessons: formattedLessons,
+      };
+    });
+
+    // Check if standalone Lesson documents exist for this course and merge them if needed
+    try {
+      const Lesson = require('../models/Lesson.model');
+      const searchIds = [course.courseId, course._id.toString()];
+      if (targetId && !searchIds.includes(targetId)) {
+        searchIds.push(targetId);
+      }
+
+      const standaloneLessons = await Lesson.find({ courseId: { $in: searchIds } });
+      if (standaloneLessons && standaloneLessons.length > 0) {
+        if (modulesList.length === 0) {
+          modulesList.push({
+            _id: new mongoose.Types.ObjectId().toString(),
+            moduleName: 'Module 1 — Course Curriculum',
+            lessons: [],
+          });
+        }
+
+        const existingLessonIds = new Set();
+        modulesList.forEach((m) => {
+          m.lessons.forEach((l) => existingLessonIds.add(l._id.toString()));
+        });
+
+        standaloneLessons.forEach((sl) => {
+          const slObj = sl.toObject ? sl.toObject({ virtuals: true }) : sl;
+          const slId = slObj._id ? slObj._id.toString() : new mongoose.Types.ObjectId().toString();
+          if (!existingLessonIds.has(slId)) {
+            modulesList[0].lessons.push({
+              _id: slId,
+              lessonTitle: (slObj.lessonTitle || slObj.title || '').trim(),
+              lessonType: slObj.lessonType || 'Recorded Video',
+              fileOrLink: (slObj.fileOrLink || slObj.uploadFileOrLink || slObj.mediaContent || '').trim(),
+            });
+            existingLessonIds.add(slId);
+          }
+        });
+      }
+    } catch (e) {
+      // Standalone Lesson query fallback
+    }
 
     return res.status(200).json({
       success: true,
       message: 'Modules fetched successfully',
       count: modulesList.length,
       data: modulesList,
-      modules: modulesList,
     });
   } catch (error) {
     console.error('Get Modules Error:', error);
@@ -451,6 +537,7 @@ exports.getModules = async (req, res) => {
     });
   }
 };
+
 
 // 8. GET LESSONS FOR A SPECIFIC MODULE
 // GET /api/courses/:courseId/modules/:moduleId/lessons
