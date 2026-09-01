@@ -3,46 +3,98 @@ const Lesson = require('../models/Lesson.model');
 
 async function addModuleToCourse(req, res) {
   try {
-    const { courseId } = req.params;
-    const { lessonTitle, uploadFileOrLink, lessonType } = req.body;
+    const { courseId, id } = req.params;
+    const targetCourseId = courseId || id;
+    const {
+      moduleName,
+      moduleTitle,
+      duration,
+      description,
+      assignedSubjects,
+      lessons,
+    } = req.body;
 
-    // 1. Check course exists
-    const course = await Course.findOne({ courseId });
-    if (!course) {
-      return res.status(404).json({
+    const actualModuleName = moduleName || moduleTitle;
+    const missingFields = [];
+
+    // Validate module-level required fields
+    if (!actualModuleName || typeof actualModuleName !== 'string' || !actualModuleName.trim()) {
+      missingFields.push('moduleName');
+    }
+
+    // Validate nested lessons array if present
+    if (lessons !== undefined && lessons !== null) {
+      if (!Array.isArray(lessons)) {
+        missingFields.push('lessons (must be an array)');
+      } else {
+        lessons.forEach((lesson, index) => {
+          if (!lesson || typeof lesson !== 'object') {
+            missingFields.push(`lessons[${index}] (must be an object)`);
+          } else {
+            const title = lesson.lessonTitle || lesson.title || lesson.lessonName;
+            if (!title || typeof title !== 'string' || !title.trim()) {
+              missingFields.push(`lessons[${index}].lessonTitle`);
+            }
+          }
+        });
+      }
+    }
+
+    if (missingFields.length > 0) {
+      return res.status(400).json({
         success: false,
-        message: "Course not found for the given courseId"
+        message: `Validation failed: Missing or invalid required fields (${missingFields.join(', ')})`,
+        missingFields,
       });
     }
 
-    // 2. Create lesson
-    const lesson = await Lesson.create({
-      courseId,
-      lessonTitle,
-      uploadFileOrLink,
-      lessonType
-    });
+    const query = require('mongoose').Types.ObjectId.isValid(targetCourseId)
+      ? { _id: targetCourseId }
+      : { courseId: targetCourseId };
 
-    // 3. Success response
+    const course = await Course.findOne(query);
+    if (!course) {
+      return res.status(404).json({
+        success: false,
+        message: 'Course not found for the given courseId',
+      });
+    }
+
+    // Parse and format nested lessons array
+    const formattedLessons = Array.isArray(lessons)
+      ? lessons.map((l) => ({
+          lessonTitle: (l.lessonTitle || l.title || l.lessonName || '').trim(),
+          lessonType: l.lessonType || 'Recorded Video',
+          duration: l.duration || '',
+          fileOrLink: l.fileOrLink || l.uploadFileOrLink || l.mediaContent || '',
+        }))
+      : [];
+
+    const newModule = {
+      moduleName: actualModuleName.trim(),
+      duration: duration || '',
+      description: description || '',
+      assignedSubjects: Array.isArray(assignedSubjects) ? assignedSubjects : [],
+      lessons: formattedLessons,
+    };
+
+    course.modules.push(newModule);
+    await course.save();
+
+    const createdModule = course.modules[course.modules.length - 1];
+
     return res.status(201).json({
       success: true,
-      message: "Lesson added successfully",
-      data: {
-        courseId: lesson.courseId,
-        lessonId: lesson._id,
-        lessonTitle: lesson.lessonTitle,
-        uploadFileOrLink: lesson.uploadFileOrLink,
-        lessonType: lesson.lessonType,
-        createdAt: lesson.createdAt,
-        updatedAt: lesson.updatedAt
-      }
+      message: 'Module added successfully',
+      data: createdModule,
+      course,
     });
 
   } catch (error) {
     console.error("addModuleToCourse error:", error);
     return res.status(500).json({
       success: false,
-      message: "Something went wrong while creating the lesson"
+      message: error.message || "Something went wrong while creating the module",
     });
   }
 }

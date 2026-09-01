@@ -9,6 +9,7 @@ router.get('/:id', courseController.getCourseById);
 
 // Admin-only course management operations
 router.post('/', requireAdmin, courseController.createCourse);
+router.post('/:id/modules', requireAdmin, courseController.addModule);
 router.put('/:id', requireAdmin, courseController.updateCourse);
 router.delete('/:id', requireAdmin, courseController.deleteCourse);
 

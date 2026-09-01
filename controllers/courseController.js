@@ -276,3 +276,115 @@ exports.deleteCourse = async (req, res) => {
   }
 };
 
+// 6. ADD MODULE TO COURSE
+// POST /api/courses/:id/modules
+exports.addModule = async (req, res) => {
+  try {
+    const { id, courseId } = req.params;
+    const targetId = id || courseId;
+    const query = getQueryById(targetId);
+
+    const {
+      moduleName,
+      moduleTitle,
+      duration,
+      description,
+      assignedSubjects,
+      lessons,
+    } = req.body;
+
+    const actualModuleName = moduleName || moduleTitle;
+    const missingFields = [];
+
+    // Validate module-level required fields
+    if (!actualModuleName || typeof actualModuleName !== 'string' || !actualModuleName.trim()) {
+      missingFields.push('moduleName');
+    }
+
+    // Validate nested lessons array if present
+    if (lessons !== undefined && lessons !== null) {
+      if (!Array.isArray(lessons)) {
+        missingFields.push('lessons (must be an array)');
+      } else {
+        lessons.forEach((lesson, index) => {
+          if (!lesson || typeof lesson !== 'object') {
+            missingFields.push(`lessons[${index}] (must be an object)`);
+          } else {
+            const title = lesson.lessonTitle || lesson.title || lesson.lessonName;
+            if (!title || typeof title !== 'string' || !title.trim()) {
+              missingFields.push(`lessons[${index}].lessonTitle`);
+            }
+          }
+        });
+      }
+    }
+
+    if (missingFields.length > 0) {
+      return res.status(400).json({
+        success: false,
+        message: `Validation failed: Missing or invalid required fields (${missingFields.join(', ')})`,
+        missingFields,
+      });
+    }
+
+    const course = await Course.findOne(query);
+
+    if (!course) {
+      return res.status(404).json({
+        success: false,
+        message: 'Course not found',
+      });
+    }
+
+    // Parse and format nested lessons
+    const formattedLessons = Array.isArray(lessons)
+      ? lessons.map((l) => ({
+          lessonTitle: (l.lessonTitle || l.title || l.lessonName || '').trim(),
+          lessonType: l.lessonType || 'Recorded Video',
+          duration: l.duration || '',
+          fileOrLink: l.fileOrLink || l.uploadFileOrLink || l.mediaContent || '',
+        }))
+      : [];
+
+    const newModule = {
+      moduleName: actualModuleName.trim(),
+      duration: duration || '',
+      description: description || '',
+      assignedSubjects: Array.isArray(assignedSubjects) ? assignedSubjects : [],
+      lessons: formattedLessons,
+    };
+
+    course.modules.push(newModule);
+    await course.save();
+
+    const createdModule = course.modules[course.modules.length - 1];
+
+    return res.status(201).json({
+      success: true,
+      message: 'Module added successfully',
+      data: createdModule,
+      course,
+    });
+  } catch (error) {
+    console.error('Add Module Error:', error);
+
+    if (error.name === 'ValidationError') {
+      const errors = {};
+      Object.keys(error.errors).forEach((key) => {
+        errors[key] = error.errors[key].message;
+      });
+      return res.status(400).json({
+        success: false,
+        message: 'Validation failed',
+        errors,
+      });
+    }
+
+    return res.status(500).json({
+      success: false,
+      message: error.message || 'Error adding module to course',
+    });
+  }
+};
+
+
