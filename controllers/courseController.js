@@ -389,4 +389,86 @@ exports.addModule = async (req, res) => {
   }
 };
 
+// 7. GET ALL MODULES FOR A COURSE
+// GET /api/courses/:courseId/modules
+exports.getModules = async (req, res) => {
+  try {
+    const { id, courseId } = req.params;
+    const targetId = courseId || id;
+    const query = getQueryById(targetId);
+
+    const course = await Course.findOne(query);
+
+    if (!course) {
+      return res.status(404).json({
+        success: false,
+        message: 'Course not found',
+      });
+    }
+
+    const modulesList = course.modules || [];
+
+    return res.status(200).json({
+      success: true,
+      message: 'Modules fetched successfully',
+      count: modulesList.length,
+      data: modulesList,
+      modules: modulesList,
+    });
+  } catch (error) {
+    console.error('Get Modules Error:', error);
+    return res.status(500).json({
+      success: false,
+      message: error.message || 'Error fetching modules',
+    });
+  }
+};
+
+// 8. GET LESSONS FOR A SPECIFIC MODULE
+// GET /api/courses/:courseId/modules/:moduleId/lessons
+exports.getLessonsByModule = async (req, res) => {
+  try {
+    const { id, courseId, moduleId } = req.params;
+    const targetId = courseId || id;
+    const query = getQueryById(targetId);
+
+    const course = await Course.findOne(query);
+
+    if (!course) {
+      return res.status(404).json({
+        success: false,
+        message: 'Course not found',
+      });
+    }
+
+    const courseModule = course.modules.find(
+      (m) => (m._id && m._id.toString() === moduleId) || m.moduleId === moduleId
+    );
+
+    if (!courseModule) {
+      return res.status(404).json({
+        success: false,
+        message: 'Module not found',
+      });
+    }
+
+    const lessonsList = courseModule.lessons || [];
+
+    return res.status(200).json({
+      success: true,
+      message: 'Lessons fetched successfully',
+      count: lessonsList.length,
+      data: lessonsList,
+      lessons: lessonsList,
+    });
+  } catch (error) {
+    console.error('Get Lessons Error:', error);
+    return res.status(500).json({
+      success: false,
+      message: error.message || 'Error fetching lessons',
+    });
+  }
+};
+
+
 

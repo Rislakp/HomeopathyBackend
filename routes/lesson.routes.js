@@ -30,7 +30,15 @@ router.post(
   addLessonToModule
 );
 
-// Lesson viewing (accessible)
+// Module & Lesson viewing
+router.get(
+  '/api/courses/:courseId/modules',
+  require('../controllers/courseController').getModules
+);
+router.get(
+  '/api/courses/:courseId/modules/:moduleId/lessons',
+  require('../controllers/courseController').getLessonsByModule
+);
 router.get(
   '/api/courses/:courseId/modules/:moduleId/lessons/:lessonId',
   getLesson

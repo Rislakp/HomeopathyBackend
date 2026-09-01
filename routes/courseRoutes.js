@@ -5,8 +5,10 @@ const { addLessonToModule } = require('../controllers/lesson.controller');
 const { validateLesson } = require('../middlewares/validateLesson.middleware');
 const { requireAdmin } = require('../middleware/rbac');
 
-// Public course routes
+// Public course & module routes
 router.get('/', courseController.getCourses);
+router.get('/:courseId/modules', courseController.getModules);
+router.get('/:courseId/modules/:moduleId/lessons', courseController.getLessonsByModule);
 router.get('/:id', courseController.getCourseById);
 
 // Admin-only course management operations
