@@ -95,6 +95,15 @@ courseSchema.virtual('description')
   .get(function() { return this.shortDescription; })
   .set(function(val) { this.shortDescription = val; });
 
+// Virtual aliases for banner/thumbnail fields -> thumbnail
+const bannerAliasFields = ['banner', 'bannerUrl', 'thumbnailUrl', 'image', 'imageUrl', 'courseBanner'];
+bannerAliasFields.forEach((field) => {
+  courseSchema.virtual(field)
+    .get(function() { return this.thumbnail; })
+    .set(function(val) { this.thumbnail = val; });
+});
+
+
 // Auto-generate unique courseId before validation
 courseSchema.pre('validate', async function(next) {
   if (this.isNew && !this.courseId) {

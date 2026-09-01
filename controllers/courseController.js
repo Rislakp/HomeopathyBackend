@@ -90,10 +90,25 @@ exports.createCourse = async (req, res) => {
       price,
       status,
       thumbnail,
+      banner,
+      bannerUrl,
+      thumbnailUrl,
+      image,
+      imageUrl,
+      courseBanner,
       modules,
     } = req.body;
 
     const actualShortDescription = shortDescription || description || courseDescription;
+    const actualThumbnail =
+      thumbnail ||
+      banner ||
+      bannerUrl ||
+      thumbnailUrl ||
+      image ||
+      imageUrl ||
+      courseBanner ||
+      '';
 
     // Validate required fields
     if (
@@ -130,7 +145,7 @@ exports.createCourse = async (req, res) => {
       instructor,
       price: Number(price),
       status: status || 'Published',
-      thumbnail: thumbnail || '',
+      thumbnail: actualThumbnail,
       modules: formattedModules,
     });
 
@@ -186,6 +201,19 @@ exports.updateCourse = async (req, res) => {
         updateData.shortDescription = updateData.description;
       } else if (updateData.courseDescription) {
         updateData.shortDescription = updateData.courseDescription;
+      }
+    }
+
+    if (!updateData.thumbnail) {
+      const bannerVal =
+        updateData.banner ||
+        updateData.bannerUrl ||
+        updateData.thumbnailUrl ||
+        updateData.image ||
+        updateData.imageUrl ||
+        updateData.courseBanner;
+      if (bannerVal) {
+        updateData.thumbnail = bannerVal;
       }
     }
 
