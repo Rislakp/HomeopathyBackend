@@ -28,16 +28,16 @@ const adminLogin = async (req, res) => {
 
     // 1. Validate request fields
     if (!email || typeof email !== 'string' || !email.trim()) {
-      return res.status(400).json({
+      return res.status(401).json({
         success: false,
-        message: 'Email is required',
+        message: 'Invalid email or password',
       });
     }
 
     if (!password || typeof password !== 'string' || !password.trim()) {
-      return res.status(400).json({
+      return res.status(401).json({
         success: false,
-        message: 'Password is required',
+        message: 'Invalid email or password',
       });
     }
 
@@ -45,9 +45,19 @@ const adminLogin = async (req, res) => {
 
     // Validate email format
     if (!EMAIL_REGEX.test(cleanEmail)) {
-      return res.status(400).json({
+      return res.status(401).json({
         success: false,
-        message: 'Invalid email format',
+        message: 'Invalid email or password',
+      });
+    }
+
+    // Check DB Connection State
+    const mongoose = require('mongoose');
+    if (mongoose.connection.readyState !== 1) {
+      console.error('Database is not connected. readyState:', mongoose.connection.readyState);
+      return res.status(500).json({
+        success: false,
+        message: 'Internal server error during login: Database not connected',
       });
     }
 
@@ -58,6 +68,14 @@ const adminLogin = async (req, res) => {
       return res.status(401).json({
         success: false,
         message: 'Invalid email or password',
+      });
+    }
+
+    // 4. Check isActive
+    if (admin.isActive === false) {
+      return res.status(403).json({
+        success: false,
+        message: 'Admin account is inactive',
       });
     }
 
@@ -92,6 +110,13 @@ const adminLogin = async (req, res) => {
       message: 'Admin login successful',
       data: {
         admin: {
+          _id: admin._id.toString(),
+          id: admin._id.toString(),
+          name: admin.name,
+          email: admin.email,
+          role: adminRole,
+        },
+        user: {
           _id: admin._id.toString(),
           id: admin._id.toString(),
           name: admin.name,
