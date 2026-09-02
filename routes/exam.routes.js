@@ -36,7 +36,18 @@ const upload = multer({
 });
 
 // Admin Route: Extract MCQs from uploaded file
-router.post('/api/exams/extract-mcqs', requireAdmin, upload.any(), extractMCQs);
+const handleExtractUpload = (req, res, next) => {
+  upload.any()(req, res, (err) => {
+    if (err instanceof multer.MulterError) {
+      return res.status(400).json({ success: false, message: `Multer Error: ${err.message}` });
+    } else if (err) {
+      return res.status(400).json({ success: false, message: err.message });
+    }
+    next();
+  });
+};
+
+router.post('/api/exams/extract-mcqs', requireAdmin, handleExtractUpload, extractMCQs);
 
 // Admin Route: Save verified exam document
 router.post('/api/exams/grand-mock', requireAdmin, createGrandMockExam);
