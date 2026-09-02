@@ -202,7 +202,7 @@ exports.getModules = async (req, res) => {
       return res.status(404).json({ success: false, message: 'Course not found' });
     }
 
-    return res.status(200).json({ success: true, data: course.modules });
+    return res.status(200).json({ success: true, message: 'Modules fetched successfully', data: course.modules });
   } catch (error) {
     return res.status(500).json({ success: false, message: 'Failed to fetch modules', error: error.message });
   }
@@ -297,7 +297,7 @@ exports.getLessonsByModule = async (req, res) => {
     const moduleItem = course.modules.id(moduleId);
     if (!moduleItem) return res.status(404).json({ success: false, message: 'Module not found' });
 
-    res.status(200).json({ success: true, data: moduleItem.lessons });
+    res.status(200).json({ success: true, message: 'Lessons fetched successfully', data: moduleItem.lessons });
   } catch (error) {
     res.status(500).json({ success: false, message: 'Failed to fetch lessons', error: error.message });
   }
@@ -383,19 +383,25 @@ exports.updateLesson = async (req, res) => {
 exports.deleteLesson = async (req, res) => {
   try {
     const { courseId, moduleId, lessonId } = req.params;
-    const course = await findCourseByIdOrCustomId(courseId);
-    if (!course) return res.status(404).json({ success: false, message: 'Course not found' });
+    
+    const query = {
+      $or: [
+        { courseId: courseId },
+        { _id: mongoose.Types.ObjectId.isValid(courseId) ? courseId : null },
+      ],
+    };
 
-    const moduleItem = course.modules.id(moduleId);
-    if (!moduleItem) return res.status(404).json({ success: false, message: 'Module not found' });
+    const updatedCourse = await Course.findOneAndUpdate(
+      query,
+      { $pull: { "modules.$[mod].lessons": { _id: lessonId } } },
+      { arrayFilters: [{ "mod._id": moduleId }], new: true }
+    );
 
-    const lesson = moduleItem.lessons.id(lessonId);
-    if (!lesson) return res.status(404).json({ success: false, message: 'Lesson not found' });
+    if (!updatedCourse) {
+      return res.status(404).json({ success: false, message: 'Course, Module, or Lesson not found' });
+    }
 
-    moduleItem.lessons.pull({ _id: lessonId });
-    await course.save();
-
-    res.status(200).json({ success: true, message: 'Lesson deleted successfully' });
+    res.status(200).json({ success: true, message: 'Lesson deleted successfully', data: updatedCourse });
   } catch (error) {
     res.status(500).json({ success: false, message: 'Failed to delete lesson', error: error.message });
   }
