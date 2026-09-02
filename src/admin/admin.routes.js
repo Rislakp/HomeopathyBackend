@@ -20,10 +20,21 @@ const storage = multer.memoryStorage();
 const upload = multer({
   storage: storage,
   fileFilter: (req, file, cb) => {
-    if (file.mimetype === 'application/pdf') {
+    const allowedMimeTypes = [
+      'application/pdf',
+      'image/jpeg',
+      'image/png',
+      'image/jpg',
+      'image/webp',
+      'application/vnd.ms-excel',
+      'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+      'text/csv'
+    ];
+
+    if (allowedMimeTypes.includes(file.mimetype)) {
       cb(null, true);
     } else {
-      cb(new Error('Only PDF files are allowed!'), false);
+      cb(new Error('Only PDF, Images (JPG, PNG, WEBP), and Tables (XLSX, CSV) are allowed!'), false);
     }
   },
   limits: {
@@ -31,8 +42,8 @@ const upload = multer({
   },
 });
 
-// Admin Route: Extract MCQs from PDF
-router.post('/api/exams/extract-mcqs', requireAdmin, upload.single('pdf'), extractMCQs);
+// Admin Route: Extract MCQs from uploaded file
+router.post('/api/exams/extract-mcqs', requireAdmin, upload.any(), extractMCQs);
 
 // Admin Route: Create Grand Mock Exam
 router.post('/api/exams/grand-mock', requireAdmin, createGrandMockExam);
