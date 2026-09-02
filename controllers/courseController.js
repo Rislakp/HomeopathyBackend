@@ -260,16 +260,25 @@ exports.updateModule = async (req, res) => {
 exports.deleteModule = async (req, res) => {
   try {
     const { courseId, moduleId } = req.params;
-    const course = await findCourseByIdOrCustomId(courseId);
-    if (!course) return res.status(404).json({ success: false, message: 'Course not found' });
 
-    const moduleItem = course.modules.id(moduleId);
-    if (!moduleItem) return res.status(404).json({ success: false, message: 'Module not found' });
+    const query = {
+      $or: [
+        { courseId: courseId },
+        { _id: mongoose.Types.ObjectId.isValid(courseId) ? courseId : null },
+      ],
+    };
 
-    course.modules.pull(moduleId);
-    await course.save();
+    const updatedCourse = await Course.findOneAndUpdate(
+      query,
+      { $pull: { modules: { _id: moduleId } } },
+      { new: true }
+    );
 
-    return res.status(200).json({ success: true, message: 'Module deleted successfully' });
+    if (!updatedCourse) {
+      return res.status(404).json({ success: false, message: 'Course or Module not found' });
+    }
+
+    return res.status(200).json({ success: true, message: 'Module deleted successfully', data: updatedCourse });
   } catch (error) {
     return res.status(500).json({ success: false, message: 'Failed to delete module', error: error.message });
   }
