@@ -1119,7 +1119,8 @@ const formatExamScoresData = (examScores) => {
     const title = exam.examTitle || exam.title || 'Exam';
     const score = exam.score !== undefined ? exam.score : 0;
     const maxScore = exam.maxScore !== undefined ? exam.maxScore : (exam.total_marks || 100);
-    const pct = exam.percentage !== undefined ? exam.percentage : (maxScore > 0 ? Math.round((score / maxScore) * 100) : 0);
+    const pctRaw = exam.percentage !== undefined ? exam.percentage : (maxScore > 0 ? (score / maxScore) * 100 : 0);
+    const pct = Number.isInteger(pctRaw) ? pctRaw : Number(pctRaw).toFixed(1);
     const grade = exam.grade || exam.status ? ` [${exam.grade || exam.status}]` : '';
 
     scoreStrings.push(`${title}: ${score}/${maxScore} (${pct}%)${grade}`);
