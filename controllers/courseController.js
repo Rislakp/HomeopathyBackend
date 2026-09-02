@@ -202,7 +202,7 @@ exports.getModules = async (req, res) => {
       return res.status(404).json({ success: false, message: 'Course not found' });
     }
 
-    return res.status(200).json({ success: true, message: 'Modules fetched successfully', data: course.modules });
+    return res.status(200).json({ success: true, data: course.modules });
   } catch (error) {
     return res.status(500).json({ success: false, message: 'Failed to fetch modules', error: error.message });
   }
