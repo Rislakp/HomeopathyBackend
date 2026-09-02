@@ -111,48 +111,51 @@ function validateAndSanitizeQuestions(questions) {
  */
 async function extractMCQs(req, res) {
   try {
-    // Dynamically handle req.file or req.files array
-    const uploadedFile = req.file || (req.files && req.files[0]);
-
-    if (!uploadedFile) {
-      return res.status(400).json({
-        success: false,
-        message: "Please upload a valid PDF, Image, or Excel/CSV file."
-      });
+    const file = req.file || (req.files && req.files[0]);
+    if (!file) {
+      return res.status(400).json({ success: false, message: "No file uploaded." });
     }
 
-    const fileBuffer = uploadedFile.buffer;
-    const fileName = uploadedFile.originalname.toLowerCase();
+    const fileName = (file.originalname || '').toLowerCase();
+    const buffer = file.buffer;
     let questions = [];
 
-    // A. Excel & CSV Processing (.xlsx, .xls, .csv)
-    if (fileName.match(/\.(xlsx|xls|csv)$/i)) {
-      const workbook = xlsx.read(fileBuffer, { type: 'buffer' });
+    // A. Handle Excel & CSV Files
+    if (fileName.endsWith('.xlsx') || fileName.endsWith('.xls') || fileName.endsWith('.csv')) {
+      const workbook = xlsx.read(buffer, { type: 'buffer' });
       const sheetName = workbook.SheetNames[0];
-      const sheetData = xlsx.utils.sheet_to_json(workbook.Sheets[sheetName]);
+      const rawRows = xlsx.utils.sheet_to_json(workbook.Sheets[sheetName], { defval: '' });
 
-      questions = sheetData.map((row) => ({
-        questionText: String(row.Question || row.questionText || row['Question Text'] || '').trim(),
-        options: {
-          A: String(row.OptionA || row.A || row['Option A'] || '').trim(),
-          B: String(row.OptionB || row.B || row['Option B'] || '').trim(),
-          C: String(row.OptionC || row.C || row['Option C'] || '').trim(),
-          D: String(row.OptionD || row.D || row['Option D'] || '').trim()
-        },
-        correctOption: String(row.CorrectOption || row.correctOption || row['Correct Answer'] || 'A').toUpperCase().trim()
-      }));
+      questions = rawRows.map((row) => {
+        // Safe key lookup (case-insensitive)
+        const getVal = (keys) => {
+          const foundKey = Object.keys(row).find(k => keys.includes(k.trim().toLowerCase()));
+          return foundKey ? String(row[foundKey]).trim() : '';
+        };
+
+        return {
+          questionText: getVal(['question', 'questiontext', 'question text', 'q']),
+          options: {
+            A: getVal(['optiona', 'option a', 'a']),
+            B: getVal(['optionb', 'option b', 'b']),
+            C: getVal(['optionc', 'option c', 'c']),
+            D: getVal(['optiond', 'option d', 'd']),
+          },
+          correctOption: (getVal(['correctoption', 'correct option', 'answer', 'correct answer']) || 'A').toUpperCase().charAt(0)
+        };
+      }).filter(q => q.questionText !== ''); // Filter empty rows
     } 
-    // B. Image OCR Processing (.png, .jpg, .jpeg, .webp)
+    // B. Handle Image Files (OCR)
     else if (fileName.match(/\.(png|jpg|jpeg|webp)$/i)) {
-      const { data: { text } } = await Tesseract.recognize(fileBuffer, 'eng');
-      questions = parseMCQText(text); // Utilizing our pre-existing parser function
+      const { data: { text } } = await Tesseract.recognize(buffer, 'eng');
+      questions = parseRawTextToMCQs(text);
     } 
-    // C. PDF Processing (.pdf)
+    // C. Handle PDF Files
     else if (fileName.endsWith('.pdf')) {
-      const pdfData = await pdfParse(fileBuffer);
-      questions = parseMCQText(pdfData.text); // Utilizing our pre-existing parser function
+      const pdfData = await pdfParse(buffer);
+      questions = parseRawTextToMCQs(pdfData.text);
     } else {
-      return res.status(400).json({ success: false, message: 'Unsupported file format' });
+      return res.status(400).json({ success: false, message: "Unsupported file extension." });
     }
 
     return res.status(200).json({
@@ -161,10 +164,10 @@ async function extractMCQs(req, res) {
       questions
     });
   } catch (error) {
-    console.error('Error extracting MCQs:', error);
+    console.error("Extraction Error:", error);
     return res.status(500).json({
       success: false,
-      message: "Failed to extract questions from uploaded file.",
+      message: "Failed to extract questions from file.",
       error: error.message
     });
   }
