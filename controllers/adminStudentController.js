@@ -1116,11 +1116,11 @@ const formatExamScoresData = (examScores) => {
   let validCount = 0;
 
   examScores.forEach((exam) => {
-    const title = exam.examTitle || 'Exam';
+    const title = exam.examTitle || exam.title || 'Exam';
     const score = exam.score !== undefined ? exam.score : 0;
-    const maxScore = exam.maxScore || 100;
-    const pct = maxScore > 0 ? Math.round((score / maxScore) * 100) : 0;
-    const grade = exam.grade ? ` [${exam.grade}]` : '';
+    const maxScore = exam.maxScore !== undefined ? exam.maxScore : (exam.total_marks || 100);
+    const pct = exam.percentage !== undefined ? exam.percentage : (maxScore > 0 ? Math.round((score / maxScore) * 100) : 0);
+    const grade = exam.grade || exam.status ? ` [${exam.grade || exam.status}]` : '';
 
     scoreStrings.push(`${title}: ${score}/${maxScore} (${pct}%)${grade}`);
     totalPct += pct;
@@ -1179,9 +1179,79 @@ async function exportStudentsScores(req, res) {
       }
     }
 
-    // Fetch students
+    // Fetch students using aggregation for consistent testresults lookup
+    const pipeline = [
+      { $match: filter },
+      {
+        $lookup: {
+          from: 'testresults',
+          let: { studentDocId: '$_id', userDocId: '$userId' },
+          pipeline: [
+            {
+              $match: {
+                $expr: {
+                  $or: [
+                    { $eq: ['$studentId', '$$studentDocId'] },
+                    {
+                      $and: [
+                        { $ne: ['$$userDocId', null] },
+                        { $eq: ['$studentId', '$$userDocId'] }
+                      ]
+                    }
+                  ]
+                }
+              }
+            },
+            { $sort: { createdAt: -1 } },
+            {
+              $lookup: {
+                from: 'exams',
+                localField: 'examId',
+                foreignField: '_id',
+                as: 'examInfo'
+              }
+            },
+            {
+              $unwind: {
+                path: '$examInfo',
+                preserveNullAndEmptyArrays: true
+              }
+            },
+            {
+              $project: {
+                title: { $ifNull: ['$examInfo.title', 'Mock Exam'] },
+                score: { $ifNull: ['$score', 0] },
+                total_marks: { $ifNull: ['$totalMarks', 0] },
+                percentage: {
+                  $cond: {
+                    if: { $gt: ['$totalMarks', 0] },
+                    then: { $round: [{ $multiply: [{ $divide: ['$score', '$totalMarks'] }, 100] }, 2] },
+                    else: 0
+                  }
+                },
+                status: {
+                  $cond: {
+                    if: {
+                      $and: [
+                        { $gt: ['$totalMarks', 0] },
+                        { $gte: [{ $divide: ['$score', '$totalMarks'] }, 0.5] }
+                      ]
+                    },
+                    then: 'Passed',
+                    else: 'Failed'
+                  }
+                }
+              }
+            }
+          ],
+          as: 'attended_exams'
+        }
+      },
+      { $sort: { joinedDate: -1, createdAt: -1 } }
+    ];
+
     const students = mongoose.connection.readyState === 1
-      ? await Student.find(filter).sort({ joinedDate: -1, createdAt: -1 }).lean()
+      ? await Student.aggregate(pipeline)
       : [];
 
     // Fetch all courses to enrich student data with course details
@@ -1232,7 +1302,7 @@ async function exportStudentsScores(req, res) {
       const category = matchedCourse ? matchedCourse.category || 'Homeopathy' : 'Homeopathy';
       const instructor = matchedCourse ? matchedCourse.instructor || 'N/A' : 'N/A';
 
-      const examData = formatExamScoresData(student.examScores);
+      const examData = formatExamScoresData(student.attended_exams && student.attended_exams.length > 0 ? student.attended_exams : student.examScores);
 
       const enrolledDateFormatted = student.joinedDate
         ? new Date(student.joinedDate).toISOString().split('T')[0]
