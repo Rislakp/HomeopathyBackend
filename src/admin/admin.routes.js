@@ -20,25 +20,15 @@ const storage = multer.memoryStorage();
 const upload = multer({
   storage: storage,
   fileFilter: (req, file, cb) => {
-    const allowedMimeTypes = [
-      'application/pdf',
-      'image/jpeg',
-      'image/png',
-      'image/jpg',
-      'image/webp',
-      'application/vnd.ms-excel',
-      'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-      'text/csv'
-    ];
-
-    if (allowedMimeTypes.includes(file.mimetype)) {
+    // Accept PDF, Images, CSV, XLSX, XLS
+    if (file.originalname.match(/\.(pdf|png|jpg|jpeg|webp|csv|xlsx|xls)$/i)) {
       cb(null, true);
     } else {
-      cb(new Error('Only PDF, Images (JPG, PNG, WEBP), and Tables (XLSX, CSV) are allowed!'), false);
+      cb(new Error('Invalid file type.'), false);
     }
   },
   limits: {
-    fileSize: 10 * 1024 * 1024, // 10MB limit
+    fileSize: 15 * 1024 * 1024, // 15MB limit
   },
 });
 

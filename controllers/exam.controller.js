@@ -145,100 +145,61 @@ function validateAndSanitizeQuestions(questions) {
  */
 async function extractMCQs(req, res) {
   try {
-    const file = req.file || (req.files && req.files.length > 0 ? req.files[0] : null);
-    
-    // 1. Multer & Buffer Validation
-    if (!file || !file.buffer) {
+    // Dynamically handle req.file or req.files array
+    const uploadedFile = req.file || (req.files && req.files[0]);
+
+    if (!uploadedFile) {
       return res.status(400).json({
         success: false,
-        message: 'No file uploaded'
+        message: "Please upload a valid PDF, Image, or Excel/CSV file."
       });
     }
 
-    const mime = file.mimetype;
-    const parsedQuestions = [];
-    let textToParse = '';
+    const fileBuffer = uploadedFile.buffer;
+    const fileName = uploadedFile.originalname.toLowerCase();
+    let questions = [];
 
-    // 2. Dynamic Processing based on Mimetype
-    if (mime === 'application/pdf') {
-      let parsedData;
-      try {
-        parsedData = await pdfParse(file.buffer);
-        textToParse = parsedData && parsedData.text ? parsedData.text : '';
-      } catch (error) {
-        console.error('PDF Parsing Error:', error);
-        return res.status(500).json({ success: false, message: 'Failed to parse PDF' });
-      }
+    // A. Excel & CSV Processing (.xlsx, .xls, .csv)
+    if (fileName.match(/\.(xlsx|xls|csv)$/i)) {
+      const workbook = xlsx.read(fileBuffer, { type: 'buffer' });
+      const sheetName = workbook.SheetNames[0];
+      const sheetData = xlsx.utils.sheet_to_json(workbook.Sheets[sheetName]);
+
+      questions = sheetData.map((row) => ({
+        questionText: String(row.Question || row.questionText || row['Question Text'] || '').trim(),
+        options: {
+          A: String(row.OptionA || row.A || row['Option A'] || '').trim(),
+          B: String(row.OptionB || row.B || row['Option B'] || '').trim(),
+          C: String(row.OptionC || row.C || row['Option C'] || '').trim(),
+          D: String(row.OptionD || row.D || row['Option D'] || '').trim()
+        },
+        correctOption: String(row.CorrectOption || row.correctOption || row['Correct Answer'] || 'A').toUpperCase().trim()
+      }));
     } 
-    else if (mime.startsWith('image/')) {
-      try {
-        const { data: { text } } = await Tesseract.recognize(file.buffer, 'eng');
-        textToParse = text || '';
-      } catch (error) {
-        console.error('OCR Parsing Error:', error);
-        return res.status(500).json({ success: false, message: 'Failed to extract text from image' });
-      }
+    // B. Image OCR Processing (.png, .jpg, .jpeg, .webp)
+    else if (fileName.match(/\.(png|jpg|jpeg|webp)$/i)) {
+      const { data: { text } } = await Tesseract.recognize(fileBuffer, 'eng');
+      questions = parseMCQText(text); // Utilizing our pre-existing parser function
     } 
-    else if (mime.includes('excel') || mime.includes('spreadsheetml') || mime === 'text/csv') {
-      try {
-        const workbook = xlsx.read(file.buffer, { type: 'buffer' });
-        const sheetName = workbook.SheetNames[0];
-        const sheet = workbook.Sheets[sheetName];
-        const rows = xlsx.utils.sheet_to_json(sheet);
-        
-        for (const row of rows) {
-          if (row.Question && row.OptionA && row.OptionB && row.OptionC && row.OptionD && row.CorrectOption) {
-            parsedQuestions.push({
-              questionText: String(row.Question).trim(),
-              options: {
-                A: String(row.OptionA).trim(),
-                B: String(row.OptionB).trim(),
-                C: String(row.OptionC).trim(),
-                D: String(row.OptionD).trim()
-              },
-              correctOption: String(row.CorrectOption).trim().toUpperCase()
-            });
-          }
-        }
-      } catch (error) {
-        console.error('Table Parsing Error:', error);
-        return res.status(500).json({ success: false, message: 'Failed to parse table document' });
-      }
-    } 
-    else {
+    // C. PDF Processing (.pdf)
+    else if (fileName.endsWith('.pdf')) {
+      const pdfData = await pdfParse(fileBuffer);
+      questions = parseMCQText(pdfData.text); // Utilizing our pre-existing parser function
+    } else {
       return res.status(400).json({ success: false, message: 'Unsupported file format' });
-    }
-
-    // 3. Regex parsing for Text (PDF & OCR)
-    if (textToParse) {
-      const regex = /(\d+)\.\s+([\s\S]+?)\s+A\)\s+([\s\S]+?)\s+B\)\s+([\s\S]+?)\s+C\)\s+([\s\S]+?)\s+D\)\s+([\s\S]+?)\s+Answer:\s+([A-D])(?:\)|[^\r\n]*)/gi;
-      let match;
-      while ((match = regex.exec(textToParse)) !== null) {
-        if (match[2] && match[3] && match[4] && match[5] && match[6] && match[7]) {
-          parsedQuestions.push({
-            questionText: match[2].trim(),
-            options: {
-              A: match[3].trim(),
-              B: match[4].trim(),
-              C: match[5].trim(),
-              D: match[6].trim()
-            },
-            correctOption: match[7].trim().toUpperCase()
-          });
-        }
-      }
     }
 
     return res.status(200).json({
       success: true,
-      message: `Successfully extracted ${parsedQuestions.length} MCQs.`,
-      questions: parsedQuestions
+      message: `Successfully extracted ${questions.length} MCQs.`,
+      questions
     });
   } catch (error) {
     console.error('Error extracting MCQs:', error);
     return res.status(500).json({
       success: false,
-      message: 'An unexpected error occurred during extraction'
+      message: "Failed to extract questions from uploaded file.",
+      error: error.message
     });
   }
 }
