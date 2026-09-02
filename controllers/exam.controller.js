@@ -1,5 +1,7 @@
 const mongoose = require('mongoose');
 const pdfParse = require('pdf-parse');
+const Tesseract = require('tesseract.js');
+const xlsx = require('xlsx');
 const Exam = require('../models/exam.model');
 
 /**
@@ -143,59 +145,87 @@ function validateAndSanitizeQuestions(questions) {
  */
 async function extractMCQs(req, res) {
   try {
+    const file = req.file || (req.files && req.files.length > 0 ? req.files[0] : null);
+    
     // 1. Multer & Buffer Validation
-    if (!req.file) {
+    if (!file || !file.buffer) {
       return res.status(400).json({
         success: false,
         message: 'No file uploaded'
       });
     }
 
-    if (!req.file.buffer) {
-      return res.status(400).json({
-        success: false,
-        message: 'No file uploaded'
-      });
-    }
-
-    // 2. Safe PDF Parsing (pdf-parse)
-    let parsedData;
-    try {
-      parsedData = await pdfParse(req.file.buffer);
-    } catch (error) {
-      console.error('PDF Parsing Error:', error);
-      return res.status(500).json({
-        success: false,
-        message: 'Failed to parse PDF'
-      });
-    }
-
-    // 3. Safe Text Extraction & Regex
-    if (!parsedData || typeof parsedData.text !== 'string') {
-      return res.status(200).json({
-        success: true,
-        message: 'Successfully extracted 0 MCQs.',
-        questions: []
-      });
-    }
-
-    const text = parsedData.text;
-    const regex = /(\d+)\.\s+([\s\S]+?)\s+A\)\s+([\s\S]+?)\s+B\)\s+([\s\S]+?)\s+C\)\s+([\s\S]+?)\s+D\)\s+([\s\S]+?)\s+Answer:\s+([A-D])(?:\)|[^\r\n]*)/gi;
+    const mime = file.mimetype;
     const parsedQuestions = [];
-    let match;
+    let textToParse = '';
 
-    while ((match = regex.exec(text)) !== null) {
-      if (match[2] && match[3] && match[4] && match[5] && match[6] && match[7]) {
-        parsedQuestions.push({
-          questionText: match[2].trim(),
-          options: {
-            A: match[3].trim(),
-            B: match[4].trim(),
-            C: match[5].trim(),
-            D: match[6].trim()
-          },
-          correctOption: match[7].trim().toUpperCase()
-        });
+    // 2. Dynamic Processing based on Mimetype
+    if (mime === 'application/pdf') {
+      let parsedData;
+      try {
+        parsedData = await pdfParse(file.buffer);
+        textToParse = parsedData && parsedData.text ? parsedData.text : '';
+      } catch (error) {
+        console.error('PDF Parsing Error:', error);
+        return res.status(500).json({ success: false, message: 'Failed to parse PDF' });
+      }
+    } 
+    else if (mime.startsWith('image/')) {
+      try {
+        const { data: { text } } = await Tesseract.recognize(file.buffer, 'eng');
+        textToParse = text || '';
+      } catch (error) {
+        console.error('OCR Parsing Error:', error);
+        return res.status(500).json({ success: false, message: 'Failed to extract text from image' });
+      }
+    } 
+    else if (mime.includes('excel') || mime.includes('spreadsheetml') || mime === 'text/csv') {
+      try {
+        const workbook = xlsx.read(file.buffer, { type: 'buffer' });
+        const sheetName = workbook.SheetNames[0];
+        const sheet = workbook.Sheets[sheetName];
+        const rows = xlsx.utils.sheet_to_json(sheet);
+        
+        for (const row of rows) {
+          if (row.Question && row.OptionA && row.OptionB && row.OptionC && row.OptionD && row.CorrectOption) {
+            parsedQuestions.push({
+              questionText: String(row.Question).trim(),
+              options: {
+                A: String(row.OptionA).trim(),
+                B: String(row.OptionB).trim(),
+                C: String(row.OptionC).trim(),
+                D: String(row.OptionD).trim()
+              },
+              correctOption: String(row.CorrectOption).trim().toUpperCase()
+            });
+          }
+        }
+      } catch (error) {
+        console.error('Table Parsing Error:', error);
+        return res.status(500).json({ success: false, message: 'Failed to parse table document' });
+      }
+    } 
+    else {
+      return res.status(400).json({ success: false, message: 'Unsupported file format' });
+    }
+
+    // 3. Regex parsing for Text (PDF & OCR)
+    if (textToParse) {
+      const regex = /(\d+)\.\s+([\s\S]+?)\s+A\)\s+([\s\S]+?)\s+B\)\s+([\s\S]+?)\s+C\)\s+([\s\S]+?)\s+D\)\s+([\s\S]+?)\s+Answer:\s+([A-D])(?:\)|[^\r\n]*)/gi;
+      let match;
+      while ((match = regex.exec(textToParse)) !== null) {
+        if (match[2] && match[3] && match[4] && match[5] && match[6] && match[7]) {
+          parsedQuestions.push({
+            questionText: match[2].trim(),
+            options: {
+              A: match[3].trim(),
+              B: match[4].trim(),
+              C: match[5].trim(),
+              D: match[6].trim()
+            },
+            correctOption: match[7].trim().toUpperCase()
+          });
+        }
       }
     }
 
