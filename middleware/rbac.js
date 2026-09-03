@@ -47,6 +47,9 @@ const requireAuth = async (req, res, next) => {
     let decoded;
     try {
       decoded = jwt.verify(token, getJwtSecret());
+      console.log('\n--- DECODED JWT PAYLOAD ---');
+      console.log(decoded);
+      console.log('---------------------------\n');
     } catch (err) {
       return res.status(401).json({
         success: false,

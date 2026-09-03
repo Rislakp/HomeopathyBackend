@@ -244,13 +244,14 @@ exports.assignSubscription = async (req, res) => {
       });
     }
 
-    // 3. Find the student
+    // 4. Find the student
     const Student = require('../models/Student');
     const student = await Student.findById(studentId);
     if (!student) {
       return res.status(404).json({
         success: false,
-        message: 'Student not found',
+        message: `Student document not found in the database for token ID: ${studentId}. The user may have been deleted.`,
+        providedId: studentId
       });
     }
 
