@@ -2,6 +2,7 @@ const mongoose = require('mongoose');
 const pdfParse = require('pdf-parse');
 const Tesseract = require('tesseract.js');
 const xlsx = require('xlsx');
+const sharp = require('sharp');
 const Exam = require('../models/exam.model');
 
 /**
@@ -64,11 +65,10 @@ function parseRawTextToMCQs(rawText) {
       }
     });
 
-    // 3. Fallback Clean-up: Provide fallback strings if an option is missing
-    if (!options.A) options.A = "Option A";
-    if (!options.B) options.B = "Option B";
-    if (!options.C) options.C = "Option C";
-    if (!options.D) options.D = "Option D";
+    // 3. Clean Regex Mapping: Log incomplete parses instead of injecting fake mock data
+    if (!options.A || !options.B || !options.C || !options.D) {
+      console.warn(`[OCR Warning] Incomplete options parsed for question: "${questionText.substring(0, 30)}..."`);
+    }
 
     mcqs.push({ questionText, options, correctOption });
   }
@@ -218,9 +218,18 @@ async function extractMCQs(req, res) {
     } 
     // B. Handle Image Files (OCR)
     else if (fileName.match(/\.(png|jpg|jpeg|webp)$/i)) {
-      const { data: { text } } = await Tesseract.recognize(buffer, 'eng', {
+      // Pre-process image with sharp for better OCR accuracy (reduces garbled text)
+      const processedBuffer = await sharp(buffer)
+        .grayscale()
+        .normalize()
+        .toBuffer();
+
+      const { data: { text } } = await Tesseract.recognize(processedBuffer, 'eng', {
         tessedit_pageseg_mode: Tesseract.PSM ? Tesseract.PSM.SINGLE_BLOCK : '6'
       });
+      
+      // Note: For future structured extraction, you could pass 'processedBuffer' to a Vision LLM API here instead.
+      
       questions = parseRawTextToMCQs(text);
     } 
     // C. Handle PDF Files

@@ -351,32 +351,50 @@ exports.updateLesson = async (req, res) => {
     const { lessonTitle, lessonType, durationOrPages, status, mediaUrlOrPath, videoParts } = req.body;
 
     const course = await findCourseByIdOrCustomId(courseId);
-    if (!course) return res.status(404).json({ success: false, message: 'Course not found' });
+    if (!course) {
+      return res.status(404).json({ success: false, message: 'Course not found' });
+    }
 
-    const moduleItem = course.modules.id(moduleId);
-    if (!moduleItem) return res.status(404).json({ success: false, message: 'Module not found' });
+    const targetModule = course.modules.id(moduleId);
+    if (!targetModule) {
+      return res.status(404).json({ success: false, message: 'Module not found' });
+    }
 
-    const lesson = moduleItem.lessons.id(lessonId);
-    if (!lesson) return res.status(404).json({ success: false, message: 'Lesson not found' });
+    const targetLesson = targetModule.lessons.id(lessonId);
+    if (!targetLesson) {
+      return res.status(404).json({ success: false, message: 'Lesson not found' });
+    }
 
-    if (lessonTitle) lesson.lessonTitle = lessonTitle.trim();
-    if (lessonType) {
+    // cleanly map fields with undefined checks
+    if (lessonTitle !== undefined) {
+      targetLesson.lessonTitle = lessonTitle;
+    }
+    if (lessonType !== undefined) {
       const allowedTypes = ['Live Class', 'Recorded Video', 'PDF Notes', 'Assignment'];
       if (!allowedTypes.includes(lessonType)) {
         return res.status(400).json({ success: false, message: `lessonType must be one of: ${allowedTypes.join(', ')}` });
       }
-      lesson.lessonType = lessonType;
+      targetLesson.lessonType = lessonType;
     }
-    if (durationOrPages !== undefined) lesson.durationOrPages = durationOrPages;
-    if (status) lesson.status = status;
-    if (mediaUrlOrPath !== undefined) lesson.mediaUrlOrPath = mediaUrlOrPath;
-    if (Array.isArray(videoParts)) lesson.videoParts = videoParts;
+    if (durationOrPages !== undefined) {
+      targetLesson.durationOrPages = durationOrPages;
+    }
+    if (status !== undefined) {
+      targetLesson.status = status;
+    }
+    if (mediaUrlOrPath !== undefined) {
+      targetLesson.mediaUrlOrPath = mediaUrlOrPath;
+    }
+    if (videoParts !== undefined) {
+      targetLesson.videoParts = videoParts;
+    }
 
     await course.save();
 
-    res.status(200).json({ success: true, message: 'Lesson updated successfully', data: lesson });
+    return res.status(200).json({ success: true, data: targetLesson });
   } catch (error) {
-    res.status(500).json({ success: false, message: 'Failed to update lesson', error: error.message });
+    console.error("Error updating lesson:", error);
+    return res.status(500).json({ success: false, message: 'Failed to update lesson', error: error.message });
   }
 };
 
