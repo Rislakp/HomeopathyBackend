@@ -93,6 +93,7 @@ app.use('/auth', authRoutes);
 
 app.use('/api/courses', require('./routes/courseRoutes'));
 app.use('/api/subscriptions', require('./routes/subscriptionPlanRoutes'));
+app.use('/api/v1/subscriptions', require('./routes/subscriptionPlanRoutes'));
 
 const studentFacultyRoutes = require('./routes/studentFacultyRoutes');
 app.use('/api/student/faculty', studentFacultyRoutes);

@@ -76,6 +76,20 @@ const studentSchema = new mongoose.Schema({
     enum: ['Active', 'Inactive', 'Trial', 'Expired'],
     default: 'Active'
   },
+  subscriptionPlanId: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'SubscriptionPlan',
+    default: null,
+  },
+  subscriptionStatus: {
+    type: String,
+    enum: ['Active', 'Inactive', 'Expired', 'None'],
+    default: 'None',
+  },
+  subscriptionExpiresAt: {
+    type: Date,
+    default: null,
+  },
   joinedDate: {
     type: Date,
     default: Date.now

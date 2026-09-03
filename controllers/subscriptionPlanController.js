@@ -179,3 +179,146 @@ exports.deleteSubscriptionPlan = async (req, res) => {
     });
   }
 };
+
+/**
+ * @desc    Get only active subscription plans (for student portal)
+ * @route   GET /api/v1/subscriptions/plans
+ * @access  Public — no authentication required
+ */
+exports.getActiveSubscriptionPlans = async (req, res) => {
+  try {
+    const plans = await SubscriptionPlan.find({ status: 'Active' })
+      .sort({ price: 1 })
+      .select('title frequency billingSuffix price description isMostPopular status features createdAt');
+
+    return res.status(200).json({
+      success: true,
+      message: 'Subscription plans fetched successfully',
+      count: plans.length,
+      data: plans,
+    });
+  } catch (error) {
+    console.error('Error fetching active subscription plans:', error);
+    return res.status(500).json({
+      success: false,
+      message: 'Failed to fetch subscription plans',
+      error: error.message,
+    });
+  }
+};
+
+/**
+ * @desc    Assign a subscription plan to a student
+ * @route   POST /api/v1/subscriptions/assign
+ * @access  Public (student portal) or Admin
+ */
+exports.assignSubscription = async (req, res) => {
+  try {
+    const { studentId, planId } = req.body;
+
+    // 1. Validate required fields
+    if (!studentId || !planId) {
+      return res.status(400).json({
+        success: false,
+        message: 'Both studentId and planId are required',
+      });
+    }
+
+    const mongoose = require('mongoose');
+
+    // 2. Validate ID formats
+    if (!mongoose.Types.ObjectId.isValid(studentId)) {
+      return res.status(400).json({
+        success: false,
+        message: 'Invalid studentId format',
+      });
+    }
+    if (!mongoose.Types.ObjectId.isValid(planId)) {
+      return res.status(400).json({
+        success: false,
+        message: 'Invalid planId format',
+      });
+    }
+
+    // 3. Find the student
+    const Student = require('../models/Student');
+    const student = await Student.findById(studentId);
+    if (!student) {
+      return res.status(404).json({
+        success: false,
+        message: 'Student not found',
+      });
+    }
+
+    // 4. Find the subscription plan
+    const plan = await SubscriptionPlan.findById(planId);
+    if (!plan) {
+      return res.status(404).json({
+        success: false,
+        message: 'Subscription plan not found',
+      });
+    }
+
+    if (plan.status !== 'Active') {
+      return res.status(400).json({
+        success: false,
+        message: 'This subscription plan is currently inactive',
+      });
+    }
+
+    // 5. Calculate expiry date based on plan frequency
+    const now = new Date();
+    let expiresAt = null;
+
+    switch (plan.frequency) {
+      case 'Monthly':
+        expiresAt = new Date(now.setMonth(now.getMonth() + 1));
+        break;
+      case 'Quarterly':
+        expiresAt = new Date(now.setMonth(now.getMonth() + 3));
+        break;
+      case 'Yearly':
+        expiresAt = new Date(now.setFullYear(now.getFullYear() + 1));
+        break;
+      case 'Lifetime':
+        expiresAt = null; // Never expires
+        break;
+      default:
+        expiresAt = new Date(now.setMonth(now.getMonth() + 1));
+    }
+
+    // 6. Update student record
+    student.subscription = plan.title;
+    student.subscriptionPlanId = plan._id;
+    student.subscriptionStatus = 'Active';
+    student.subscriptionExpiresAt = expiresAt;
+    student.status = 'Active';
+
+    await student.save();
+
+    return res.status(200).json({
+      success: true,
+      message: 'Subscription updated successfully',
+      data: {
+        studentId: student._id,
+        studentName: student.name,
+        subscription: student.subscription,
+        subscriptionStatus: student.subscriptionStatus,
+        subscriptionExpiresAt: student.subscriptionExpiresAt,
+        plan: {
+          planId: plan._id,
+          title: plan.title,
+          frequency: plan.frequency,
+          price: plan.price,
+        },
+      },
+    });
+  } catch (error) {
+    console.error('Error assigning subscription:', error);
+    return res.status(500).json({
+      success: false,
+      message: 'Failed to assign subscription',
+      error: error.message,
+    });
+  }
+};

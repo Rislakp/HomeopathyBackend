@@ -9,6 +9,8 @@ const Exam = require('../models/exam.model');
 /**
  * Local regex-based fallback parser.
  * Used when GEMINI_API_KEY is not available. Handles common MCQ formats from OCR text.
+ * Includes safe fallback: if OCR text is corrupted/gibberish, returns a clean placeholder
+ * instead of broken characters or crashing the UI.
  */
 function parseRawTextLocal(rawText) {
   if (!rawText || typeof rawText !== 'string') return [];
@@ -16,12 +18,26 @@ function parseRawTextLocal(rawText) {
 
   // Clean up OCR artifacts
   const cleanedText = rawText
-    .replace(/[\u2014\u2013_]{2,}/g, ' ')
+    .replace(/[\u2014\u2013\u2012_]{2,}/g, ' ')  // Remove dashed/underscored lines
     .replace(/\r\n/g, '\n')
-    .replace(/[^\x20-\x7E\n]/g, '');
+    .replace(/[^\x20-\x7E\n]/g, '')              // Keep printable ASCII + newlines
+    .replace(/[ \t]+/g, ' ')                      // Collapse multiple spaces/tabs
+    .trim();
+
+  // Safety check: if cleaned text is too short or looks like gibberish, return a single
+  // placeholder MCQ so the frontend gets something reviewable instead of garbage.
+  const meaningfulWords = cleanedText.split(/\s+/).filter(w => w.length > 2);
+  if (!cleanedText || meaningfulWords.length < 5) {
+    console.warn('[OCR Fallback] OCR text too short or corrupted. Returning placeholder.');
+    return [{
+      questionText: 'Extracted from Image (Please review - OCR could not read this clearly)',
+      options: { A: '', B: '', C: '', D: '' },
+      correctOption: 'A'
+    }];
+  }
 
   // Split by question start (e.g. "1.", "Q1:", "1)")
-  const blocks = cleanedText.split(/\n(?=(?:Q|q)?\d+[\.\):])/);
+  const blocks = cleanedText.split(/\n(?=(?:Q|q)?\d+[\.\):])/);  
 
   for (const block of blocks) {
     const lines = block.split('\n').map(l => l.trim()).filter(Boolean);
@@ -58,6 +74,17 @@ function parseRawTextLocal(rawText) {
       mcqs.push({ questionText, options, correctOption });
     }
   }
+
+  // If regex parsing found nothing usable, return a safe placeholder
+  if (mcqs.length === 0) {
+    console.warn('[OCR Fallback] Regex could not parse any MCQs. Returning raw text as placeholder.');
+    return [{
+      questionText: 'Extracted from Image (Please review - OCR could not read this clearly)',
+      options: { A: '', B: '', C: '', D: '' },
+      correctOption: 'A'
+    }];
+  }
+
   return mcqs;
 }
 
@@ -257,20 +284,26 @@ async function extractMCQs(req, res) {
     } 
     // B. Handle Image Files (OCR)
     else if (fileName.match(/\.(png|jpg|jpeg|webp)$/i)) {
-      // Step 1: Advanced Image Pre-processing with sharp
+      // Step 1: Sharp image pre-processing for better OCR accuracy
       const processedBuffer = await sharp(buffer)
         .grayscale()
         .normalize()
         .sharpen()
-        .threshold(128)
         .toBuffer();
 
-      const { data: { text } } = await Tesseract.recognize(processedBuffer, 'eng', {
-        tessedit_pageseg_mode: Tesseract.PSM ? Tesseract.PSM.SINGLE_BLOCK : '6'
-      });
-      
-      // Step 2: Intelligent LLM/Structured Text Parsing
-      questions = await parseRawTextToMCQs(text);
+      let ocrText = '';
+      try {
+        const { data: { text } } = await Tesseract.recognize(processedBuffer, 'eng', {
+          tessedit_pageseg_mode: Tesseract.PSM ? Tesseract.PSM.SINGLE_BLOCK : '6'
+        });
+        ocrText = text || '';
+      } catch (ocrError) {
+        console.error('[OCR Error] Tesseract failed:', ocrError.message);
+        ocrText = '';
+      }
+
+      // Step 2: Parse with LLM (if available) or safe local fallback
+      questions = await parseRawTextToMCQs(ocrText);
     } 
     // C. Handle PDF Files
     else if (fileName.endsWith('.pdf')) {
