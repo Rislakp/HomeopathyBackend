@@ -10,8 +10,8 @@ const { requireAdmin, requireStudent } = require('../middleware/rbac');
 // GET /api/subscriptions/plans - Fetch active plans for student portal (Public, no auth)
 router.get('/plans', subscriptionPlanController.getActiveSubscriptionPlans);
 
-// POST /api/subscriptions/assign - Assign a plan to a student (Private, Student only)
-router.post('/assign', requireStudent, subscriptionPlanController.assignSubscription);
+// POST /api/subscriptions/select - Assign a plan to a student (Private, Student only)
+router.post('/select', requireStudent, subscriptionPlanController.assignSubscription);
 
 // GET /api/subscriptions - Fetch all subscription plans (Public)
 router.get('/', subscriptionPlanController.getSubscriptionPlans);

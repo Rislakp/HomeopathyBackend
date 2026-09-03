@@ -209,7 +209,7 @@ exports.getActiveSubscriptionPlans = async (req, res) => {
 
 /**
  * @desc    Assign a subscription plan to a student
- * @route   POST /api/v1/subscriptions/assign
+ * @route   POST /api/v1/subscriptions/select
  * @access  Private (Student)
  */
 exports.assignSubscription = async (req, res) => {
