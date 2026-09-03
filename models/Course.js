@@ -73,6 +73,10 @@ const lessonSchema = new mongoose.Schema({
     trim: true,
     default: '',
   },
+  attachments: {
+    type: [String],
+    default: [],
+  },
   videoParts: {
     type: [videoPartSchema],
     default: [],

@@ -70,6 +70,10 @@ app.options('*', cors(corsOptions));
 app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ limit: '50mb', extended: true }));
 
+// Serve uploaded static files
+const path = require('path');
+app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
+
 // ── Global request timeout (30 s) ─────────────────────────────────────────────
 // Ensures Flutter never waits forever if a handler gets stuck.
 app.use((req, res, next) => {

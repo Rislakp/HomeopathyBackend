@@ -475,8 +475,55 @@ exports.updateLesson = async (req, res) => {
       if (mediaUrlOrPath === undefined) targetLesson.mediaUrlOrPath = fileOrLink;
       if (uploadFileOrLink === undefined) targetLesson.uploadFileOrLink = fileOrLink;
     }
-    if (videoParts !== undefined) {
-      targetLesson.videoParts = Array.isArray(videoParts) ? videoParts : [];
+    // -----------------------------------------------------------------
+    // MULTER & FILE ATTACHMENT MAPPING
+    // -----------------------------------------------------------------
+    let uploadedFilePaths = [];
+
+    // Handle single file via req.file
+    if (req.file) {
+      uploadedFilePaths.push(`/uploads/${req.file.filename}`);
+    }
+
+    // Handle multiple files via req.files
+    if (req.files) {
+      const filesList = Array.isArray(req.files)
+        ? req.files
+        : Object.values(req.files).flat();
+      filesList.forEach((f) => {
+        if (f && f.filename) {
+          uploadedFilePaths.push(`/uploads/${f.filename}`);
+        }
+      });
+    }
+
+    // Assign primary file path and push to attachments array
+    if (uploadedFilePaths.length > 0) {
+      const primaryFilePath = uploadedFilePaths[0];
+      targetLesson.mediaUrlOrPath = primaryFilePath;
+      targetLesson.uploadFileOrLink = primaryFilePath;
+
+      if (!Array.isArray(targetLesson.attachments)) {
+        targetLesson.attachments = [];
+      }
+      uploadedFilePaths.forEach((filePath) => {
+        if (!targetLesson.attachments.includes(filePath)) {
+          targetLesson.attachments.push(filePath);
+        }
+      });
+    }
+
+    // Body attachments mapping if passed
+    if (req.body.attachments !== undefined) {
+      if (Array.isArray(req.body.attachments)) {
+        targetLesson.attachments = req.body.attachments;
+      } else if (typeof req.body.attachments === 'string') {
+        try {
+          targetLesson.attachments = JSON.parse(req.body.attachments);
+        } catch (e) {
+          targetLesson.attachments = [req.body.attachments];
+        }
+      }
     }
 
     await course.save();
