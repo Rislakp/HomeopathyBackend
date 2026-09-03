@@ -32,7 +32,7 @@ const upload = multer({
   },
 });
 
-// Middleware to gracefully catch Multer specific errors
+// Admin Route: Extract MCQs from uploaded file
 const handleExtractUpload = (req, res, next) => {
   upload.any()(req, res, (err) => {
     if (err instanceof multer.MulterError) {
@@ -44,7 +44,6 @@ const handleExtractUpload = (req, res, next) => {
   });
 };
 
-// Admin Route: Extract MCQs from uploaded file
 router.post('/api/exams/extract-mcqs', requireAdmin, handleExtractUpload, extractMCQs);
 
 // Admin Route: Create Grand Mock Exam

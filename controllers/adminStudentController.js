@@ -1074,12 +1074,172 @@ async function updateAdminStudent(req, res) {
   }
 }
 
+/**
+ * POST /api/v1/admin/students
+ * Creates a new student record and optional linked user account.
+ */
+async function createAdminStudent(req, res) {
+  try {
+    const { name, email, phone, dateOfBirth, qualification, course, subscription, status, password } = req.body;
+
+    if (!name || !email) {
+      return res.status(400).json({
+        success: false,
+        message: 'Name and email are required fields',
+      });
+    }
+
+    const cleanEmail = String(email).trim().toLowerCase();
+
+    const existingStudent = await Student.findOne({ email: cleanEmail });
+    if (existingStudent) {
+      return res.status(400).json({
+        success: false,
+        message: 'Student with this email already exists',
+      });
+    }
+
+    let linkedUser = await User.findOne({ email: cleanEmail });
+    if (!linkedUser && password) {
+      const bcrypt = require('bcryptjs');
+      const hashedPassword = await bcrypt.hash(password, 10);
+      linkedUser = await User.create({
+        name: String(name).trim(),
+        email: cleanEmail,
+        password: hashedPassword,
+        role: 'student',
+        phone: phone ? String(phone).trim() : '',
+        contactNumber: phone ? String(phone).trim() : '',
+        qualification: qualification ? String(qualification).trim() : '',
+        dateOfBirth: dateOfBirth ? String(dateOfBirth).trim() : '',
+      });
+    }
+
+    const student = await Student.create({
+      userId: linkedUser ? linkedUser._id : null,
+      name: String(name).trim(),
+      email: cleanEmail,
+      phone: phone ? String(phone).trim() : '',
+      contactNumber: phone ? String(phone).trim() : '',
+      dateOfBirth: dateOfBirth ? String(dateOfBirth).trim() : '',
+      qualification: qualification ? String(qualification).trim() : '',
+      course: course ? String(course).trim() : 'General',
+      subscription: subscription ? String(subscription).trim() : 'Free',
+      status: status ? String(status).trim() : 'Active',
+      joinedDate: new Date(),
+    });
+
+    return res.status(201).json({
+      success: true,
+      message: 'Student created successfully',
+      data: student,
+    });
+  } catch (error) {
+    console.error('Error creating student:', error);
+    return res.status(500).json({
+      success: false,
+      message: 'Failed to create student',
+      error: error.message,
+    });
+  }
+}
+
+/**
+ * GET /api/v1/admin/students/export (or /api/student_new/export)
+ * Exports student scores and profile list as CSV file or JSON download.
+ */
+async function exportStudentsScores(req, res) {
+  try {
+    const students = await Student.find().lean();
+    
+    const acceptHeader = req.headers.accept || '';
+    const format = req.query.format || (acceptHeader.includes('text/csv') ? 'csv' : 'json');
+
+    const testResults = await TestResult.find().populate('examId', 'title totalMarks').lean();
+
+    const resultsMap = new Map();
+    testResults.forEach(tr => {
+      const sId = tr.studentId ? tr.studentId.toString() : null;
+      if (sId) {
+        if (!resultsMap.has(sId)) resultsMap.set(sId, []);
+        resultsMap.get(sId).push(tr);
+      }
+    });
+
+    const exportData = students.map(st => {
+      const sId = st._id.toString();
+      const uId = st.userId ? st.userId.toString() : null;
+      const studentResults = [...(resultsMap.get(sId) || []), ...(uId ? (resultsMap.get(uId) || []) : [])];
+      
+      const totalExams = studentResults.length;
+      const totalScore = studentResults.reduce((acc, r) => acc + (r.score || 0), 0);
+      const avgScore = totalExams > 0 ? (totalScore / totalExams).toFixed(2) : 0;
+
+      return {
+        id: sId,
+        name: st.name || '',
+        email: st.email || '',
+        phone: st.phone || st.contactNumber || '',
+        course: st.course || 'General',
+        subscription: st.subscription || 'Free',
+        status: st.status || 'Active',
+        totalExamsAttended: totalExams,
+        averageScore: avgScore,
+        joinedDate: st.joinedDate || st.createdAt || ''
+      };
+    });
+
+    if (format === 'csv') {
+      const headers = ['ID', 'Name', 'Email', 'Phone', 'Course', 'Subscription', 'Status', 'Total Exams Attended', 'Average Score', 'Joined Date'];
+      const csvRows = [headers.join(',')];
+
+      exportData.forEach(row => {
+        const values = [
+          `"${row.id}"`,
+          `"${(row.name || '').replace(/"/g, '""')}"`,
+          `"${(row.email || '').replace(/"/g, '""')}"`,
+          `"${(row.phone || '').replace(/"/g, '""')}"`,
+          `"${(row.course || '').replace(/"/g, '""')}"`,
+          `"${(row.subscription || '').replace(/"/g, '""')}"`,
+          `"${(row.status || '').replace(/"/g, '""')}"`,
+          row.totalExamsAttended,
+          row.averageScore,
+          `"${row.joinedDate}"`
+        ];
+        csvRows.push(values.join(','));
+      });
+
+      res.setHeader('Content-Type', 'text/csv');
+      res.setHeader('Content-Disposition', 'attachment; filename="student_scores_export.csv"');
+      return res.status(200).send(csvRows.join('\n'));
+    }
+
+    return res.status(200).json({
+      success: true,
+      count: exportData.length,
+      data: exportData
+    });
+  } catch (error) {
+    console.error('Error exporting student scores:', error);
+    return res.status(500).json({
+      success: false,
+      message: 'Failed to export student scores',
+      error: error.message
+    });
+  }
+}
+
 module.exports = {
   getAdminStudents,
   getAdminStudentById,
+  getStudentById: getAdminStudentById,
   getAdminStudentResults,
   updateAdminStudent,
   updateStudent: updateAdminStudent,
   deleteAdminStudent,
   deleteStudent: deleteAdminStudent,
+  createAdminStudent,
+  createStudent: createAdminStudent,
+  exportStudentsScores,
 };
+

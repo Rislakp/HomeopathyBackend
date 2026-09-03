@@ -718,6 +718,7 @@ module.exports = {
   deleteQuestionFromExam,
   validateAndSanitizeQuestion,
   validateAndSanitizeQuestions,
-  parseMCQText // Exported for test verification
+  parseRawTextToMCQs,
+  parseMCQText: parseRawTextToMCQs // Exported for test verification
 };
 
