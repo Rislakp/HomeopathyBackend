@@ -292,7 +292,36 @@ const studentLogin = async (req, res) => {
       });
     }
 
-    const token = generateToken(user);
+    // 1. Correctly find the actual Student document in the database
+    let actualStudentId = user._id.toString(); // Fallback
+    if (Student) {
+      const studentDoc = await Student.findOne({ email: cleanEmail });
+      if (studentDoc) {
+        actualStudentId = studentDoc._id.toString();
+      } else {
+        // Secondary lookup just in case email was updated or out of sync
+        const studentRefDoc = await Student.findOne({ userId: user._id });
+        if (studentRefDoc) {
+          actualStudentId = studentRefDoc._id.toString();
+        }
+      }
+    }
+
+    // 2. Explicitly create the JWT token with the user's actual database ID
+    const secret = process.env.JWT_SECRET || 'white_coat_academy_secret_jwt_key_2026_super_secure';
+    const token = jwt.sign(
+      {
+        id: actualStudentId, // The real Student _id
+        studentId: actualStudentId, 
+        userId: user._id.toString(), // Keep User reference safely
+        email: user.email,
+        role: 'student',
+      },
+      secret,
+      {
+        expiresIn: process.env.JWT_EXPIRES_IN || '30d',
+      }
+    );
 
     return res.status(200).json({
       success: true,

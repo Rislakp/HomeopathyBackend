@@ -47,6 +47,9 @@ const requireAuth = async (req, res, next) => {
     let decoded;
     try {
       decoded = jwt.verify(token, getJwtSecret());
+      console.log('\n--- DECODED JWT PAYLOAD ---');
+      console.log(decoded);
+      console.log('---------------------------\n');
     } catch (err) {
       return res.status(401).json({
         success: false,
@@ -121,6 +124,7 @@ const requireAuth = async (req, res, next) => {
     req.user = {
       id: foundUser._id.toString(),
       userId: foundUser._id.toString(),
+      studentId: decoded.studentId || null, // Explicitly preserve the Student model ID from token
       email: foundUser.email,
       name: foundUser.name,
       role: normalizedRole,
