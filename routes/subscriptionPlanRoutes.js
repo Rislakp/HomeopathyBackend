@@ -1,7 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const subscriptionPlanController = require('../controllers/subscriptionPlanController');
-const { requireAdmin } = require('../middleware/rbac');
+const { requireAdmin, requireStudent } = require('../middleware/rbac');
 
 // ==========================================
 // SUBSCRIPTION PLANS CRUD
@@ -10,8 +10,8 @@ const { requireAdmin } = require('../middleware/rbac');
 // GET /api/subscriptions/plans - Fetch active plans for student portal (Public, no auth)
 router.get('/plans', subscriptionPlanController.getActiveSubscriptionPlans);
 
-// POST /api/subscriptions/assign - Assign a plan to a student (Public, student portal)
-router.post('/assign', subscriptionPlanController.assignSubscription);
+// POST /api/subscriptions/assign - Assign a plan to a student (Private, Student only)
+router.post('/assign', requireStudent, subscriptionPlanController.assignSubscription);
 
 // GET /api/subscriptions - Fetch all subscription plans (Public)
 router.get('/', subscriptionPlanController.getSubscriptionPlans);

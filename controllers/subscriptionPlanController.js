@@ -210,17 +210,18 @@ exports.getActiveSubscriptionPlans = async (req, res) => {
 /**
  * @desc    Assign a subscription plan to a student
  * @route   POST /api/v1/subscriptions/assign
- * @access  Public (student portal) or Admin
+ * @access  Private (Student)
  */
 exports.assignSubscription = async (req, res) => {
   try {
-    const { studentId, planId } = req.body;
+    const studentId = req.user?.id;
+    const { planId } = req.body;
 
     // 1. Validate required fields
     if (!studentId || !planId) {
       return res.status(400).json({
         success: false,
-        message: 'Both studentId and planId are required',
+        message: 'Both student ID (from token) and planId are required',
       });
     }
 
