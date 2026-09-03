@@ -3,76 +3,115 @@ const pdfParse = require('pdf-parse');
 const Tesseract = require('tesseract.js');
 const xlsx = require('xlsx');
 const sharp = require('sharp');
+const { GoogleGenAI } = require('@google/genai');
 const Exam = require('../models/exam.model');
 
 /**
- * Helper function to parse MCQs from raw text.
- * Expects the standard format:
- * Q1. What is the question?
- * A) Option A
- * B) Option B
- * C) Option C
- * D) Option D
- * Ans: C
- * 
- * Supports both dot and parenthesis notation for questions and options (e.g., Q1., Q1), A), A.).
- * Tolerates variations like Ans: or Answer:.
+ * Local regex-based fallback parser.
+ * Used when GEMINI_API_KEY is not available. Handles common MCQ formats from OCR text.
  */
-function parseRawTextToMCQs(rawText) {
+function parseRawTextLocal(rawText) {
   if (!rawText || typeof rawText !== 'string') return [];
   const mcqs = [];
-  
-  // 1. Fallback Clean-up: strip unwanted whitespace and special character artifacts 
-  const cleanedText = rawText
-    .replace(/[—_]{2,}/g, ' ') // Remove blank dashed lines
-    .replace(/\r\n/g, '\n')
-    .replace(/[^\x20-\x7E\n]/g, ''); // Keep printable ASCII + newlines
 
-  // 2. Refined Text Regex: Split by question start (e.g. "1.", "Q1:", "1)")
+  // Clean up OCR artifacts
+  const cleanedText = rawText
+    .replace(/[\u2014\u2013_]{2,}/g, ' ')
+    .replace(/\r\n/g, '\n')
+    .replace(/[^\x20-\x7E\n]/g, '');
+
+  // Split by question start (e.g. "1.", "Q1:", "1)")
   const blocks = cleanedText.split(/\n(?=(?:Q|q)?\d+[\.\):])/);
 
   for (const block of blocks) {
     const lines = block.split('\n').map(l => l.trim()).filter(Boolean);
     if (lines.length < 2) continue;
 
-    let questionText = "Untitled Question";
+    let questionText = '';
     const options = { A: '', B: '', C: '', D: '' };
     let correctOption = 'A';
     let isFirstLine = true;
 
-    lines.forEach(line => {
-      // Questions: Lines starting with numbers followed by a dot or parenthesis
-      const qMatch = line.match(/^(?:Q|q)?\d+[\.\):]?\s*(.*)/);
+    for (const line of lines) {
       if (isFirstLine) {
-        questionText = (qMatch ? qMatch[1].trim() : line.trim()) || "Untitled Question";
+        const qMatch = line.match(/^(?:Q|q)?\d+[\.\):]?\s*(.*)/);
+        questionText = (qMatch ? qMatch[1].trim() : line.trim()) || '';
         isFirstLine = false;
-        return;
+        continue;
       }
 
-      // Options: Lines starting with A, B, C, D (e.g., A), A., or (A))
-      const optMatch = line.match(/^[\(]?([A-D])[\.\)]?\s+(.*)/i);
+      // Options: A), A., (A), a)
+      const optMatch = line.match(/^\(?([A-Da-d])[\.\)]\s+(.*)/);
       if (optMatch) {
-        const key = optMatch[1].toUpperCase();
-        options[key] = optMatch[2].trim();
-        return;
+        options[optMatch[1].toUpperCase()] = optMatch[2].trim();
+        continue;
       }
 
-      // Answers: Lines containing "Answer:", "Ans:", etc.
+      // Answers: "Answer:", "Ans:", "Correct:"
       const ansMatch = line.match(/(?:Ans(?:wer)?|Correct)\s*[:=\-]?\s*([A-D])/i);
       if (ansMatch) {
         correctOption = ansMatch[1].toUpperCase();
-        return;
+      }
+    }
+
+    if (questionText) {
+      mcqs.push({ questionText, options, correctOption });
+    }
+  }
+  return mcqs;
+}
+
+/**
+ * Primary MCQ parser. Uses Gemini LLM if GEMINI_API_KEY is available,
+ * otherwise falls back to local regex-based parsing.
+ */
+async function parseRawTextToMCQs(rawText) {
+  if (!rawText || typeof rawText !== 'string' || !rawText.trim()) return [];
+
+  // Fallback to local regex parser if no API key is configured
+  if (!process.env.GEMINI_API_KEY || process.env.GEMINI_API_KEY === 'your_gemini_api_key_here') {
+    console.log("[OCR] GEMINI_API_KEY not set. Using local regex parser.");
+    return parseRawTextLocal(rawText);
+  }
+
+  const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
+  const prompt = `You are an expert data extraction assistant. Extract multiple choice questions from the following OCR text.
+The text might be garbled, have typos, or lack formatting. Reconstruct the text into clear questions and options.
+
+Output exactly a JSON array of objects. Each object must follow this exact schema:
+[
+  {
+    "questionText": "Exact question string from image",
+    "options": {
+      "A": "Option A text",
+      "B": "Option B text",
+      "C": "Option C text",
+      "D": "Option D text"
+    },
+    "correctOption": "A" // The single capital letter of the correct answer (A, B, C, or D). Default to 'A' if unknown.
+  }
+]
+
+Do not include any other text or markdown block backticks outside the JSON array.
+
+OCR TEXT:
+${rawText}`;
+
+  try {
+    const response = await ai.models.generateContent({
+      model: 'gemini-2.5-flash',
+      contents: prompt,
+      config: {
+        responseMimeType: 'application/json',
       }
     });
 
-    // 3. Clean Regex Mapping: Log incomplete parses instead of injecting fake mock data
-    if (!options.A || !options.B || !options.C || !options.D) {
-      console.warn(`[OCR Warning] Incomplete options parsed for question: "${questionText.substring(0, 30)}..."`);
-    }
-
-    mcqs.push({ questionText, options, correctOption });
+    const parsedData = JSON.parse(response.text);
+    return Array.isArray(parsedData) ? parsedData : [];
+  } catch (error) {
+    console.error("[LLM Parsing Error] Falling back to local parser.", error.message);
+    return parseRawTextLocal(rawText);
   }
-  return mcqs;
 }
 
 /**
@@ -218,24 +257,25 @@ async function extractMCQs(req, res) {
     } 
     // B. Handle Image Files (OCR)
     else if (fileName.match(/\.(png|jpg|jpeg|webp)$/i)) {
-      // Pre-process image with sharp for better OCR accuracy (reduces garbled text)
+      // Step 1: Advanced Image Pre-processing with sharp
       const processedBuffer = await sharp(buffer)
         .grayscale()
         .normalize()
+        .sharpen()
+        .threshold(128)
         .toBuffer();
 
       const { data: { text } } = await Tesseract.recognize(processedBuffer, 'eng', {
         tessedit_pageseg_mode: Tesseract.PSM ? Tesseract.PSM.SINGLE_BLOCK : '6'
       });
       
-      // Note: For future structured extraction, you could pass 'processedBuffer' to a Vision LLM API here instead.
-      
-      questions = parseRawTextToMCQs(text);
+      // Step 2: Intelligent LLM/Structured Text Parsing
+      questions = await parseRawTextToMCQs(text);
     } 
     // C. Handle PDF Files
     else if (fileName.endsWith('.pdf')) {
       const pdfData = await pdfParse(buffer);
-      questions = parseRawTextToMCQs(pdfData.text);
+      questions = await parseRawTextToMCQs(pdfData.text);
     } else {
       return res.status(400).json({ success: false, message: "Unsupported file extension." });
     }
