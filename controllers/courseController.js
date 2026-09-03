@@ -1,6 +1,8 @@
 const Course = require('../models/Course');
 const mongoose = require('mongoose');
 
+const isValidObjectId = (id) => mongoose.Types.ObjectId.isValid(id);
+
 // Helper to handle querying by custom courseId or _id
 const getQueryById = (id) => {
   if (mongoose.Types.ObjectId.isValid(id)) {
@@ -239,6 +241,11 @@ exports.addModule = async (req, res) => {
 exports.updateModule = async (req, res) => {
   try {
     const { courseId, moduleId } = req.params;
+    
+    if (!isValidObjectId(moduleId)) {
+      return res.status(400).json({ success: false, message: 'Invalid module ID format' });
+    }
+
     const { moduleName, moduleTitle } = req.body;
     const actualModuleName = moduleName || moduleTitle;
 
@@ -260,6 +267,10 @@ exports.updateModule = async (req, res) => {
 exports.deleteModule = async (req, res) => {
   try {
     const { courseId, moduleId } = req.params;
+
+    if (!isValidObjectId(moduleId)) {
+      return res.status(400).json({ success: false, message: 'Invalid module ID format' });
+    }
 
     const query = {
       $or: [
@@ -291,6 +302,11 @@ exports.deleteModule = async (req, res) => {
 exports.getLessonsByModule = async (req, res) => {
   try {
     const { courseId, moduleId } = req.params;
+
+    if (!isValidObjectId(moduleId)) {
+      return res.status(400).json({ success: false, message: 'Invalid module ID format' });
+    }
+
     const course = await findCourseByIdOrCustomId(courseId);
     if (!course) return res.status(404).json({ success: false, message: 'Course not found' });
 
@@ -306,6 +322,11 @@ exports.getLessonsByModule = async (req, res) => {
 exports.addLesson = async (req, res) => {
   try {
     const { courseId, moduleId } = req.params;
+
+    if (!isValidObjectId(moduleId)) {
+      return res.status(400).json({ success: false, message: 'Invalid module ID format' });
+    }
+
     const { lessonTitle, lessonType, durationOrPages, status, mediaUrlOrPath, videoParts } = req.body;
 
     if (!lessonTitle || !lessonTitle.trim()) {
@@ -348,6 +369,11 @@ exports.addLesson = async (req, res) => {
 exports.updateLesson = async (req, res) => {
   try {
     const { courseId, moduleId, lessonId } = req.params;
+
+    if (!isValidObjectId(moduleId) || !isValidObjectId(lessonId)) {
+      return res.status(400).json({ success: false, message: 'Invalid module or lesson ID format' });
+    }
+
     const { lessonTitle, lessonType, durationOrPages, status, mediaUrlOrPath, videoParts } = req.body;
 
     const course = await findCourseByIdOrCustomId(courseId);
@@ -402,6 +428,10 @@ exports.deleteLesson = async (req, res) => {
   try {
     const { courseId, moduleId, lessonId } = req.params;
     
+    if (!isValidObjectId(moduleId) || !isValidObjectId(lessonId)) {
+      return res.status(400).json({ success: false, message: 'Invalid module or lesson ID format' });
+    }
+
     const query = {
       $or: [
         { courseId: courseId },
