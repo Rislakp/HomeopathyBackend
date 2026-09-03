@@ -215,7 +215,7 @@ exports.getActiveSubscriptionPlans = async (req, res) => {
 exports.assignSubscription = async (req, res) => {
   try {
     // 1. Extract student ID securely from authenticated token payload
-    const studentId = req.user.id || req.user._id;
+    const studentId = req.user.studentId || req.user.id;
     
     // 2. Extract only planId from req.body
     const { planId } = req.body;
