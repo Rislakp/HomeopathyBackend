@@ -214,14 +214,17 @@ exports.getActiveSubscriptionPlans = async (req, res) => {
  */
 exports.assignSubscription = async (req, res) => {
   try {
-    const studentId = req.user?.id;
+    // 1. Extract student ID securely from authenticated token payload
+    const studentId = req.user.id || req.user._id;
+    
+    // 2. Extract only planId from req.body
     const { planId } = req.body;
 
-    // 1. Validate required fields
+    // 3. Check validation
     if (!studentId || !planId) {
       return res.status(400).json({
         success: false,
-        message: 'Both student ID (from token) and planId are required',
+        message: 'Both studentId (from token) and planId are required',
       });
     }
 
