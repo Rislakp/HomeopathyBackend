@@ -20,29 +20,57 @@ const Exam = require('../models/exam.model');
 function parseRawTextToMCQs(rawText) {
   if (!rawText || typeof rawText !== 'string') return [];
   const mcqs = [];
-  const blocks = rawText.split(/\n(?=\d+[\.\)])/); // Split by "1." or "1)"
+  
+  // 1. Fallback Clean-up: strip unwanted whitespace and special character artifacts 
+  const cleanedText = rawText
+    .replace(/[—_]{2,}/g, ' ') // Remove blank dashed lines
+    .replace(/\r\n/g, '\n')
+    .replace(/[^\x20-\x7E\n]/g, ''); // Keep printable ASCII + newlines
+
+  // 2. Refined Text Regex: Split by question start (e.g. "1.", "Q1:", "1)")
+  const blocks = cleanedText.split(/\n(?=(?:Q|q)?\d+[\.\):])/);
 
   for (const block of blocks) {
     const lines = block.split('\n').map(l => l.trim()).filter(Boolean);
-    if (lines.length < 3) continue;
+    if (lines.length < 2) continue;
 
-    const questionText = lines[0].replace(/^\d+[\.\)]\s*/, '');
+    let questionText = "Untitled Question";
     const options = { A: '', B: '', C: '', D: '' };
     let correctOption = 'A';
+    let isFirstLine = true;
 
-    lines.slice(1).forEach(line => {
-      const match = line.match(/^([A-D])[\.\)]\s*(.*)/i);
-      if (match) {
-        const key = match[1].toUpperCase();
-        options[key] = match[2];
-      } else if (line.toLowerCase().startsWith('answer:')) {
-        correctOption = line.split(':')[1].trim().toUpperCase().charAt(0) || 'A';
+    lines.forEach(line => {
+      // Questions: Lines starting with numbers followed by a dot or parenthesis
+      const qMatch = line.match(/^(?:Q|q)?\d+[\.\):]?\s*(.*)/);
+      if (isFirstLine) {
+        questionText = (qMatch ? qMatch[1].trim() : line.trim()) || "Untitled Question";
+        isFirstLine = false;
+        return;
+      }
+
+      // Options: Lines starting with A, B, C, D (e.g., A), A., or (A))
+      const optMatch = line.match(/^[\(]?([A-D])[\.\)]?\s+(.*)/i);
+      if (optMatch) {
+        const key = optMatch[1].toUpperCase();
+        options[key] = optMatch[2].trim();
+        return;
+      }
+
+      // Answers: Lines containing "Answer:", "Ans:", etc.
+      const ansMatch = line.match(/(?:Ans(?:wer)?|Correct)\s*[:=\-]?\s*([A-D])/i);
+      if (ansMatch) {
+        correctOption = ansMatch[1].toUpperCase();
+        return;
       }
     });
-    
-    if (questionText) {
-      mcqs.push({ questionText, options, correctOption });
-    }
+
+    // 3. Fallback Clean-up: Provide fallback strings if an option is missing
+    if (!options.A) options.A = "Option A";
+    if (!options.B) options.B = "Option B";
+    if (!options.C) options.C = "Option C";
+    if (!options.D) options.D = "Option D";
+
+    mcqs.push({ questionText, options, correctOption });
   }
   return mcqs;
 }
@@ -190,7 +218,9 @@ async function extractMCQs(req, res) {
     } 
     // B. Handle Image Files (OCR)
     else if (fileName.match(/\.(png|jpg|jpeg|webp)$/i)) {
-      const { data: { text } } = await Tesseract.recognize(buffer, 'eng');
+      const { data: { text } } = await Tesseract.recognize(buffer, 'eng', {
+        tessedit_pageseg_mode: Tesseract.PSM ? Tesseract.PSM.SINGLE_BLOCK : '6'
+      });
       questions = parseRawTextToMCQs(text);
     } 
     // C. Handle PDF Files
