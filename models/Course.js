@@ -24,21 +24,51 @@ const lessonSchema = new mongoose.Schema({
     type: String,
     required: [true, 'Please specify a lesson type'],
     enum: {
-      values: ['Live Class', 'Recorded Video', 'PDF Notes', 'Assignment'],
+      values: ['Live Class', 'Recorded Video', 'PDF Notes', 'Assignment', 'video', 'pdf', 'link', 'document', 'audio'],
       message: '{VALUE} is not a valid lesson type',
     },
+  },
+  instructor: {
+    type: String,
+    trim: true,
+    default: '',
+  },
+  description: {
+    type: String,
+    trim: true,
+    default: '',
   },
   durationOrPages: {
     type: String,
     trim: true,
     default: '',
   },
+  visibility: {
+    type: String,
+    trim: true,
+    default: 'Public',
+  },
   status: {
     type: String,
     enum: ['Published', 'Draft'],
     default: 'Published',
   },
+  scheduleDate: {
+    type: String,
+    trim: true,
+    default: '',
+  },
+  scheduleTime: {
+    type: String,
+    trim: true,
+    default: '',
+  },
   mediaUrlOrPath: {
+    type: String,
+    trim: true,
+    default: '',
+  },
+  uploadFileOrLink: {
     type: String,
     trim: true,
     default: '',

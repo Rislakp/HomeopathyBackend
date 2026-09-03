@@ -327,13 +327,27 @@ exports.addLesson = async (req, res) => {
       return res.status(400).json({ success: false, message: 'Invalid module ID format' });
     }
 
-    const { lessonTitle, lessonType, durationOrPages, status, mediaUrlOrPath, videoParts } = req.body;
+    const {
+      lessonTitle,
+      lessonType,
+      instructor,
+      description,
+      durationOrPages,
+      visibility,
+      status,
+      scheduleDate,
+      scheduleTime,
+      mediaUrlOrPath,
+      uploadFileOrLink,
+      fileOrLink,
+      videoParts,
+    } = req.body;
 
     if (!lessonTitle || !lessonTitle.trim()) {
       return res.status(400).json({ success: false, message: 'lessonTitle is required' });
     }
 
-    const allowedTypes = ['Live Class', 'Recorded Video', 'PDF Notes', 'Assignment'];
+    const allowedTypes = ['Live Class', 'Recorded Video', 'PDF Notes', 'Assignment', 'video', 'pdf', 'link', 'document', 'audio'];
     if (!lessonType || !allowedTypes.includes(lessonType)) {
       return res.status(400).json({ success: false, message: `lessonType must be one of: ${allowedTypes.join(', ')}` });
     }
@@ -344,12 +358,20 @@ exports.addLesson = async (req, res) => {
     const moduleItem = course.modules.id(moduleId);
     if (!moduleItem) return res.status(404).json({ success: false, message: 'Module not found' });
 
+    const mediaUrl = mediaUrlOrPath || uploadFileOrLink || fileOrLink || '';
+
     const newLesson = {
       lessonTitle: lessonTitle.trim(),
       lessonType,
+      instructor: instructor ? instructor.trim() : '',
+      description: description ? description.trim() : '',
       durationOrPages: durationOrPages || '',
+      visibility: visibility || 'Public',
       status: status || 'Published',
-      mediaUrlOrPath: mediaUrlOrPath || '',
+      scheduleDate: scheduleDate || '',
+      scheduleTime: scheduleTime || '',
+      mediaUrlOrPath: mediaUrl,
+      uploadFileOrLink: mediaUrl,
       videoParts: Array.isArray(videoParts) ? videoParts : [],
     };
 
@@ -374,7 +396,21 @@ exports.updateLesson = async (req, res) => {
       return res.status(400).json({ success: false, message: 'Invalid module or lesson ID format' });
     }
 
-    const { lessonTitle, lessonType, durationOrPages, status, mediaUrlOrPath, videoParts } = req.body;
+    const {
+      lessonTitle,
+      lessonType,
+      instructor,
+      description,
+      durationOrPages,
+      visibility,
+      status,
+      scheduleDate,
+      scheduleTime,
+      mediaUrlOrPath,
+      uploadFileOrLink,
+      fileOrLink,
+      videoParts,
+    } = req.body;
 
     const course = await findCourseByIdOrCustomId(courseId);
     if (!course) {
@@ -391,33 +427,65 @@ exports.updateLesson = async (req, res) => {
       return res.status(404).json({ success: false, message: 'Lesson not found' });
     }
 
-    // cleanly map fields with undefined checks
+    // Cleanly map fields with undefined checks
     if (lessonTitle !== undefined) {
       targetLesson.lessonTitle = lessonTitle;
     }
     if (lessonType !== undefined) {
-      const allowedTypes = ['Live Class', 'Recorded Video', 'PDF Notes', 'Assignment'];
+      const allowedTypes = ['Live Class', 'Recorded Video', 'PDF Notes', 'Assignment', 'video', 'pdf', 'link', 'document', 'audio'];
       if (!allowedTypes.includes(lessonType)) {
         return res.status(400).json({ success: false, message: `lessonType must be one of: ${allowedTypes.join(', ')}` });
       }
       targetLesson.lessonType = lessonType;
     }
+    if (instructor !== undefined) {
+      targetLesson.instructor = instructor;
+    }
+    if (description !== undefined) {
+      targetLesson.description = description;
+    }
     if (durationOrPages !== undefined) {
       targetLesson.durationOrPages = durationOrPages;
+    }
+    if (visibility !== undefined) {
+      targetLesson.visibility = visibility;
     }
     if (status !== undefined) {
       targetLesson.status = status;
     }
+    if (scheduleDate !== undefined) {
+      targetLesson.scheduleDate = scheduleDate;
+    }
+    if (scheduleTime !== undefined) {
+      targetLesson.scheduleTime = scheduleTime;
+    }
     if (mediaUrlOrPath !== undefined) {
       targetLesson.mediaUrlOrPath = mediaUrlOrPath;
+      if (uploadFileOrLink === undefined) {
+        targetLesson.uploadFileOrLink = mediaUrlOrPath;
+      }
+    }
+    if (uploadFileOrLink !== undefined) {
+      targetLesson.uploadFileOrLink = uploadFileOrLink;
+      if (mediaUrlOrPath === undefined) {
+        targetLesson.mediaUrlOrPath = uploadFileOrLink;
+      }
+    }
+    if (fileOrLink !== undefined) {
+      if (mediaUrlOrPath === undefined) targetLesson.mediaUrlOrPath = fileOrLink;
+      if (uploadFileOrLink === undefined) targetLesson.uploadFileOrLink = fileOrLink;
     }
     if (videoParts !== undefined) {
-      targetLesson.videoParts = videoParts;
+      targetLesson.videoParts = Array.isArray(videoParts) ? videoParts : [];
     }
 
     await course.save();
 
-    return res.status(200).json({ success: true, data: targetLesson });
+    return res.status(200).json({
+      success: true,
+      message: 'Lesson updated successfully',
+      data: targetLesson,
+    });
   } catch (error) {
     console.error("Error updating lesson:", error);
     return res.status(500).json({ success: false, message: 'Failed to update lesson', error: error.message });
