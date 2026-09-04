@@ -2,6 +2,7 @@ const express = require('express');
 const router = express.Router();
 const demoVideoController = require('../controllers/demoVideoController');
 const { requireAdmin } = require('../middleware/rbac');
+const upload = require('../middleware/upload');
 
 // ==========================================
 // DEMO VIDEOS CRUD
@@ -14,10 +15,10 @@ router.get('/', demoVideoController.getDemoVideos);
 router.get('/:id', demoVideoController.getDemoVideoById);
 
 // POST /api/v1/demo-videos - Create a new demo video (Admin Only)
-router.post('/', requireAdmin, demoVideoController.createDemoVideo);
+router.post('/', requireAdmin, upload.single('video'), demoVideoController.createDemoVideo);
 
 // PUT /api/v1/demo-videos/:id - Update an existing demo video (Admin Only)
-router.put('/:id', requireAdmin, demoVideoController.updateDemoVideo);
+router.put('/:id', requireAdmin, upload.single('video'), demoVideoController.updateDemoVideo);
 
 // DELETE /api/v1/demo-videos/:id - Delete a demo video (Admin Only)
 router.delete('/:id', requireAdmin, demoVideoController.deleteDemoVideo);

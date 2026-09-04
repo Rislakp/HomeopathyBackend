@@ -6,12 +6,24 @@ const mongoose = require('mongoose');
 // @access  Private (Admin)
 exports.createDemoVideo = async (req, res) => {
   try {
-    const { title, description, videoUrl, duration, courseId } = req.body;
+    const { title, description, duration, courseId } = req.body;
 
-    if (!title || !videoUrl) {
+    // Accept either an uploaded file or a plain URL string from the request body
+    const videoUrl = req.file
+      ? `/uploads/${req.file.filename}`
+      : (req.body.videoUrl || '').trim();
+
+    if (!title) {
       return res.status(400).json({
         success: false,
-        message: 'Title and videoUrl are required fields',
+        message: 'Title is required',
+      });
+    }
+
+    if (!videoUrl) {
+      return res.status(400).json({
+        success: false,
+        message: 'A video file upload or a videoUrl string is required',
       });
     }
 
@@ -124,6 +136,11 @@ exports.updateDemoVideo = async (req, res) => {
     }
 
     const updateData = { ...req.body };
+
+    // If a new video file was uploaded, overwrite videoUrl with the file path
+    if (req.file) {
+      updateData.videoUrl = `/uploads/${req.file.filename}`;
+    }
 
     if (updateData.courseId !== undefined) {
       if (updateData.courseId && mongoose.Types.ObjectId.isValid(updateData.courseId)) {
