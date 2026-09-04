@@ -18,6 +18,7 @@ process.on('uncaughtException', (err) => {
 const express = require('express');
 const cors = require('cors');
 const connectDB = require('./config/db');
+const path = require('path');
 
 const app = express();
 
@@ -83,6 +84,9 @@ app.use((req, res, next) => {
   });
   next();
 });
+
+// Serve static files from the uploads directory
+app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
 
 // Routes
 const authRoutes = require('./routes/authRoutes');
