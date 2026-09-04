@@ -157,6 +157,10 @@ const courseSchema = new mongoose.Schema({
     type: [moduleSchema],
     default: [],
   },
+  enrolledStudents: [{
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'User' // or 'Student' depending on your architecture
+  }],
 }, {
   timestamps: true,
   toJSON: { virtuals: true },
@@ -174,6 +178,11 @@ bannerAliasFields.forEach((field) => {
   courseSchema.virtual(field)
     .get(function() { return this.thumbnail; })
     .set(function(val) { this.thumbnail = val; });
+});
+
+// Virtual for enrolledCount
+courseSchema.virtual('enrolledCount').get(function() {
+  return this.enrolledStudents ? this.enrolledStudents.length : 0;
 });
 
 // Auto-generate unique courseId before validation
