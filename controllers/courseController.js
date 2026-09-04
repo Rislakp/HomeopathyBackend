@@ -358,7 +358,43 @@ exports.addLesson = async (req, res) => {
     const moduleItem = course.modules.id(moduleId);
     if (!moduleItem) return res.status(404).json({ success: false, message: 'Module not found' });
 
-    const mediaUrl = mediaUrlOrPath || uploadFileOrLink || fileOrLink || '';
+    let uploadedFilePaths = [];
+    if (req.file) {
+      uploadedFilePaths.push(`/uploads/${req.file.filename}`);
+    }
+    if (req.files) {
+      const filesList = Array.isArray(req.files)
+        ? req.files
+        : Object.values(req.files).flat();
+      filesList.forEach((f) => {
+        if (f && f.filename) {
+          uploadedFilePaths.push(`/uploads/${f.filename}`);
+        }
+      });
+    }
+
+    let mediaUrl = mediaUrlOrPath || uploadFileOrLink || fileOrLink || '';
+    if (uploadedFilePaths.length > 0) {
+      mediaUrl = uploadedFilePaths[0];
+    }
+
+    let attachmentsList = [];
+    if (uploadedFilePaths.length > 0) {
+      attachmentsList = [...uploadedFilePaths];
+    }
+    if (req.body.attachments) {
+      if (Array.isArray(req.body.attachments)) {
+        attachmentsList = [...attachmentsList, ...req.body.attachments];
+      } else if (typeof req.body.attachments === 'string') {
+        try {
+          const parsed = JSON.parse(req.body.attachments);
+          if (Array.isArray(parsed)) attachmentsList = [...attachmentsList, ...parsed];
+          else attachmentsList.push(req.body.attachments);
+        } catch (e) {
+          attachmentsList.push(req.body.attachments);
+        }
+      }
+    }
 
     const newLesson = {
       lessonTitle: lessonTitle.trim(),
@@ -372,6 +408,7 @@ exports.addLesson = async (req, res) => {
       scheduleTime: scheduleTime || '',
       mediaUrlOrPath: mediaUrl,
       uploadFileOrLink: mediaUrl,
+      attachments: Array.from(new Set(attachmentsList)),
       videoParts: Array.isArray(videoParts) ? videoParts : [],
     };
 
