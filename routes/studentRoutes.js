@@ -1,8 +1,14 @@
 const express = require('express');
 const router = express.Router();
+const facultyController = require('../controllers/facultyController');
+const adminStudentController = require('../controllers/adminStudentController');
+const { adminAuth } = require('../middleware/adminAuth.middleware');
 
-router.get('/', async (req, res) => {
-  res.json({ message: 'Courses API' });
-});
+// Export route placed at top before any parameterized routes
+router.get('/export', adminAuth, adminStudentController.exportStudentsScores);
+
+// Student Faculty Routes
+router.get('/faculty', facultyController.getStudentFaculty);
+router.get('/faculty/:id', facultyController.getStudentFacultyById);
 
 module.exports = router;

@@ -33,11 +33,62 @@ const studentSchema = new mongoose.Schema({
     required: [true, 'Please specify a subscription level'],
     trim: true
   },
+  courseId: {
+    type: String,
+    trim: true,
+    default: ''
+  },
+  examScores: [
+    {
+      examTitle: {
+        type: String,
+        trim: true,
+        default: 'General Assessment'
+      },
+      score: {
+        type: Number,
+        default: 0
+      },
+      maxScore: {
+        type: Number,
+        default: 100
+      },
+      percentage: {
+        type: Number,
+        default: function() {
+          return this.maxScore > 0 ? Math.round((this.score / this.maxScore) * 100) : 0;
+        }
+      },
+      grade: {
+        type: String,
+        trim: true,
+        default: ''
+      },
+      date: {
+        type: Date,
+        default: Date.now
+      }
+    }
+  ],
   status: {
     type: String,
     required: true,
     enum: ['Active', 'Inactive', 'Trial', 'Expired'],
     default: 'Active'
+  },
+  subscriptionPlanId: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'SubscriptionPlan',
+    default: null,
+  },
+  subscriptionStatus: {
+    type: String,
+    enum: ['Active', 'Inactive', 'Expired', 'None'],
+    default: 'None',
+  },
+  subscriptionExpiresAt: {
+    type: Date,
+    default: null,
   },
   joinedDate: {
     type: Date,
