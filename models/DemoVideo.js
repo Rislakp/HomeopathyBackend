@@ -23,6 +23,7 @@ const demoVideoSchema = new mongoose.Schema({
     type: mongoose.Schema.Types.ObjectId,
     ref: 'Course',
     required: false,
+    default: null,
   },
 }, {
   timestamps: true,

@@ -15,12 +15,17 @@ exports.createDemoVideo = async (req, res) => {
       });
     }
 
+    let validCourseId = null;
+    if (courseId && mongoose.Types.ObjectId.isValid(courseId)) {
+      validCourseId = courseId;
+    }
+
     const demoVideo = new DemoVideo({
       title,
       description,
       videoUrl,
       duration,
-      courseId: courseId || null,
+      courseId: validCourseId,
     });
 
     await demoVideo.save();
@@ -118,9 +123,19 @@ exports.updateDemoVideo = async (req, res) => {
       return res.status(400).json({ success: false, message: 'Invalid demo video ID format' });
     }
 
+    const updateData = { ...req.body };
+
+    if (updateData.courseId !== undefined) {
+      if (updateData.courseId && mongoose.Types.ObjectId.isValid(updateData.courseId)) {
+        // Keep as is
+      } else {
+        updateData.courseId = null;
+      }
+    }
+
     const updatedVideo = await DemoVideo.findByIdAndUpdate(
       id,
-      { $set: req.body },
+      { $set: updateData },
       { new: true, runValidators: true }
     );
 
