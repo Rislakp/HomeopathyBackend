@@ -337,6 +337,7 @@ exports.addLesson = async (req, res) => {
       status,
       scheduleDate,
       scheduleTime,
+      meetingUrl,
       mediaUrlOrPath,
       uploadFileOrLink,
       fileOrLink,
@@ -407,6 +408,7 @@ exports.addLesson = async (req, res) => {
       status: status || 'Published',
       scheduleDate: scheduleDate || '',
       scheduleTime: scheduleTime || '',
+      meetingUrl: meetingUrl ? meetingUrl.trim() : '',
       mediaUrlOrPath: mediaUrl,
       uploadFileOrLink: mediaUrl,
       attachments: Array.from(new Set(attachmentsList)),
@@ -444,6 +446,7 @@ exports.updateLesson = async (req, res) => {
       status,
       scheduleDate,
       scheduleTime,
+      meetingUrl,
       mediaUrlOrPath,
       uploadFileOrLink,
       fileOrLink,
@@ -497,6 +500,9 @@ exports.updateLesson = async (req, res) => {
     }
     if (scheduleTime !== undefined) {
       targetLesson.scheduleTime = scheduleTime;
+    }
+    if (meetingUrl !== undefined) {
+      targetLesson.meetingUrl = meetingUrl;
     }
     if (mediaUrlOrPath !== undefined) {
       targetLesson.mediaUrlOrPath = mediaUrlOrPath;

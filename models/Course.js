@@ -64,6 +64,11 @@ const lessonSchema = new mongoose.Schema({
     trim: true,
     default: '',
   },
+  meetingUrl: {
+    type: String,
+    trim: true,
+    default: '',
+  },
   mediaUrlOrPath: {
     type: String,
     trim: true,
