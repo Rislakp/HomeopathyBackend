@@ -20,10 +20,18 @@ const requireStudentOrAdmin = requireRole('student', 'admin', 'superadmin');
 router.get('/api/student/exams/:id/answer-key/download', requireStudentOrAdmin, downloadAnswerKey);
 router.post('/api/student/exams/:id/answer-key/download', requireStudentOrAdmin, downloadAnswerKey);
 
+const demoVideoController = require('../../controllers/demoVideoController');
+
 // Faculty routes for students are now handled by routes/studentFacultyRoutes.js
 
 // Protect remaining student routes strictly under /api/student with student role authentication
 router.use('/api/student', requireStudent);
+
+/**
+ * @route   GET /api/student/demo-videos
+ * @desc    Fetch available demo videos for the student portal
+ */
+router.get('/api/student/demo-videos', demoVideoController.getDemoVideos);
 
 /**
  * @route   GET /api/student/exams
