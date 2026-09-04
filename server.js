@@ -97,6 +97,7 @@ app.use('/api/v1/auth', authRoutes);
 app.use('/auth', authRoutes);
 
 app.use('/api/courses', require('./routes/courseRoutes'));
+app.use('/api/v1/demo-videos', require('./routes/demoVideoRoutes'));
 app.use('/api/subscriptions', require('./routes/subscriptionPlanRoutes'));
 app.use('/api/v1/subscriptions', require('./routes/subscriptionPlanRoutes'));
 

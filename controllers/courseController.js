@@ -347,8 +347,9 @@ exports.addLesson = async (req, res) => {
       return res.status(400).json({ success: false, message: 'lessonTitle is required' });
     }
 
+    const sanitizedLessonType = typeof lessonType === 'string' ? lessonType.trim() : lessonType;
     const allowedTypes = ['Live Class', 'Recorded Video', 'PDF Notes', 'Assignment', 'video', 'pdf', 'link', 'document', 'audio'];
-    if (!lessonType || !allowedTypes.includes(lessonType)) {
+    if (!sanitizedLessonType || !allowedTypes.includes(sanitizedLessonType)) {
       return res.status(400).json({ success: false, message: `lessonType must be one of: ${allowedTypes.join(', ')}` });
     }
 
@@ -398,7 +399,7 @@ exports.addLesson = async (req, res) => {
 
     const newLesson = {
       lessonTitle: lessonTitle.trim(),
-      lessonType,
+      lessonType: sanitizedLessonType,
       instructor: instructor ? instructor.trim() : '',
       description: description ? description.trim() : '',
       durationOrPages: durationOrPages || '',
@@ -469,11 +470,12 @@ exports.updateLesson = async (req, res) => {
       targetLesson.lessonTitle = lessonTitle;
     }
     if (lessonType !== undefined) {
+      const sanitizedLessonType = typeof lessonType === 'string' ? lessonType.trim() : lessonType;
       const allowedTypes = ['Live Class', 'Recorded Video', 'PDF Notes', 'Assignment', 'video', 'pdf', 'link', 'document', 'audio'];
-      if (!allowedTypes.includes(lessonType)) {
+      if (!allowedTypes.includes(sanitizedLessonType)) {
         return res.status(400).json({ success: false, message: `lessonType must be one of: ${allowedTypes.join(', ')}` });
       }
-      targetLesson.lessonType = lessonType;
+      targetLesson.lessonType = sanitizedLessonType;
     }
     if (instructor !== undefined) {
       targetLesson.instructor = instructor;

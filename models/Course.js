@@ -27,6 +27,7 @@ const lessonSchema = new mongoose.Schema({
       values: ['Live Class', 'Recorded Video', 'PDF Notes', 'Assignment', 'video', 'pdf', 'link', 'document', 'audio'],
       message: '{VALUE} is not a valid lesson type',
     },
+    default: 'PDF Notes'
   },
   instructor: {
     type: String,
