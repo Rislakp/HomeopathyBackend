@@ -327,13 +327,27 @@ exports.addLesson = async (req, res) => {
       return res.status(400).json({ success: false, message: 'Invalid module ID format' });
     }
 
-    const { lessonTitle, lessonType, durationOrPages, status, mediaUrlOrPath, videoParts } = req.body;
+    const {
+      lessonTitle,
+      lessonType,
+      instructor,
+      description,
+      durationOrPages,
+      visibility,
+      status,
+      scheduleDate,
+      scheduleTime,
+      mediaUrlOrPath,
+      uploadFileOrLink,
+      fileOrLink,
+      videoParts,
+    } = req.body;
 
     if (!lessonTitle || !lessonTitle.trim()) {
       return res.status(400).json({ success: false, message: 'lessonTitle is required' });
     }
 
-    const allowedTypes = ['Live Class', 'Recorded Video', 'PDF Notes', 'Assignment'];
+    const allowedTypes = ['Live Class', 'Recorded Video', 'PDF Notes', 'Assignment', 'video', 'pdf', 'link', 'document', 'audio'];
     if (!lessonType || !allowedTypes.includes(lessonType)) {
       return res.status(400).json({ success: false, message: `lessonType must be one of: ${allowedTypes.join(', ')}` });
     }
@@ -344,12 +358,57 @@ exports.addLesson = async (req, res) => {
     const moduleItem = course.modules.id(moduleId);
     if (!moduleItem) return res.status(404).json({ success: false, message: 'Module not found' });
 
+    let uploadedFilePaths = [];
+    if (req.file) {
+      uploadedFilePaths.push(`/uploads/${req.file.filename}`);
+    }
+    if (req.files) {
+      const filesList = Array.isArray(req.files)
+        ? req.files
+        : Object.values(req.files).flat();
+      filesList.forEach((f) => {
+        if (f && f.filename) {
+          uploadedFilePaths.push(`/uploads/${f.filename}`);
+        }
+      });
+    }
+
+    let mediaUrl = mediaUrlOrPath || uploadFileOrLink || fileOrLink || '';
+    if (uploadedFilePaths.length > 0) {
+      mediaUrl = uploadedFilePaths[0];
+    }
+
+    let attachmentsList = [];
+    if (uploadedFilePaths.length > 0) {
+      attachmentsList = [...uploadedFilePaths];
+    }
+    if (req.body.attachments) {
+      if (Array.isArray(req.body.attachments)) {
+        attachmentsList = [...attachmentsList, ...req.body.attachments];
+      } else if (typeof req.body.attachments === 'string') {
+        try {
+          const parsed = JSON.parse(req.body.attachments);
+          if (Array.isArray(parsed)) attachmentsList = [...attachmentsList, ...parsed];
+          else attachmentsList.push(req.body.attachments);
+        } catch (e) {
+          attachmentsList.push(req.body.attachments);
+        }
+      }
+    }
+
     const newLesson = {
       lessonTitle: lessonTitle.trim(),
       lessonType,
+      instructor: instructor ? instructor.trim() : '',
+      description: description ? description.trim() : '',
       durationOrPages: durationOrPages || '',
+      visibility: visibility || 'Public',
       status: status || 'Published',
-      mediaUrlOrPath: mediaUrlOrPath || '',
+      scheduleDate: scheduleDate || '',
+      scheduleTime: scheduleTime || '',
+      mediaUrlOrPath: mediaUrl,
+      uploadFileOrLink: mediaUrl,
+      attachments: Array.from(new Set(attachmentsList)),
       videoParts: Array.isArray(videoParts) ? videoParts : [],
     };
 
@@ -374,7 +433,21 @@ exports.updateLesson = async (req, res) => {
       return res.status(400).json({ success: false, message: 'Invalid module or lesson ID format' });
     }
 
-    const { lessonTitle, lessonType, durationOrPages, status, mediaUrlOrPath, videoParts } = req.body;
+    const {
+      lessonTitle,
+      lessonType,
+      instructor,
+      description,
+      durationOrPages,
+      visibility,
+      status,
+      scheduleDate,
+      scheduleTime,
+      mediaUrlOrPath,
+      uploadFileOrLink,
+      fileOrLink,
+      videoParts,
+    } = req.body;
 
     const course = await findCourseByIdOrCustomId(courseId);
     if (!course) {
@@ -391,33 +464,112 @@ exports.updateLesson = async (req, res) => {
       return res.status(404).json({ success: false, message: 'Lesson not found' });
     }
 
-    // cleanly map fields with undefined checks
+    // Cleanly map fields with undefined checks
     if (lessonTitle !== undefined) {
       targetLesson.lessonTitle = lessonTitle;
     }
     if (lessonType !== undefined) {
-      const allowedTypes = ['Live Class', 'Recorded Video', 'PDF Notes', 'Assignment'];
+      const allowedTypes = ['Live Class', 'Recorded Video', 'PDF Notes', 'Assignment', 'video', 'pdf', 'link', 'document', 'audio'];
       if (!allowedTypes.includes(lessonType)) {
         return res.status(400).json({ success: false, message: `lessonType must be one of: ${allowedTypes.join(', ')}` });
       }
       targetLesson.lessonType = lessonType;
     }
+    if (instructor !== undefined) {
+      targetLesson.instructor = instructor;
+    }
+    if (description !== undefined) {
+      targetLesson.description = description;
+    }
     if (durationOrPages !== undefined) {
       targetLesson.durationOrPages = durationOrPages;
+    }
+    if (visibility !== undefined) {
+      targetLesson.visibility = visibility;
     }
     if (status !== undefined) {
       targetLesson.status = status;
     }
+    if (scheduleDate !== undefined) {
+      targetLesson.scheduleDate = scheduleDate;
+    }
+    if (scheduleTime !== undefined) {
+      targetLesson.scheduleTime = scheduleTime;
+    }
     if (mediaUrlOrPath !== undefined) {
       targetLesson.mediaUrlOrPath = mediaUrlOrPath;
+      if (uploadFileOrLink === undefined) {
+        targetLesson.uploadFileOrLink = mediaUrlOrPath;
+      }
     }
-    if (videoParts !== undefined) {
-      targetLesson.videoParts = videoParts;
+    if (uploadFileOrLink !== undefined) {
+      targetLesson.uploadFileOrLink = uploadFileOrLink;
+      if (mediaUrlOrPath === undefined) {
+        targetLesson.mediaUrlOrPath = uploadFileOrLink;
+      }
+    }
+    if (fileOrLink !== undefined) {
+      if (mediaUrlOrPath === undefined) targetLesson.mediaUrlOrPath = fileOrLink;
+      if (uploadFileOrLink === undefined) targetLesson.uploadFileOrLink = fileOrLink;
+    }
+    // -----------------------------------------------------------------
+    // MULTER & FILE ATTACHMENT MAPPING
+    // -----------------------------------------------------------------
+    let uploadedFilePaths = [];
+
+    // Handle single file via req.file
+    if (req.file) {
+      uploadedFilePaths.push(`/uploads/${req.file.filename}`);
+    }
+
+    // Handle multiple files via req.files
+    if (req.files) {
+      const filesList = Array.isArray(req.files)
+        ? req.files
+        : Object.values(req.files).flat();
+      filesList.forEach((f) => {
+        if (f && f.filename) {
+          uploadedFilePaths.push(`/uploads/${f.filename}`);
+        }
+      });
+    }
+
+    // Assign primary file path and push to attachments array
+    if (uploadedFilePaths.length > 0) {
+      const primaryFilePath = uploadedFilePaths[0];
+      targetLesson.mediaUrlOrPath = primaryFilePath;
+      targetLesson.uploadFileOrLink = primaryFilePath;
+
+      if (!Array.isArray(targetLesson.attachments)) {
+        targetLesson.attachments = [];
+      }
+      uploadedFilePaths.forEach((filePath) => {
+        if (!targetLesson.attachments.includes(filePath)) {
+          targetLesson.attachments.push(filePath);
+        }
+      });
+    }
+
+    // Body attachments mapping if passed
+    if (req.body.attachments !== undefined) {
+      if (Array.isArray(req.body.attachments)) {
+        targetLesson.attachments = req.body.attachments;
+      } else if (typeof req.body.attachments === 'string') {
+        try {
+          targetLesson.attachments = JSON.parse(req.body.attachments);
+        } catch (e) {
+          targetLesson.attachments = [req.body.attachments];
+        }
+      }
     }
 
     await course.save();
 
-    return res.status(200).json({ success: true, data: targetLesson });
+    return res.status(200).json({
+      success: true,
+      message: 'Lesson updated successfully',
+      data: targetLesson,
+    });
   } catch (error) {
     console.error("Error updating lesson:", error);
     return res.status(500).json({ success: false, message: 'Failed to update lesson', error: error.message });
