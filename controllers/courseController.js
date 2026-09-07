@@ -363,6 +363,12 @@ exports.addLesson = async (req, res) => {
 
     let uploadedFilePaths = [];
     if (req.file) {
+      if ((sanitizedLessonType === 'Recorded Video' || sanitizedLessonType === 'video') && !req.file.mimetype.startsWith('video/')) {
+        return res.status(400).json({ success: false, message: 'Invalid file type. Recorded video must be a video file.' });
+      }
+      if ((sanitizedLessonType === 'PDF Notes' || sanitizedLessonType === 'pdf') && req.file.mimetype !== 'application/pdf') {
+        return res.status(400).json({ success: false, message: 'Invalid file type. PDF notes must be a PDF document.' });
+      }
       uploadedFilePaths.push(`/uploads/${req.file.filename}`);
     }
     if (req.files) {
@@ -528,6 +534,13 @@ exports.updateLesson = async (req, res) => {
 
     // Handle single file via req.file
     if (req.file) {
+      const activeLessonType = targetLesson.lessonType;
+      if ((activeLessonType === 'Recorded Video' || activeLessonType === 'video') && !req.file.mimetype.startsWith('video/')) {
+        return res.status(400).json({ success: false, message: 'Invalid file type. Recorded video must be a video file.' });
+      }
+      if ((activeLessonType === 'PDF Notes' || activeLessonType === 'pdf') && req.file.mimetype !== 'application/pdf') {
+        return res.status(400).json({ success: false, message: 'Invalid file type. PDF notes must be a PDF document.' });
+      }
       uploadedFilePaths.push(`/uploads/${req.file.filename}`);
     }
 
