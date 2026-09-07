@@ -8,6 +8,7 @@ const {
   createStudent,
   exportStudentsScores,
   approveStudent,
+  rejectStudent,
 } = require('../controllers/adminStudentController');
 const { adminAuth } = require('../middleware/adminAuth.middleware');
 
@@ -57,9 +58,18 @@ router.put('/:id/approve', approveStudent);
 router.patch('/:id/approve', approveStudent);
 
 /**
+ * @route   PUT   /api/admin/students/:id/reject
+ * @route   PATCH /api/admin/students/:id/reject
+ * @desc    Reject a student account — sets accountStatus='Rejected', status='Inactive'.
+ * @access  Private / Admin
+ */
+router.put('/:id/reject', rejectStudent);
+router.patch('/:id/reject', rejectStudent);
+
+/**
  * @route   PUT   /api/admin/students/:id/status
  * @route   PATCH /api/admin/students/:id/status
- * @desc    Alias for the approve route — update student account status.
+ * @desc    Generic status update alias — body must include accountStatus.
  * @access  Private / Admin
  */
 router.put('/:id/status', approveStudent);

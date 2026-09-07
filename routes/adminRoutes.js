@@ -7,6 +7,7 @@ const {
   updateAdminStudent,
   deleteAdminStudent,
   approveStudent,
+  rejectStudent,
 } = require('../controllers/adminStudentController');
 const { updateUserRole } = require('../controllers/authController');
 const adminAuthMiddleware = require('../middleware/adminAuthMiddleware');
@@ -30,6 +31,8 @@ router.get('/students/:id/results', getAdminStudentResults);
  */
 router.put('/students/:id/approve', approveStudent);
 router.patch('/students/:id/approve', approveStudent);
+router.put('/students/:id/reject', rejectStudent);
+router.patch('/students/:id/reject', rejectStudent);
 router.put('/students/:id/status', approveStudent);
 router.patch('/students/:id/status', approveStudent);
 

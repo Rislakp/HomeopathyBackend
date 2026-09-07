@@ -75,6 +75,7 @@ const studentSchema = new mongoose.Schema({
   },
   subscriptionStatus: {
     type: String,
+    // Must stay independent of the account-level `status` field
     enum: ['Active', 'Inactive', 'Expired', 'None'],
     default: 'None',
   },
@@ -120,24 +121,40 @@ const studentSchema = new mongoose.Schema({
   ],
 
   // ── Account status ───────────────────────────────────────────────────────────
+  //
+  // STATUS ENUM CONTRACT (keep in sync with adminStudentController constants):
+  //
+  //   `status`        — legacy operational field used by subscription/exam logic
+  //                     'Pending'  → awaiting admin approval   (new default)
+  //                     'Active'   → approved and operational
+  //                     'Inactive' → rejected, suspended, or deactivated
+  //                     'Trial'    → limited trial access
+  //                     'Expired'  → subscription/access expired
+  //
+  //   `accountStatus` — admin approval workflow field
+  //                     'Pending'  → awaiting review
+  //                     'Approved' → admin approved  → status becomes 'Active'
+  //                     'Rejected' → admin rejected  → status becomes 'Inactive'
+  //                     'Suspended'→ admin suspended → status becomes 'Inactive'
+  //
   status: {
     type: String,
     required: true,
-    enum: ['Active', 'Inactive', 'Trial', 'Expired'],
-    default: 'Active',
+    enum: ['Pending', 'Active', 'Inactive', 'Trial', 'Expired'],
+    default: 'Pending',   // new students start pending until admin approves
   },
   isActive: {
     type: Boolean,
-    default: true,
+    default: false,       // false until admin explicitly approves
   },
   isApproved: {
     type: Boolean,
-    default: false,             // false until an admin explicitly approves
+    default: false,       // false until an admin explicitly approves
   },
   accountStatus: {
     type: String,
     enum: ['Pending', 'Approved', 'Rejected', 'Suspended'],
-    default: 'Pending',         // every new student starts in Pending state
+    default: 'Pending',   // every new student starts in Pending state
     trim: true,
   },
   approvedAt: {

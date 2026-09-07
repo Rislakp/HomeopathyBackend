@@ -1263,170 +1263,231 @@ async function exportStudentsScores(req, res) {
   }
 }
 
+
+// ─────────────────────────────────────────────────────────────────────────────
+// ENUM CONSTANTS — must mirror Student.js schema exactly
+// ─────────────────────────────────────────────────────────────────────────────
+const STUDENT_STATUS_ENUM       = ['Pending', 'Active', 'Inactive', 'Trial', 'Expired'];
+const STUDENT_ACCOUNT_STATUS_ENUM = ['Pending', 'Approved', 'Rejected', 'Suspended'];
+
 /**
- * @route   PUT  /api/v1/admin/students/:id/approve
- * @route   PUT  /api/admin/students/:id/approve
- * @desc    Approve, reject, or suspend a student account.
- *          Writes isApproved, accountStatus, approvedAt, approvedBy
- *          to the Student document and mirrors status to the User document.
+ * Private helper — finds the student + linked user, writes the given status
+ * values to both documents, and returns { studentDoc, userDoc, responseStudent }.
+ *
+ * @param {string}  id            MongoDB ObjectId string (from req.params.id)
+ * @param {object}  statusPatch   Fields to write: { accountStatus, status, isApproved, isActive }
+ * @param {string|null} adminId   The acting admin's _id string
+ */
+async function _setStudentAccountStatus(id, statusPatch, adminId) {
+  // 1. Find Student document (by _id, then by userId)
+  let studentDoc = await Student.findById(id);
+  if (!studentDoc) {
+    studentDoc = await Student.findOne({ userId: id });
+  }
+
+  let userDoc = null;
+
+  if (!studentDoc) {
+    // Last resort: the caller passed a User._id for a student account
+    const candidate = await User.findById(id);
+    if (candidate && (candidate.role || '').toLowerCase() === 'student') {
+      userDoc = candidate;
+    }
+  } else {
+    // Load linked User for mirroring
+    if (studentDoc.userId) {
+      userDoc = await User.findById(studentDoc.userId);
+    }
+    if (!userDoc && studentDoc.email) {
+      userDoc = await User.findOne({ email: studentDoc.email });
+    }
+  }
+
+  if (!studentDoc && !userDoc) return null;
+
+  // 2. Write to Student document
+  if (studentDoc) {
+    studentDoc.accountStatus = statusPatch.accountStatus;   // enum: ['Pending','Approved','Rejected','Suspended']
+    studentDoc.status        = statusPatch.status;          // enum: ['Pending','Active','Inactive','Trial','Expired']
+    studentDoc.isApproved    = statusPatch.isApproved;
+    studentDoc.isActive      = statusPatch.isActive;
+    studentDoc.approvedAt    = new Date();
+    studentDoc.approvedBy    = adminId;
+    await studentDoc.save();
+  }
+
+  // 3. Mirror to User document (User model has no enum for these — uses strict:false)
+  if (userDoc) {
+    userDoc.set('isApproved',    statusPatch.isApproved,    { strict: false });
+    userDoc.set('isActive',      statusPatch.isActive,      { strict: false });
+    userDoc.set('accountStatus', statusPatch.accountStatus, { strict: false });
+    userDoc.set('approvedAt',    new Date(),                { strict: false });
+    await userDoc.save();
+  }
+
+  // 4. Build clean response object
+  const responseStudent = studentDoc
+    ? {
+        id:              studentDoc._id.toString(),
+        name:            studentDoc.name,
+        email:           studentDoc.email,
+        contactNumber:   studentDoc.contactNumber || studentDoc.phone || '',
+        qualification:   studentDoc.qualification || '',
+        preferredCourse: studentDoc.preferredCourse || '',
+        course:          studentDoc.course || '',
+        subscription:    studentDoc.subscription || '',
+        status:          studentDoc.status,
+        isActive:        studentDoc.isActive,
+        isApproved:      studentDoc.isApproved,
+        accountStatus:   studentDoc.accountStatus,
+        approvedAt:      studentDoc.approvedAt,
+        approvedBy:      adminId,
+        updatedAt:       studentDoc.updatedAt,
+      }
+    : {
+        id:            userDoc._id.toString(),
+        name:          userDoc.name,
+        email:         userDoc.email,
+        isApproved:    statusPatch.isApproved,
+        isActive:      statusPatch.isActive,
+        accountStatus: statusPatch.accountStatus,
+        approvedAt:    new Date(),
+        approvedBy:    adminId,
+      };
+
+  return { studentDoc, userDoc, responseStudent };
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * @route   PUT   /api/v1/admin/students/:id/approve
+ * @route   PATCH /api/v1/admin/students/:id/approve
+ * @route   PUT   /api/admin/students/:id/approve
+ * @desc    Approve a student account.
+ *          Sets accountStatus → 'Approved', status → 'Active', isApproved → true.
+ *          Optionally pass { accountStatus: 'Suspended' | 'Rejected' | 'Pending' }
+ *          in the body to use this single endpoint for all status transitions.
  * @access  Private — Admin / Superadmin
  *
- * Request Body (all optional — send only what you need):
- *   accountStatus  {String}  'Approved' | 'Rejected' | 'Suspended' | 'Pending'
- *   isApproved     {Boolean} explicit override (inferred from accountStatus if omitted)
- *   note           {String}  optional admin note (logged but not stored)
+ * Body (all optional):
+ *   accountStatus {String}  Default: 'Approved'. One of: Approved | Rejected | Suspended | Pending
  */
 async function approveStudent(req, res) {
   try {
     const { id } = req.params;
 
-    // ── 1. Validate MongoDB ObjectId ─────────────────────────────────────────
     if (!mongoose.Types.ObjectId.isValid(id)) {
-      return res.status(400).json({
-        success: false,
-        message: 'Invalid student ID format.',
-        code: 'INVALID_ID',
-      });
+      return res.status(400).json({ success: false, message: 'Invalid student ID format.', code: 'INVALID_ID' });
     }
 
-    // ── 2. Parse & validate accountStatus ────────────────────────────────────
-    const VALID_STATUSES = ['Approved', 'Rejected', 'Suspended', 'Pending'];
-    const rawStatus = (req.body.accountStatus || 'Approved').toString().trim();
-    // Case-insensitive match against the valid enum values
-    const matchedStatus = VALID_STATUSES.find(
-      (s) => s.toLowerCase() === rawStatus.toLowerCase()
+    // Parse accountStatus from body — default to 'Approved'
+    const rawAccountStatus = (req.body.accountStatus || 'Approved').toString().trim();
+    const matchedAccountStatus = STUDENT_ACCOUNT_STATUS_ENUM.find(
+      (s) => s.toLowerCase() === rawAccountStatus.toLowerCase()
     );
 
-    if (!matchedStatus) {
+    if (!matchedAccountStatus) {
       return res.status(400).json({
         success: false,
-        message: `Invalid accountStatus. Allowed values: ${VALID_STATUSES.join(', ')}`,
-        code: 'INVALID_STATUS',
+        message: `Invalid accountStatus. Allowed values: ${STUDENT_ACCOUNT_STATUS_ENUM.join(', ')}`,
+        code: 'INVALID_ACCOUNT_STATUS',
       });
     }
 
-    // Derive isApproved from accountStatus unless explicitly provided
-    const isApproved =
-      req.body.isApproved !== undefined
-        ? Boolean(req.body.isApproved)
-        : matchedStatus === 'Approved';
+    // Map accountStatus → legacy status field (exact enum values from schema)
+    const STATUS_MAP = {
+      Approved:  'Active',    // accountStatus='Approved'  → status='Active'
+      Rejected:  'Inactive',  // accountStatus='Rejected'  → status='Inactive'
+      Suspended: 'Inactive',  // accountStatus='Suspended' → status='Inactive'
+      Pending:   'Pending',   // accountStatus='Pending'   → status='Pending'
+    };
 
-    // ── 3. Identify the admin performing the action ───────────────────────────
     const adminId = req.admin?._id || req.admin?.id || req.user?._id || req.user?.id || null;
     const adminEmail = req.admin?.email || req.user?.email || 'unknown';
 
-    // ── 4. Find student (Student collection first, fallback to User) ──────────
-    let studentDoc = await Student.findById(id);
-    let userDoc = null;
+    const result = await _setStudentAccountStatus(id, {
+      accountStatus: matchedAccountStatus,           // exact schema enum value
+      status:        STATUS_MAP[matchedAccountStatus], // exact schema enum value
+      isApproved:    matchedAccountStatus === 'Approved',
+      isActive:      matchedAccountStatus === 'Approved',
+    }, adminId);
 
-    if (!studentDoc) {
-      // Maybe the ID is a User._id — try to find by userId field or directly
-      studentDoc = await Student.findOne({ userId: id });
+    if (!result) {
+      return res.status(404).json({ success: false, message: 'Student not found.', code: 'STUDENT_NOT_FOUND' });
     }
 
-    if (!studentDoc) {
-      // Last resort: check if it's a User document for a student
-      const candidate = await User.findById(id);
-      if (candidate && (candidate.role || '').toLowerCase() === 'student') {
-        userDoc = candidate;
-      }
-    } else {
-      // Load the linked User document for mirroring
-      if (studentDoc.userId) {
-        userDoc = await User.findById(studentDoc.userId);
-      }
-      if (!userDoc && studentDoc.email) {
-        userDoc = await User.findOne({ email: studentDoc.email });
-      }
-    }
-
-    if (!studentDoc && !userDoc) {
-      return res.status(404).json({
-        success: false,
-        message: 'Student not found.',
-        code: 'STUDENT_NOT_FOUND',
-      });
-    }
-
-    // ── 5. Apply updates to Student document ─────────────────────────────────
-    if (studentDoc) {
-      studentDoc.isApproved   = isApproved;
-      studentDoc.accountStatus = matchedStatus;
-      studentDoc.approvedAt   = new Date();
-      studentDoc.approvedBy   = adminId;
-      // Sync the legacy status field for backwards compatibility
-      if (matchedStatus === 'Approved') {
-        studentDoc.status   = 'Active';
-        studentDoc.isActive = true;
-      } else if (matchedStatus === 'Rejected' || matchedStatus === 'Suspended') {
-        studentDoc.status   = 'Inactive';
-        studentDoc.isActive = false;
-      }
-      await studentDoc.save();
-    }
-
-    // ── 6. Mirror approval status to User document ────────────────────────────
-    if (userDoc) {
-      userDoc.set('isApproved', isApproved,      { strict: false });
-      userDoc.set('accountStatus', matchedStatus, { strict: false });
-      userDoc.set('approvedAt', new Date(),       { strict: false });
-      await userDoc.save();
-    }
-
-    // ── 7. Build clean response payload ──────────────────────────────────────
-    const responseStudent = studentDoc
-      ? {
-          id: studentDoc._id.toString(),
-          name: studentDoc.name,
-          email: studentDoc.email,
-          contactNumber: studentDoc.contactNumber || studentDoc.phone || '',
-          qualification: studentDoc.qualification || '',
-          preferredCourse: studentDoc.preferredCourse || '',
-          course: studentDoc.course || '',
-          subscription: studentDoc.subscription || '',
-          status: studentDoc.status,
-          isActive: studentDoc.isActive,
-          isApproved: studentDoc.isApproved,
-          accountStatus: studentDoc.accountStatus,
-          approvedAt: studentDoc.approvedAt,
-          approvedBy: adminId,
-          updatedAt: studentDoc.updatedAt,
-        }
-      : {
-          id: userDoc._id.toString(),
-          name: userDoc.name,
-          email: userDoc.email,
-          isApproved,
-          accountStatus: matchedStatus,
-          approvedAt: new Date(),
-          approvedBy: adminId,
-        };
-
-    console.log(
-      `[approveStudent] Admin ${adminEmail} set student ${responseStudent.id} → accountStatus: ${matchedStatus}, isApproved: ${isApproved}`
-    );
+    console.log(`[approveStudent] Admin ${adminEmail} → student ${result.responseStudent.id} | accountStatus: ${matchedAccountStatus}`);
 
     return res.status(200).json({
       success: true,
-      message: `Student account ${matchedStatus.toLowerCase()} successfully.`,
-      student: responseStudent,
+      message: `Student account ${matchedAccountStatus.toLowerCase()} successfully.`,
+      student: result.responseStudent,
     });
   } catch (error) {
     console.error('[approveStudent] Error:', error);
-    if (error.name === 'CastError') {
-      return res.status(400).json({
-        success: false,
-        message: 'Invalid student ID format.',
-        code: 'INVALID_ID',
-      });
+    if (error.name === 'ValidationError') {
+      return res.status(400).json({ success: false, message: error.message, code: 'VALIDATION_ERROR' });
     }
-    return res.status(500).json({
-      success: false,
-      message: 'Internal server error while updating student status.',
-      error: error.message,
-    });
+    if (error.name === 'CastError') {
+      return res.status(400).json({ success: false, message: 'Invalid student ID format.', code: 'INVALID_ID' });
+    }
+    return res.status(500).json({ success: false, message: 'Internal server error while approving student.', error: error.message });
   }
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * @route   PUT   /api/v1/admin/students/:id/reject
+ * @route   PATCH /api/v1/admin/students/:id/reject
+ * @route   PUT   /api/admin/students/:id/reject
+ * @desc    Reject a student account.
+ *          Sets accountStatus → 'Rejected', status → 'Inactive', isApproved → false.
+ * @access  Private — Admin / Superadmin
+ */
+async function rejectStudent(req, res) {
+  try {
+    const { id } = req.params;
+
+    if (!mongoose.Types.ObjectId.isValid(id)) {
+      return res.status(400).json({ success: false, message: 'Invalid student ID format.', code: 'INVALID_ID' });
+    }
+
+    const adminId = req.admin?._id || req.admin?.id || req.user?._id || req.user?.id || null;
+    const adminEmail = req.admin?.email || req.user?.email || 'unknown';
+
+    const result = await _setStudentAccountStatus(id, {
+      accountStatus: 'Rejected',  // exact schema enum value
+      status:        'Inactive',  // exact schema enum value
+      isApproved:    false,
+      isActive:      false,
+    }, adminId);
+
+    if (!result) {
+      return res.status(404).json({ success: false, message: 'Student not found.', code: 'STUDENT_NOT_FOUND' });
+    }
+
+    console.log(`[rejectStudent] Admin ${adminEmail} → student ${result.responseStudent.id} | accountStatus: Rejected`);
+
+    return res.status(200).json({
+      success: true,
+      message: 'Student account rejected successfully.',
+      student: result.responseStudent,
+    });
+  } catch (error) {
+    console.error('[rejectStudent] Error:', error);
+    if (error.name === 'ValidationError') {
+      return res.status(400).json({ success: false, message: error.message, code: 'VALIDATION_ERROR' });
+    }
+    if (error.name === 'CastError') {
+      return res.status(400).json({ success: false, message: 'Invalid student ID format.', code: 'INVALID_ID' });
+    }
+    return res.status(500).json({ success: false, message: 'Internal server error while rejecting student.', error: error.message });
+  }
+}
+
+
 
 
 module.exports = {
@@ -1442,4 +1503,6 @@ module.exports = {
   createStudent: createAdminStudent,
   exportStudentsScores,
   approveStudent,
+  rejectStudent,
 };
+
