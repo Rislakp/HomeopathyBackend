@@ -5,6 +5,38 @@ const path = require('path');
 
 const isValidObjectId = (id) => mongoose.Types.ObjectId.isValid(id);
 
+/**
+ * Serialize a lesson subdocument into a plain object that always
+ * includes every multi-file array so the frontend can safely iterate
+ * without defensive null checks on each field.
+ */
+const serializeLesson = (lesson) => ({
+  _id: lesson._id,
+  lessonTitle: lesson.lessonTitle || '',
+  lessonType: lesson.lessonType || 'Video',
+  duration: lesson.duration || '',
+  description: lesson.description || '',
+  videoUrl: lesson.videoUrl || '',
+  videoParts: Array.isArray(lesson.videoParts) ? lesson.videoParts : [],
+  pdfNotes: Array.isArray(lesson.pdfNotes) ? lesson.pdfNotes : [],
+  attachments: Array.isArray(lesson.attachments) ? lesson.attachments : [],
+  assignments: Array.isArray(lesson.assignments) ? lesson.assignments : [],
+  meetingUrl: lesson.meetingUrl || '',
+  status: lesson.status || 'Published',
+  createdAt: lesson.createdAt,
+  updatedAt: lesson.updatedAt,
+});
+
+/**
+ * Serialize a module subdocument, mapping each lesson through serializeLesson.
+ */
+const serializeModule = (mod) => ({
+  ...mod.toObject ? mod.toObject() : mod,
+  lessons: Array.isArray(mod.lessons)
+    ? mod.lessons.map(serializeLesson)
+    : [],
+});
+
 // Helper to handle querying by custom courseId or _id
 const getQueryById = (id) => {
   if (mongoose.Types.ObjectId.isValid(id)) {
@@ -29,11 +61,15 @@ const findCourseByIdOrCustomId = async (id) => {
 exports.getCourses = async (req, res) => {
   try {
     const courses = await Course.find();
+    const serialized = courses.map((course) => ({
+      ...course.toObject(),
+      modules: course.modules.map(serializeModule),
+    }));
     return res.status(200).json({
       success: true,
-      count: courses.length,
-      data: courses,
-      courses,
+      count: serialized.length,
+      data: serialized,
+      courses: serialized,
     });
   } catch (error) {
     console.error('Get Courses Error:', error);
@@ -57,10 +93,15 @@ exports.getCourseById = async (req, res) => {
       });
     }
 
+    const serialized = {
+      ...course.toObject(),
+      modules: course.modules.map(serializeModule),
+    };
+
     return res.status(200).json({
       success: true,
-      data: course,
-      course,
+      data: serialized,
+      course: serialized,
     });
   } catch (error) {
     console.error('Get Course By ID Error:', error);
@@ -206,7 +247,8 @@ exports.getModules = async (req, res) => {
       return res.status(404).json({ success: false, message: 'Course not found' });
     }
 
-    return res.status(200).json({ success: true, data: course.modules });
+    const modules = course.modules.map(serializeModule);
+    return res.status(200).json({ success: true, data: modules });
   } catch (error) {
     return res.status(500).json({ success: false, message: 'Failed to fetch modules', error: error.message });
   }
@@ -316,7 +358,8 @@ exports.getLessonsByModule = async (req, res) => {
     const moduleItem = course.modules.id(moduleId);
     if (!moduleItem) return res.status(404).json({ success: false, message: 'Module not found' });
 
-    res.status(200).json({ success: true, message: 'Lessons fetched successfully', data: moduleItem.lessons });
+    const lessons = moduleItem.lessons.map(serializeLesson);
+    res.status(200).json({ success: true, message: 'Lessons fetched successfully', data: lessons });
   } catch (error) {
     res.status(500).json({ success: false, message: 'Failed to fetch lessons', error: error.message });
   }
@@ -332,11 +375,14 @@ exports.addLesson = async (req, res) => {
 
     const {
       lessonTitle,
+      lessonType,
       duration,
       description,
       meetingUrl,
       videoUrl,
+      videoParts,
       pdfNotes,
+      attachments,
       assignments,
       status
     } = req.body;
@@ -351,11 +397,14 @@ exports.addLesson = async (req, res) => {
     const moduleItem = course.modules.id(moduleId);
     if (!moduleItem) return res.status(404).json({ success: false, message: 'Module not found' });
 
-    // File processing
+    // Build initial arrays from body fields
     let finalVideoUrl = videoUrl ? videoUrl.trim() : '';
+    let finalVideoParts = Array.isArray(videoParts) ? [...videoParts] : [];
     let finalPdfNotes = Array.isArray(pdfNotes) ? [...pdfNotes] : (typeof pdfNotes === 'string' && pdfNotes ? [pdfNotes] : []);
+    let finalAttachments = Array.isArray(attachments) ? [...attachments] : (typeof attachments === 'string' && attachments ? [attachments] : []);
     let finalAssignments = Array.isArray(assignments) ? [...assignments] : (typeof assignments === 'string' && assignments ? [assignments] : []);
 
+    // Map uploaded files to the correct field based on fieldname / mimetype
     const filesList = [];
     if (req.file) filesList.push(req.file);
     if (req.files) {
@@ -365,24 +414,37 @@ exports.addLesson = async (req, res) => {
 
     filesList.forEach((f) => {
       if (f && f.filename) {
-        const path = `/uploads/${f.filename}`;
-        if (f.fieldname === 'videoUrl' || f.fieldname === 'video') finalVideoUrl = path;
-        else if (f.fieldname === 'pdfNotes' || f.fieldname === 'pdf') finalPdfNotes.push(path);
-        else if (f.fieldname === 'assignments' || f.fieldname === 'assignment') finalAssignments.push(path);
-        // Fallback parsing based on mimetype if fieldname is generic
-        else if (f.mimetype && f.mimetype.startsWith('video/')) finalVideoUrl = path;
-        else if (f.mimetype === 'application/pdf') finalPdfNotes.push(path);
-        else finalAssignments.push(path);
+        const filePath = `/uploads/${f.filename}`;
+        if (f.fieldname === 'videoUrl' || f.fieldname === 'video') {
+          finalVideoUrl = filePath;
+        } else if (f.fieldname === 'videoParts') {
+          finalVideoParts.push({ partTitle: f.originalname || '', partUrl: filePath });
+        } else if (f.fieldname === 'pdfNotes' || f.fieldname === 'pdf') {
+          finalPdfNotes.push(filePath);
+        } else if (f.fieldname === 'attachments' || f.fieldname === 'attachment') {
+          finalAttachments.push(filePath);
+        } else if (f.fieldname === 'assignments' || f.fieldname === 'assignment') {
+          finalAssignments.push(filePath);
+        } else if (f.mimetype && f.mimetype.startsWith('video/')) {
+          finalVideoUrl = filePath;
+        } else if (f.mimetype === 'application/pdf') {
+          finalPdfNotes.push(filePath);
+        } else {
+          finalAttachments.push(filePath);
+        }
       }
     });
 
     const newLesson = {
       lessonTitle: lessonTitle.trim(),
+      lessonType: lessonType || 'Video',
       duration: duration ? duration.trim() : '',
       description: description ? description.trim() : '',
       meetingUrl: meetingUrl ? meetingUrl.trim() : '',
       videoUrl: finalVideoUrl,
+      videoParts: finalVideoParts,
       pdfNotes: finalPdfNotes,
+      attachments: finalAttachments,
       assignments: finalAssignments,
       status: status || 'Published',
     };
@@ -390,10 +452,11 @@ exports.addLesson = async (req, res) => {
     moduleItem.lessons.push(newLesson);
     await course.save();
 
+    const saved = moduleItem.lessons[moduleItem.lessons.length - 1];
     res.status(201).json({
       success: true,
       message: 'Lesson added successfully',
-      data: moduleItem.lessons[moduleItem.lessons.length - 1],
+      data: serializeLesson(saved),
     });
   } catch (error) {
     res.status(500).json({ success: false, message: 'Failed to add lesson', error: error.message });
@@ -410,11 +473,14 @@ exports.updateLesson = async (req, res) => {
 
     const {
       lessonTitle,
+      lessonType,
       duration,
       description,
       meetingUrl,
       videoUrl,
+      videoParts,
       pdfNotes,
+      attachments,
       assignments,
       status
     } = req.body;
@@ -434,36 +500,38 @@ exports.updateLesson = async (req, res) => {
       return res.status(404).json({ success: false, message: 'Lesson not found' });
     }
 
-    // Cleanly map fields with undefined checks
-    if (lessonTitle !== undefined) {
-      targetLesson.lessonTitle = lessonTitle;
-    }
-    if (duration !== undefined) {
-      targetLesson.duration = duration;
-    }
-    if (description !== undefined) {
-      targetLesson.description = description;
-    }
-    if (meetingUrl !== undefined) {
-      targetLesson.meetingUrl = meetingUrl;
-    }
-    if (status !== undefined) {
-      targetLesson.status = status;
-    }
-    if (videoUrl !== undefined) {
-      targetLesson.videoUrl = videoUrl;
+    // Cleanly map scalar fields with undefined guards
+    if (lessonTitle !== undefined) targetLesson.lessonTitle = lessonTitle;
+    if (lessonType !== undefined) targetLesson.lessonType = lessonType;
+    if (duration !== undefined) targetLesson.duration = duration;
+    if (description !== undefined) targetLesson.description = description;
+    if (meetingUrl !== undefined) targetLesson.meetingUrl = meetingUrl;
+    if (status !== undefined) targetLesson.status = status;
+    if (videoUrl !== undefined) targetLesson.videoUrl = videoUrl;
+
+    // Array fields — replace entirely when provided via body
+    if (videoParts !== undefined) {
+      targetLesson.videoParts = Array.isArray(videoParts) ? videoParts : [];
     }
     if (pdfNotes !== undefined) {
-      const arr = Array.isArray(pdfNotes) ? pdfNotes : (typeof pdfNotes === 'string' && pdfNotes ? [pdfNotes] : []);
-      targetLesson.pdfNotes = arr;
+      targetLesson.pdfNotes = Array.isArray(pdfNotes)
+        ? pdfNotes
+        : (typeof pdfNotes === 'string' && pdfNotes ? [pdfNotes] : []);
+    }
+    if (attachments !== undefined) {
+      targetLesson.attachments = Array.isArray(attachments)
+        ? attachments
+        : (typeof attachments === 'string' && attachments ? [attachments] : []);
     }
     if (assignments !== undefined) {
-      const arr = Array.isArray(assignments) ? assignments : (typeof assignments === 'string' && assignments ? [assignments] : []);
-      targetLesson.assignments = arr;
+      targetLesson.assignments = Array.isArray(assignments)
+        ? assignments
+        : (typeof assignments === 'string' && assignments ? [assignments] : []);
     }
 
     // -----------------------------------------------------------------
-    // MULTER & FILE ATTACHMENT MAPPING
+    // MULTER FILE ATTACHMENT MAPPING
+    // Uploaded files are appended to the matching array field.
     // -----------------------------------------------------------------
     const filesList = [];
     if (req.file) filesList.push(req.file);
@@ -474,19 +542,23 @@ exports.updateLesson = async (req, res) => {
 
     filesList.forEach((f) => {
       if (f && f.filename) {
-        const path = `/uploads/${f.filename}`;
+        const filePath = `/uploads/${f.filename}`;
         if (f.fieldname === 'videoUrl' || f.fieldname === 'video') {
-          targetLesson.videoUrl = path;
+          targetLesson.videoUrl = filePath;
+        } else if (f.fieldname === 'videoParts') {
+          targetLesson.videoParts.push({ partTitle: f.originalname || '', partUrl: filePath });
         } else if (f.fieldname === 'pdfNotes' || f.fieldname === 'pdf') {
-          targetLesson.pdfNotes.push(path);
+          targetLesson.pdfNotes.push(filePath);
+        } else if (f.fieldname === 'attachments' || f.fieldname === 'attachment') {
+          targetLesson.attachments.push(filePath);
         } else if (f.fieldname === 'assignments' || f.fieldname === 'assignment') {
-          targetLesson.assignments.push(path);
+          targetLesson.assignments.push(filePath);
         } else if (f.mimetype && f.mimetype.startsWith('video/')) {
-          targetLesson.videoUrl = path;
+          targetLesson.videoUrl = filePath;
         } else if (f.mimetype === 'application/pdf') {
-          targetLesson.pdfNotes.push(path);
+          targetLesson.pdfNotes.push(filePath);
         } else {
-          targetLesson.assignments.push(path);
+          targetLesson.attachments.push(filePath);
         }
       }
     });
@@ -496,10 +568,10 @@ exports.updateLesson = async (req, res) => {
     return res.status(200).json({
       success: true,
       message: 'Lesson updated successfully',
-      data: targetLesson,
+      data: serializeLesson(targetLesson),
     });
   } catch (error) {
-    console.error("Error updating lesson:", error);
+    console.error('Error updating lesson:', error);
     return res.status(500).json({ success: false, message: 'Failed to update lesson', error: error.message });
   }
 };

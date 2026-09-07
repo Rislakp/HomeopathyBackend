@@ -20,6 +20,11 @@ const lessonSchema = new mongoose.Schema({
     required: [true, 'Please provide a lesson title'],
     trim: true,
   },
+  lessonType: {
+    type: String,
+    enum: ['Video', 'PDF', 'Live', 'Assignment'],
+    default: 'Video',
+  },
   duration: {
     type: String,
     trim: true,
@@ -40,7 +45,15 @@ const lessonSchema = new mongoose.Schema({
     trim: true,
     default: '',
   },
+  videoParts: {
+    type: [videoPartSchema],
+    default: [],
+  },
   pdfNotes: {
+    type: [String],
+    default: [],
+  },
+  attachments: {
     type: [String],
     default: [],
   },
