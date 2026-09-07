@@ -34,8 +34,8 @@ const generateToken = (user) => {
 /**
  * Helper to build sanitized user JSON response object
  */
-const buildUserResponse = (user) => {
-  return {
+const buildUserResponse = (user, studentDoc = null) => {
+  const response = {
     id: user._id ? user._id.toString() : user.id,
     name: user.name,
     email: user.email,
@@ -46,6 +46,19 @@ const buildUserResponse = (user) => {
     preferredCourse: user.preferredCourse || '',
     dateOfBirth: user.dateOfBirth || '',
   };
+
+  if (studentDoc) {
+    response.status = studentDoc.status || 'Pending';
+    response.accountStatus = studentDoc.accountStatus || 'Pending';
+    response.isApproved = studentDoc.isApproved || false;
+  } else {
+    // Fallback to User document fields if Student document is not found
+    response.status = user.status || 'Pending';
+    response.accountStatus = user.accountStatus || 'Pending';
+    response.isApproved = user.isApproved || false;
+  }
+
+  return response;
 };
 
 /**
@@ -427,9 +440,14 @@ const getMe = async (req, res) => {
       });
     }
 
+    let studentDoc = null;
+    if (Student && (user.role || 'student').toLowerCase().trim() === 'student') {
+      studentDoc = await Student.findOne({ userId: user._id }) || await Student.findOne({ email: user.email });
+    }
+
     return res.status(200).json({
       success: true,
-      user: buildUserResponse(user),
+      user: buildUserResponse(user, studentDoc),
     });
   } catch (error) {
     console.error('GetMe Error:', error);
