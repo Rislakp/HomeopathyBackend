@@ -249,6 +249,38 @@ const universalLogin = async (req, res) => {
     }
 
     const userRole = (user.role || 'student').toLowerCase().trim();
+
+    // -----------------------------
+    // ENFORCE STUDENT APPROVAL RULE
+    // -----------------------------
+    let studentDocForResponse = null;
+    if (userRole === 'student') {
+      let studentDoc = null;
+      if (Student) {
+        studentDoc = await Student.findOne({ userId: user._id }) || await Student.findOne({ email: cleanEmail });
+      }
+      studentDocForResponse = studentDoc;
+      
+      const accountStatus = studentDoc ? studentDoc.accountStatus : user.accountStatus;
+      const status = studentDoc ? studentDoc.status : user.status;
+      
+      // Block rejected
+      if (accountStatus === 'Rejected' || status === 'Inactive') {
+        return res.status(403).json({
+          success: false,
+          message: 'Your account has been rejected by the admin. You cannot log in.',
+        });
+      }
+      
+      // Require Approved or Active
+      if (accountStatus !== 'Approved' && status !== 'Active') {
+        return res.status(403).json({
+          success: false,
+          message: 'Your account is pending admin approval. You cannot log in yet.',
+        });
+      }
+    }
+
     const token = generateToken(user);
 
     return res.status(200).json({
@@ -256,7 +288,7 @@ const universalLogin = async (req, res) => {
       message: 'Login successful',
       token,
       role: userRole,
-      user: buildUserResponse(user),
+      user: buildUserResponse(user, studentDocForResponse),
     });
   } catch (error) {
     console.error('Universal Login Error:', error);
@@ -314,17 +346,42 @@ const studentLogin = async (req, res) => {
 
     // 1. Correctly find the actual Student document in the database
     let actualStudentId = user._id.toString(); // Fallback
+    let studentDocFound = null;
     if (Student) {
       const studentDoc = await Student.findOne({ email: cleanEmail });
       if (studentDoc) {
         actualStudentId = studentDoc._id.toString();
+        studentDocFound = studentDoc;
       } else {
         // Secondary lookup just in case email was updated or out of sync
         const studentRefDoc = await Student.findOne({ userId: user._id });
         if (studentRefDoc) {
           actualStudentId = studentRefDoc._id.toString();
+          studentDocFound = studentRefDoc;
         }
       }
+    }
+
+    // -----------------------------
+    // ENFORCE STUDENT APPROVAL RULE
+    // -----------------------------
+    const accountStatus = studentDocFound ? studentDocFound.accountStatus : user.accountStatus;
+    const status = studentDocFound ? studentDocFound.status : user.status;
+    
+    // Block rejected
+    if (accountStatus === 'Rejected' || status === 'Inactive') {
+      return res.status(403).json({
+        success: false,
+        message: 'Your account has been rejected by the admin. You cannot log in.',
+      });
+    }
+    
+    // Require Approved or Active
+    if (accountStatus !== 'Approved' && status !== 'Active') {
+      return res.status(403).json({
+        success: false,
+        message: 'Your account is pending admin approval. You cannot log in yet.',
+      });
     }
 
     // 2. Explicitly create the JWT token with the user's actual database ID
@@ -348,7 +405,7 @@ const studentLogin = async (req, res) => {
       message: 'Login successful',
       token,
       role: 'student',
-      user: buildUserResponse(user),
+      user: buildUserResponse(user, studentDocFound),
     });
   } catch (error) {
     console.error('Student Login Error:', error);
