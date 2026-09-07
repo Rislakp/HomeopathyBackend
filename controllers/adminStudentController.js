@@ -1229,6 +1229,172 @@ async function exportStudentsScores(req, res) {
   }
 }
 
+/**
+ * @route   PUT  /api/v1/admin/students/:id/approve
+ * @route   PUT  /api/admin/students/:id/approve
+ * @desc    Approve, reject, or suspend a student account.
+ *          Writes isApproved, accountStatus, approvedAt, approvedBy
+ *          to the Student document and mirrors status to the User document.
+ * @access  Private — Admin / Superadmin
+ *
+ * Request Body (all optional — send only what you need):
+ *   accountStatus  {String}  'Approved' | 'Rejected' | 'Suspended' | 'Pending'
+ *   isApproved     {Boolean} explicit override (inferred from accountStatus if omitted)
+ *   note           {String}  optional admin note (logged but not stored)
+ */
+async function approveStudent(req, res) {
+  try {
+    const { id } = req.params;
+
+    // ── 1. Validate MongoDB ObjectId ─────────────────────────────────────────
+    if (!mongoose.Types.ObjectId.isValid(id)) {
+      return res.status(400).json({
+        success: false,
+        message: 'Invalid student ID format.',
+        code: 'INVALID_ID',
+      });
+    }
+
+    // ── 2. Parse & validate accountStatus ────────────────────────────────────
+    const VALID_STATUSES = ['Approved', 'Rejected', 'Suspended', 'Pending'];
+    const rawStatus = (req.body.accountStatus || 'Approved').toString().trim();
+    // Case-insensitive match against the valid enum values
+    const matchedStatus = VALID_STATUSES.find(
+      (s) => s.toLowerCase() === rawStatus.toLowerCase()
+    );
+
+    if (!matchedStatus) {
+      return res.status(400).json({
+        success: false,
+        message: `Invalid accountStatus. Allowed values: ${VALID_STATUSES.join(', ')}`,
+        code: 'INVALID_STATUS',
+      });
+    }
+
+    // Derive isApproved from accountStatus unless explicitly provided
+    const isApproved =
+      req.body.isApproved !== undefined
+        ? Boolean(req.body.isApproved)
+        : matchedStatus === 'Approved';
+
+    // ── 3. Identify the admin performing the action ───────────────────────────
+    const adminId = req.admin?._id || req.admin?.id || req.user?._id || req.user?.id || null;
+    const adminEmail = req.admin?.email || req.user?.email || 'unknown';
+
+    // ── 4. Find student (Student collection first, fallback to User) ──────────
+    let studentDoc = await Student.findById(id);
+    let userDoc = null;
+
+    if (!studentDoc) {
+      // Maybe the ID is a User._id — try to find by userId field or directly
+      studentDoc = await Student.findOne({ userId: id });
+    }
+
+    if (!studentDoc) {
+      // Last resort: check if it's a User document for a student
+      const candidate = await User.findById(id);
+      if (candidate && (candidate.role || '').toLowerCase() === 'student') {
+        userDoc = candidate;
+      }
+    } else {
+      // Load the linked User document for mirroring
+      if (studentDoc.userId) {
+        userDoc = await User.findById(studentDoc.userId);
+      }
+      if (!userDoc && studentDoc.email) {
+        userDoc = await User.findOne({ email: studentDoc.email });
+      }
+    }
+
+    if (!studentDoc && !userDoc) {
+      return res.status(404).json({
+        success: false,
+        message: 'Student not found.',
+        code: 'STUDENT_NOT_FOUND',
+      });
+    }
+
+    // ── 5. Apply updates to Student document ─────────────────────────────────
+    if (studentDoc) {
+      studentDoc.isApproved   = isApproved;
+      studentDoc.accountStatus = matchedStatus;
+      studentDoc.approvedAt   = new Date();
+      studentDoc.approvedBy   = adminId;
+      // Sync the legacy status field for backwards compatibility
+      if (matchedStatus === 'Approved') {
+        studentDoc.status   = 'Active';
+        studentDoc.isActive = true;
+      } else if (matchedStatus === 'Rejected' || matchedStatus === 'Suspended') {
+        studentDoc.status   = 'Inactive';
+        studentDoc.isActive = false;
+      }
+      await studentDoc.save();
+    }
+
+    // ── 6. Mirror approval status to User document ────────────────────────────
+    if (userDoc) {
+      userDoc.set('isApproved', isApproved,      { strict: false });
+      userDoc.set('accountStatus', matchedStatus, { strict: false });
+      userDoc.set('approvedAt', new Date(),       { strict: false });
+      await userDoc.save();
+    }
+
+    // ── 7. Build clean response payload ──────────────────────────────────────
+    const responseStudent = studentDoc
+      ? {
+          id: studentDoc._id.toString(),
+          name: studentDoc.name,
+          email: studentDoc.email,
+          contactNumber: studentDoc.contactNumber || studentDoc.phone || '',
+          qualification: studentDoc.qualification || '',
+          preferredCourse: studentDoc.preferredCourse || '',
+          course: studentDoc.course || '',
+          subscription: studentDoc.subscription || '',
+          status: studentDoc.status,
+          isActive: studentDoc.isActive,
+          isApproved: studentDoc.isApproved,
+          accountStatus: studentDoc.accountStatus,
+          approvedAt: studentDoc.approvedAt,
+          approvedBy: adminId,
+          updatedAt: studentDoc.updatedAt,
+        }
+      : {
+          id: userDoc._id.toString(),
+          name: userDoc.name,
+          email: userDoc.email,
+          isApproved,
+          accountStatus: matchedStatus,
+          approvedAt: new Date(),
+          approvedBy: adminId,
+        };
+
+    console.log(
+      `[approveStudent] Admin ${adminEmail} set student ${responseStudent.id} → accountStatus: ${matchedStatus}, isApproved: ${isApproved}`
+    );
+
+    return res.status(200).json({
+      success: true,
+      message: `Student account ${matchedStatus.toLowerCase()} successfully.`,
+      student: responseStudent,
+    });
+  } catch (error) {
+    console.error('[approveStudent] Error:', error);
+    if (error.name === 'CastError') {
+      return res.status(400).json({
+        success: false,
+        message: 'Invalid student ID format.',
+        code: 'INVALID_ID',
+      });
+    }
+    return res.status(500).json({
+      success: false,
+      message: 'Internal server error while updating student status.',
+      error: error.message,
+    });
+  }
+}
+
+
 module.exports = {
   getAdminStudents,
   getAdminStudentById,
@@ -1241,5 +1407,5 @@ module.exports = {
   createAdminStudent,
   createStudent: createAdminStudent,
   exportStudentsScores,
+  approveStudent,
 };
-

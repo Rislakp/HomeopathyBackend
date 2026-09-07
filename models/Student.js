@@ -130,6 +130,25 @@ const studentSchema = new mongoose.Schema({
     type: Boolean,
     default: true,
   },
+  isApproved: {
+    type: Boolean,
+    default: false,             // false until an admin explicitly approves
+  },
+  accountStatus: {
+    type: String,
+    enum: ['Pending', 'Approved', 'Rejected', 'Suspended'],
+    default: 'Pending',         // every new student starts in Pending state
+    trim: true,
+  },
+  approvedAt: {
+    type: Date,
+    default: null,
+  },
+  approvedBy: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'Admin',
+    default: null,
+  },
 
   joinedDate: {
     type: Date,
