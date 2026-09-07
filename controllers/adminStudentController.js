@@ -971,7 +971,20 @@ async function updateAdminStudent(req, res) {
       updateFields.qualification = String(req.body.qualification).trim();
     }
 
-    if (req.body.course !== undefined && req.body.course !== null) {
+    if (req.body.courseId !== undefined && req.body.courseId !== null) {
+      const courseIdStr = String(req.body.courseId).trim();
+      if (mongoose.Types.ObjectId.isValid(courseIdStr)) {
+        const foundCourse = await Course.findById(courseIdStr);
+        if (!foundCourse) {
+          return res.status(404).json({ success: false, message: 'Assigned course not found in database' });
+        }
+        updateFields.courseId = courseIdStr;
+        updateFields.course = foundCourse.courseTitle || foundCourse.courseId || 'General';
+      } else {
+        updateFields.courseId = courseIdStr;
+        updateFields.course = req.body.course ? String(req.body.course).trim() : courseIdStr;
+      }
+    } else if (req.body.course !== undefined && req.body.course !== null) {
       updateFields.course = String(req.body.course).trim();
     }
 

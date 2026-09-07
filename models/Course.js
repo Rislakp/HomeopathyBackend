@@ -20,16 +20,7 @@ const lessonSchema = new mongoose.Schema({
     required: [true, 'Please provide a lesson title'],
     trim: true,
   },
-  lessonType: {
-    type: String,
-    required: [true, 'Please specify a lesson type'],
-    enum: {
-      values: ['Live Class', 'Recorded Video', 'PDF Notes', 'Assignment', 'video', 'pdf', 'link', 'document', 'audio'],
-      message: '{VALUE} is not a valid lesson type',
-    },
-    default: 'PDF Notes'
-  },
-  instructor: {
+  duration: {
     type: String,
     trim: true,
     default: '',
@@ -39,54 +30,29 @@ const lessonSchema = new mongoose.Schema({
     trim: true,
     default: '',
   },
-  durationOrPages: {
+  meetingUrl: {
     type: String,
     trim: true,
     default: '',
   },
-  visibility: {
+  videoUrl: {
     type: String,
     trim: true,
-    default: 'Public',
+    default: '',
+  },
+  pdfNotes: {
+    type: [String],
+    default: [],
+  },
+  assignments: {
+    type: [String],
+    default: [],
   },
   status: {
     type: String,
     enum: ['Published', 'Draft'],
     default: 'Published',
   },
-  scheduleDate: {
-    type: String,
-    trim: true,
-    default: '',
-  },
-  scheduleTime: {
-    type: String,
-    trim: true,
-    default: '',
-  },
-  meetingUrl: {
-    type: String,
-    trim: true,
-    default: '',
-  },
-  mediaUrlOrPath: {
-    type: String,
-    trim: true,
-    default: '',
-  },
-  uploadFileOrLink: {
-    type: String,
-    trim: true,
-    default: '',
-  },
-  attachments: {
-    type: [String],
-    default: [],
-  },
-  videoParts: {
-    type: [videoPartSchema],
-    default: [],
-  }
 }, {
   timestamps: true,
 });
