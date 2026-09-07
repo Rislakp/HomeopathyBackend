@@ -104,15 +104,15 @@ const adminAuthMiddleware = async (req, res, next) => {
     // Verify admin role (must be ADMIN or SUPERADMIN)
     const role = (admin.role || '').toUpperCase().trim();
     // ── DEBUG: Print DB-resolved admin and role comparison ──────────────────
-    console.log('\n╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌');
+    console.log('\n------------------------------------------------------');
     console.log('  [adminAuthMiddleware] DB Lookup + Role Check');
     console.log('  admin found in  :', admin.constructor.modelName || 'unknown collection');
     console.log('  admin._id       :', admin._id);
     console.log('  admin.role (raw):', admin.role, '  ← THIS is what is compared to ADMIN/SUPERADMIN');
     console.log('  role (uppercased):', role);
     console.log('  isActive        :', admin.isActive);
-    console.log('  Passes role check?:', role === \'ADMIN\' || role === \'SUPERADMIN\');
-    console.log('╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌\n');
+    console.log(`  Passes role check?: ${role === 'ADMIN' || role === 'SUPERADMIN'}`);
+    console.log('------------------------------------------------------\n');
     if (role !== 'ADMIN' && role !== 'SUPERADMIN') {
       return res.status(403).json({
         success: false,
