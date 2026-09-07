@@ -47,9 +47,6 @@ const requireAuth = async (req, res, next) => {
     let decoded;
     try {
       decoded = jwt.verify(token, getJwtSecret());
-      console.log('\n--- DECODED JWT PAYLOAD ---');
-      console.log(decoded);
-      console.log('---------------------------\n');
     } catch (err) {
       return res.status(401).json({
         success: false,
@@ -57,6 +54,20 @@ const requireAuth = async (req, res, next) => {
         error: err.message,
       });
     }
+
+    // ── DEBUG: Print the raw decoded JWT payload ───────────────────────────
+    console.log('\n╔══════════════════════════════════════════════════════╗');
+    console.log('║  [verifyToken / requireAuth] DECODED JWT PAYLOAD      ║');
+    console.log('╚══════════════════════════════════════════════════════╝');
+    console.log('  Route            :', req.method, req.originalUrl);
+    console.log('  decoded.id       :', decoded.id);
+    console.log('  decoded.userId   :', decoded.userId);
+    console.log('  decoded.adminId  :', decoded.adminId);
+    console.log('  decoded.studentId:', decoded.studentId);
+    console.log('  decoded.role     :', decoded.role);
+    console.log('  decoded.email    :', decoded.email);
+    console.log('  Full payload     :', JSON.stringify(decoded));
+    console.log('──────────────────────────────────────────────────────\n');
 
     const userId =
       decoded.userId ||
@@ -130,6 +141,17 @@ const requireAuth = async (req, res, next) => {
       role: normalizedRole,
     };
 
+    // ── DEBUG: Print what was resolved from the DB and what req.user looks like ──
+    console.log('\n╔══════════════════════════════════════════════════════╗');
+    console.log('║  [verifyToken / requireAuth] REQ.USER ATTACHED        ║');
+    console.log('╚══════════════════════════════════════════════════════╝');
+    console.log('  DB collection resolved :', foundUser.constructor.modelName || 'unknown');
+    console.log('  req.user.id            :', req.user.id);
+    console.log('  req.user.role          :', req.user.role, '  ← must be "admin" or "superadmin" for admin routes');
+    console.log('  req.user.email         :', req.user.email);
+    console.log('  Full req.user          :', JSON.stringify(req.user));
+    console.log('──────────────────────────────────────────────────────\n');
+
     next();
   } catch (error) {
     console.error('RBAC requireAuth Error:', error);
@@ -159,6 +181,13 @@ const requireRole = (...allowedRoles) => {
 
         try {
           const userRole = (req.user?.role || '').toLowerCase().trim();
+          // ── DEBUG: verifyAdmin role check (req.user populated by requireAuth)
+          console.log('\n╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌');
+          console.log('  [verifyAdmin] Role check (via requireAuth callback)');
+          console.log('  req.user.role (resolved) :', userRole);
+          console.log('  allowedRoles             :', normalizedAllowedRoles);
+          console.log('  Access granted?          :', normalizedAllowedRoles.includes(userRole) || (userRole === 'superadmin' && normalizedAllowedRoles.includes('admin')));
+          console.log('╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌\n');
           if (
             normalizedAllowedRoles.includes(userRole) ||
             (userRole === 'superadmin' && normalizedAllowedRoles.includes('admin'))
@@ -179,6 +208,13 @@ const requireRole = (...allowedRoles) => {
     }
 
     const userRole = (req.user.role || '').toLowerCase().trim();
+    // ── DEBUG: verifyAdmin role check (req.user was pre-populated by a prior middleware)
+    console.log('\n╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌');
+    console.log('  [verifyAdmin] Role check (req.user already populated)');
+    console.log('  req.user.role  :', userRole);
+    console.log('  allowedRoles   :', normalizedAllowedRoles);
+    console.log('  Access granted?:', normalizedAllowedRoles.includes(userRole) || (userRole === 'superadmin' && normalizedAllowedRoles.includes('admin')));
+    console.log('╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌\n');
     if (
       normalizedAllowedRoles.includes(userRole) ||
       (userRole === 'superadmin' && normalizedAllowedRoles.includes('admin'))
