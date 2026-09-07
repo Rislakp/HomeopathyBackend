@@ -43,6 +43,7 @@ const buildUserResponse = (user) => {
     phone: user.phone || user.contactNumber || '',
     contactNumber: user.contactNumber || user.phone || '',
     qualification: user.qualification || '',
+    preferredCourse: user.preferredCourse || '',
     dateOfBirth: user.dateOfBirth || '',
   };
 };
@@ -63,12 +64,14 @@ const registerStudent = async (req, res) => {
       phone,
       contactNumber,
       qualification,
+      preferredCourse,
     } = req.body;
 
     const finalDob = (dateOfBirth || dob || '').toString().trim();
     const finalPhone = (contactNumber || phone || '').toString().trim();
     const finalQualification = (qualification || '').toString().trim();
     const finalName = (name || '').toString().trim();
+    const finalPreferredCourse = (preferredCourse || '').toString().trim();
 
     // -----------------------------
     // VALIDATION
@@ -144,6 +147,7 @@ const registerStudent = async (req, res) => {
       contactNumber: finalPhone,
       phone: finalPhone,
       qualification: finalQualification,
+      preferredCourse: finalPreferredCourse,
     });
 
     // -----------------------------
@@ -152,16 +156,19 @@ const registerStudent = async (req, res) => {
     if (Student) {
       try {
         await Student.create({
+          userId: user._id,
           name: finalName,
           email: cleanEmail,
           dateOfBirth: finalDob,
           contactNumber: finalPhone,
           phone: finalPhone,
           qualification: finalQualification,
-          userId: user._id,
+          preferredCourse: finalPreferredCourse,
+          // course & subscription now have safe defaults in the schema
         });
       } catch (studentErr) {
-        console.warn('Student sync warning:', studentErr.message);
+        // Log but never block registration — Student doc is supplementary
+        console.warn('[registerStudent] Student sync warning:', studentErr.message);
       }
     }
 

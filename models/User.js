@@ -47,6 +47,11 @@ const userSchema = new mongoose.Schema(
       type: String,
       trim: true,
     },
+    preferredCourse: {
+      type: String,
+      trim: true,
+      default: '',
+    },
   },
   {
     timestamps: true,

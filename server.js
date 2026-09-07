@@ -104,6 +104,9 @@ app.use('/api/v1/subscriptions', require('./routes/subscriptionPlanRoutes'));
 const studentFacultyRoutes = require('./routes/studentFacultyRoutes');
 app.use('/api/student/faculty', studentFacultyRoutes);
 app.use('/api/student_new', require('./routes/studentRoutes'));
+// Student self-service profile CRUD (must be registered BEFORE the /api/students admin catch-all below)
+app.use('/api/students/self', require('./routes/studentRoutes'));
+app.use('/api/v1/students/self', require('./routes/studentRoutes'));
 app.use('/api/faculty_new', require('./routes/facultyRoutes'));
 app.use('/api/admin/students', require('./routes/adminStudentRoutes'));
 
@@ -120,8 +123,8 @@ const adminRoutes = require('./routes/adminRoutes');
 app.use('/api/admin/auth', require('./routes/adminAuthRoutes'));
 app.use('/api/v1/admin', adminRoutes);
 app.use('/api/admin', adminRoutes);
-app.use('/api/v1/students', adminRoutes);
-app.use('/api/students', adminRoutes);
+app.use('/api/v1/students', adminRoutes);  // admin student management (list, bulk ops)
+app.use('/api/students', adminRoutes);       // admin student management (list, bulk ops)
 
 
 // MongoDB
