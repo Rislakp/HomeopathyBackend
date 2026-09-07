@@ -13,7 +13,7 @@ const isValidObjectId = (id) => mongoose.Types.ObjectId.isValid(id);
 const serializeLesson = (lesson) => ({
   _id: lesson._id,
   lessonTitle: lesson.lessonTitle || '',
-  lessonType: lesson.lessonType || 'Video',
+  lessonType: lesson.lessonType || 'Recorded Video',
   duration: lesson.duration || '',
   description: lesson.description || '',
   videoUrl: lesson.videoUrl || '',
@@ -26,6 +26,28 @@ const serializeLesson = (lesson) => ({
   createdAt: lesson.createdAt,
   updatedAt: lesson.updatedAt,
 });
+
+/**
+ * Normalise a raw videoParts value that may arrive from the frontend as:
+ *  - a plain URL string        → stored as-is
+ *  - an object { partUrl }     → extract partUrl
+ *  - an object { url }         → extract url
+ *  - an object { videoUrl }    → extract videoUrl
+ * Returns an array of URL strings ready to store in the [String] field.
+ */
+const normalizeVideoParts = (raw) => {
+  if (!Array.isArray(raw)) return [];
+  return raw.reduce((acc, item) => {
+    if (!item) return acc;
+    if (typeof item === 'string' && item.trim()) {
+      acc.push(item.trim());
+    } else if (typeof item === 'object') {
+      const url = item.partUrl || item.url || item.videoUrl || '';
+      if (url && url.trim()) acc.push(url.trim());
+    }
+    return acc;
+  }, []);
+};
 
 /**
  * Serialize a module subdocument, mapping each lesson through serializeLesson.
@@ -397,9 +419,10 @@ exports.addLesson = async (req, res) => {
     const moduleItem = course.modules.id(moduleId);
     if (!moduleItem) return res.status(404).json({ success: false, message: 'Module not found' });
 
-    // Build initial arrays from body fields
+    // Build initial arrays from body fields.
+    // normalizeVideoParts handles bare strings, {partUrl}, {url}, {videoUrl} objects.
     let finalVideoUrl = videoUrl ? videoUrl.trim() : '';
-    let finalVideoParts = Array.isArray(videoParts) ? [...videoParts] : [];
+    let finalVideoParts = normalizeVideoParts(videoParts);
     let finalPdfNotes = Array.isArray(pdfNotes) ? [...pdfNotes] : (typeof pdfNotes === 'string' && pdfNotes ? [pdfNotes] : []);
     let finalAttachments = Array.isArray(attachments) ? [...attachments] : (typeof attachments === 'string' && attachments ? [attachments] : []);
     let finalAssignments = Array.isArray(assignments) ? [...assignments] : (typeof assignments === 'string' && assignments ? [assignments] : []);
@@ -418,7 +441,8 @@ exports.addLesson = async (req, res) => {
         if (f.fieldname === 'videoUrl' || f.fieldname === 'video') {
           finalVideoUrl = filePath;
         } else if (f.fieldname === 'videoParts') {
-          finalVideoParts.push({ partTitle: f.originalname || '', partUrl: filePath });
+          // Store the uploaded file path as a plain URL string
+          finalVideoParts.push(`/uploads/${f.filename}`);
         } else if (f.fieldname === 'pdfNotes' || f.fieldname === 'pdf') {
           finalPdfNotes.push(filePath);
         } else if (f.fieldname === 'attachments' || f.fieldname === 'attachment') {
@@ -437,7 +461,7 @@ exports.addLesson = async (req, res) => {
 
     const newLesson = {
       lessonTitle: lessonTitle.trim(),
-      lessonType: lessonType || 'Video',
+      lessonType: lessonType || 'Recorded Video',
       duration: duration ? duration.trim() : '',
       description: description ? description.trim() : '',
       meetingUrl: meetingUrl ? meetingUrl.trim() : '',
@@ -509,9 +533,10 @@ exports.updateLesson = async (req, res) => {
     if (status !== undefined) targetLesson.status = status;
     if (videoUrl !== undefined) targetLesson.videoUrl = videoUrl;
 
-    // Array fields — replace entirely when provided via body
+    // Array fields — replace entirely when provided via body.
+    // normalizeVideoParts handles bare strings and object shapes from the frontend.
     if (videoParts !== undefined) {
-      targetLesson.videoParts = Array.isArray(videoParts) ? videoParts : [];
+      targetLesson.videoParts = normalizeVideoParts(videoParts);
     }
     if (pdfNotes !== undefined) {
       targetLesson.pdfNotes = Array.isArray(pdfNotes)
@@ -546,7 +571,8 @@ exports.updateLesson = async (req, res) => {
         if (f.fieldname === 'videoUrl' || f.fieldname === 'video') {
           targetLesson.videoUrl = filePath;
         } else if (f.fieldname === 'videoParts') {
-          targetLesson.videoParts.push({ partTitle: f.originalname || '', partUrl: filePath });
+          // Store the uploaded file path as a plain URL string
+          targetLesson.videoParts.push(`/uploads/${f.filename}`);
         } else if (f.fieldname === 'pdfNotes' || f.fieldname === 'pdf') {
           targetLesson.pdfNotes.push(filePath);
         } else if (f.fieldname === 'attachments' || f.fieldname === 'attachment') {
