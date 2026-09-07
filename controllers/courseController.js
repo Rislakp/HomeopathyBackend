@@ -606,29 +606,28 @@ exports.deleteLesson = async (req, res) => {
       return res.status(400).json({ success: false, message: 'Invalid module or lesson ID format' });
     }
 
-    const course = await findCourseByIdOrCustomId(courseId);
-    if (!course) {
-      return res.status(404).json({ success: false, message: 'Course not found' });
-    }
+    const query = {
+      $or: [
+        { courseId: courseId },
+        { _id: mongoose.Types.ObjectId.isValid(courseId) ? courseId : null },
+      ],
+      "modules._id": moduleId
+    };
 
-    const targetModule = course.modules.id(moduleId);
-    if (!targetModule) {
-      return res.status(404).json({ success: false, message: 'Module not found' });
-    }
+    const updatedCourse = await Course.findOneAndUpdate(
+      query,
+      { $pull: { "modules.$.lessons": { _id: lessonId } } },
+      { new: true }
+    );
 
-    const targetLesson = targetModule.lessons.id(lessonId);
-    if (!targetLesson) {
-      return res.status(404).json({ success: false, message: 'Lesson not found' });
+    if (!updatedCourse) {
+      return res.status(404).json({ success: false, message: 'Course, module, or lesson not found' });
     }
-
-    // Use Mongoose pull operator to remove the subdocument
-    targetModule.lessons.pull(lessonId);
-    await course.save();
 
     return res.status(200).json({ 
       success: true, 
       message: 'Lesson deleted successfully', 
-      data: course 
+      data: updatedCourse 
     });
   } catch (error) {
     console.error("Error deleting lesson:", error);
