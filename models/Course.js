@@ -153,6 +153,11 @@ const courseSchema = new mongoose.Schema({
     trim: true,
     default: '',
   },
+  bannerUrl: {
+    type: String,
+    trim: true,
+    default: '',
+  },
   modules: {
     type: [moduleSchema],
     default: [],
@@ -173,7 +178,7 @@ courseSchema.virtual('description')
   .set(function(val) { this.shortDescription = val; });
 
 // Virtual aliases for banner/thumbnail fields -> thumbnail
-const bannerAliasFields = ['banner', 'bannerUrl', 'thumbnailUrl', 'image', 'imageUrl', 'courseBanner'];
+const bannerAliasFields = ['banner', 'thumbnailUrl', 'image', 'imageUrl', 'courseBanner'];
 bannerAliasFields.forEach((field) => {
   courseSchema.virtual(field)
     .get(function() { return this.thumbnail; })
