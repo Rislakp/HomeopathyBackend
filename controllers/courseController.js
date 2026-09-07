@@ -593,25 +593,32 @@ exports.deleteLesson = async (req, res) => {
       return res.status(400).json({ success: false, message: 'Invalid module or lesson ID format' });
     }
 
-    const query = {
-      $or: [
-        { courseId: courseId },
-        { _id: mongoose.Types.ObjectId.isValid(courseId) ? courseId : null },
-      ],
-    };
-
-    const updatedCourse = await Course.findOneAndUpdate(
-      query,
-      { $pull: { "modules.$[mod].lessons": { _id: lessonId } } },
-      { arrayFilters: [{ "mod._id": moduleId }], new: true }
-    );
-
-    if (!updatedCourse) {
-      return res.status(404).json({ success: false, message: 'Course, Module, or Lesson not found' });
+    const course = await findCourseByIdOrCustomId(courseId);
+    if (!course) {
+      return res.status(404).json({ success: false, message: 'Course not found' });
     }
 
-    res.status(200).json({ success: true, message: 'Lesson deleted successfully', data: updatedCourse });
+    const targetModule = course.modules.id(moduleId);
+    if (!targetModule) {
+      return res.status(404).json({ success: false, message: 'Module not found' });
+    }
+
+    const targetLesson = targetModule.lessons.id(lessonId);
+    if (!targetLesson) {
+      return res.status(404).json({ success: false, message: 'Lesson not found' });
+    }
+
+    // Use Mongoose pull operator to remove the subdocument
+    targetModule.lessons.pull(lessonId);
+    await course.save();
+
+    return res.status(200).json({ 
+      success: true, 
+      message: 'Lesson deleted successfully', 
+      data: course 
+    });
   } catch (error) {
-    res.status(500).json({ success: false, message: 'Failed to delete lesson', error: error.message });
+    console.error("Error deleting lesson:", error);
+    return res.status(500).json({ success: false, message: 'Failed to delete lesson', error: error.message });
   }
 };
