@@ -980,7 +980,41 @@ async function updateAdminStudent(req, res) {
     }
 
     if (req.body.status !== undefined && req.body.status !== null) {
-      updateFields.status = String(req.body.status).trim();
+      // Normalise to the exact enum casing the schema requires:
+      //   ['Active', 'Inactive', 'Trial', 'Expired']
+      const STATUS_ENUM = ['Active', 'Inactive', 'Trial', 'Expired'];
+      const rawStatus = String(req.body.status).trim();
+      const normStatus = STATUS_ENUM.find(
+        (s) => s.toLowerCase() === rawStatus.toLowerCase()
+      );
+      if (!normStatus) {
+        return res.status(400).json({
+          success: false,
+          message: `Invalid status value "${rawStatus}". Allowed values: ${STATUS_ENUM.join(', ')}`,
+          code: 'INVALID_STATUS',
+        });
+      }
+      updateFields.status = normStatus;
+    }
+
+    if (req.body.accountStatus !== undefined && req.body.accountStatus !== null) {
+      // Normalise to the exact enum casing the schema requires:
+      //   ['Pending', 'Approved', 'Rejected', 'Suspended']
+      const ACCOUNT_STATUS_ENUM = ['Pending', 'Approved', 'Rejected', 'Suspended'];
+      const rawAccStatus = String(req.body.accountStatus).trim();
+      const normAccStatus = ACCOUNT_STATUS_ENUM.find(
+        (s) => s.toLowerCase() === rawAccStatus.toLowerCase()
+      );
+      if (!normAccStatus) {
+        return res.status(400).json({
+          success: false,
+          message: `Invalid accountStatus value "${rawAccStatus}". Allowed values: ${ACCOUNT_STATUS_ENUM.join(', ')}`,
+          code: 'INVALID_ACCOUNT_STATUS',
+        });
+      }
+      updateFields.accountStatus = normAccStatus;
+      // Keep isApproved in sync when accountStatus changes via the generic update
+      updateFields.isApproved = normAccStatus === 'Approved';
     }
 
     if (req.body.profileImage !== undefined && req.body.profileImage !== null) {
