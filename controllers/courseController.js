@@ -272,24 +272,25 @@ exports.deleteModule = async (req, res) => {
       return res.status(400).json({ success: false, message: 'Invalid module ID format' });
     }
 
-    const query = {
-      $or: [
-        { courseId: courseId },
-        { _id: mongoose.Types.ObjectId.isValid(courseId) ? courseId : null },
-      ],
-    };
-
-    const updatedCourse = await Course.findOneAndUpdate(
-      query,
-      { $pull: { modules: { _id: moduleId } } },
-      { new: true }
-    );
-
-    if (!updatedCourse) {
-      return res.status(404).json({ success: false, message: 'Course or Module not found' });
+    const course = await findCourseByIdOrCustomId(courseId);
+    if (!course) {
+      return res.status(404).json({ success: false, message: 'Course not found' });
     }
 
-    return res.status(200).json({ success: true, message: 'Module deleted successfully', data: updatedCourse });
+    const moduleItem = course.modules.id(moduleId);
+    if (!moduleItem) {
+      return res.status(404).json({ success: false, message: 'Module not found' });
+    }
+
+    // Use pull to remove the module and save the course, ensuring we return the fully updated course object
+    course.modules.pull(moduleId);
+    await course.save();
+
+    return res.status(200).json({ 
+      success: true, 
+      message: 'Module deleted successfully', 
+      data: course 
+    });
   } catch (error) {
     return res.status(500).json({ success: false, message: 'Failed to delete module', error: error.message });
   }
