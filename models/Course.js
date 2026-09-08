@@ -1,17 +1,11 @@
 const mongoose = require('mongoose');
 const Counter = require('./Counter');
 
-// Subdocument Schema for Video Parts (for multi-part recorded videos)
-const videoPartSchema = new mongoose.Schema({
-  partTitle: {
-    type: String,
-    trim: true,
-  },
-  partUrl: {
-    type: String,
-    trim: true,
-  }
-});
+// Shared subdocument schema for any file/resource (video part, PDF note, attachment)
+const resourceSchema = new mongoose.Schema({
+  title: { type: String, trim: true, default: '' },
+  url:   { type: String, trim: true, default: '' },
+}, { _id: false });
 
 // Subdocument Schema for Lessons
 const lessonSchema = new mongoose.Schema({
@@ -52,21 +46,9 @@ const lessonSchema = new mongoose.Schema({
     trim: true,
     default: '',
   },
-  // videoParts stores individual video-part URLs as plain strings.
-  // The controller normalises incoming values (objects or bare strings)
-  // into URL strings before assigning them here, avoiding cast errors.
-  videoParts: [{
-    title: String,
-    url: String
-  }],
-  pdfNotes: [{
-    title: String,
-    url: String
-  }],
-  attachments: [{
-    title: String,
-    url: String
-  }],
+  videoParts:   { type: [resourceSchema], default: [] },
+  pdfNotes:     { type: [resourceSchema], default: [] },
+  attachments:  { type: [resourceSchema], default: [] },
   status: {
     type: String,
     enum: ['Published', 'Draft'],

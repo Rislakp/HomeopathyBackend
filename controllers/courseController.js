@@ -5,18 +5,54 @@ const path = require('path');
 
 const isValidObjectId = (id) => mongoose.Types.ObjectId.isValid(id);
 
+/**
+ * Normalise a single raw resource item (string or object) into the
+ * { title, url } shape expected by resourceSchema.
+ */
+const toResourceObj = (item) => {
+  if (!item) return null;
+  if (typeof item === 'string' && item.trim()) {
+    return { title: item.trim(), url: item.trim() };
+  }
+  if (typeof item === 'object' && !Array.isArray(item)) {
+    return {
+      title: item.title || item.name || item.partTitle || '',
+      url:   item.url   || item.partUrl || item.fileUrl || '',
+    };
+  }
+  return null;
+};
+
+/**
+ * Parse an incoming field value into an array of resourceSchema objects.
+ * Handles: undefined/null → [], array of strings, array of objects,
+ * a single string (JSON-encoded array or bare filename), a single object.
+ */
 const parseFileItems = (items) => {
   if (!items) return [];
-  if (Array.isArray(items)) return [...items];
-  if (typeof items === 'object') return [items];
+
+  // Already an array — normalise every element
+  if (Array.isArray(items)) {
+    return items.map(toResourceObj).filter(Boolean);
+  }
+
+  // Single string — try JSON-parse first, then treat as bare filename
   if (typeof items === 'string') {
     try {
       const parsed = JSON.parse(items);
-      return Array.isArray(parsed) ? parsed : [parsed];
+      const arr = Array.isArray(parsed) ? parsed : [parsed];
+      return arr.map(toResourceObj).filter(Boolean);
     } catch (e) {
-      return [{ title: items, url: items }];
+      return [{ title: items.trim(), url: items.trim() }];
     }
   }
+
+  // Single plain object
+  if (typeof items === 'object') {
+    const obj = toResourceObj(items);
+    return obj ? [obj] : [];
+  }
+
   return [];
 };
 
