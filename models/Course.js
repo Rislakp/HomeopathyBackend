@@ -20,6 +20,18 @@ const lessonSchema = new mongoose.Schema({
     required: [true, 'Please provide a lesson title'],
     trim: true,
   },
+  lessonType: {
+    type: String,
+    // Covers all values the Flutter admin frontend may send.
+    // Short aliases (Video, PDF, Live, Assignment) are kept for
+    // backward compatibility with any existing records.
+    enum: [
+      'Recorded Video', 'Live Class', 'PDF Notes', 'Assignment',
+      'Video', 'PDF', 'Live',
+      'video', 'pdf', 'link', 'document', 'audio',
+    ],
+    default: 'Recorded Video',
+  },
   duration: {
     type: String,
     trim: true,
@@ -40,6 +52,13 @@ const lessonSchema = new mongoose.Schema({
     trim: true,
     default: '',
   },
+  // videoParts stores individual video-part URLs as plain strings.
+  // The controller normalises incoming values (objects or bare strings)
+  // into URL strings before assigning them here, avoiding cast errors.
+  videoParts: {
+    type: [String],
+    default: [],
+  },
   pdfNotes: {
     type: [{
       name: String,
@@ -47,6 +66,10 @@ const lessonSchema = new mongoose.Schema({
       url: String,
       category: String
     }],
+    default: [],
+  },
+  attachments: {
+    type: [String],
     default: [],
   },
   assignments: {
