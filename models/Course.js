@@ -32,7 +32,7 @@ const lessonSchema = new mongoose.Schema({
     ],
     default: 'Recorded Video',
   },
-  duration: {
+  durationOrPages: {
     type: String,
     trim: true,
     default: '',
@@ -55,32 +55,18 @@ const lessonSchema = new mongoose.Schema({
   // videoParts stores individual video-part URLs as plain strings.
   // The controller normalises incoming values (objects or bare strings)
   // into URL strings before assigning them here, avoiding cast errors.
-  videoParts: {
-    type: [String],
-    default: [],
-  },
-  pdfNotes: {
-    type: [{
-      name: String,
-      size: String,
-      url: String,
-      category: String
-    }],
-    default: [],
-  },
-  attachments: {
-    type: [String],
-    default: [],
-  },
-  assignments: {
-    type: [{
-      name: String,
-      size: String,
-      url: String,
-      category: String
-    }],
-    default: [],
-  },
+  videoParts: [{
+    title: String,
+    url: String
+  }],
+  pdfNotes: [{
+    title: String,
+    url: String
+  }],
+  attachments: [{
+    title: String,
+    url: String
+  }],
   status: {
     type: String,
     enum: ['Published', 'Draft'],
