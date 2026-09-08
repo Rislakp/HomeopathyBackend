@@ -57,9 +57,42 @@ const parseFileItems = (items) => {
 };
 
 /**
+ * Sanitize a multi-file array (videoParts, pdfNotes, attachments).
+ * Converts every element — including legacy string-indexed objects like
+ * {"0":"v","1":"i"} produced by older Mongoose versions — into clean
+ * { title: string, url: string } objects. Invalid items are dropped.
+ */
+const sanitizeFiles = (files) => {
+  if (!Array.isArray(files)) return [];
+  return files
+    .map((f) => {
+      // Already a Mongoose subdoc or plain object with expected keys
+      if (f && typeof f === 'object' && !Array.isArray(f)) {
+        // Detect legacy string-indexed objects: all own keys are digit strings
+        const keys = Object.keys(f).filter(k => k !== '_id');
+        const isStringIndexed = keys.length > 0 && keys.every(k => /^\d+$/.test(k));
+        if (isStringIndexed) {
+          // Re-assemble the original string value from its characters
+          const str = keys
+            .sort((a, b) => Number(a) - Number(b))
+            .map(k => f[k])
+            .join('');
+          return str ? { title: str, url: str } : null;
+        }
+        // Normal object — pass through toResourceObj for key normalisation
+        return toResourceObj(f);
+      }
+      return toResourceObj(f);
+    })
+    .filter(Boolean);
+};
+
+/**
  * Serialize a lesson subdocument into a plain object that always
  * includes every multi-file array so the frontend can safely iterate
  * without defensive null checks on each field.
+ * sanitizeFiles() is applied to every array field so that legacy or
+ * malformed subdocuments never reach the client.
  */
 const serializeLesson = (lesson) => ({
   _id: lesson._id,
@@ -68,9 +101,9 @@ const serializeLesson = (lesson) => ({
   durationOrPages: lesson.durationOrPages || '',
   description: lesson.description || '',
   videoUrl: lesson.videoUrl || '',
-  videoParts: Array.isArray(lesson.videoParts) ? lesson.videoParts : [],
-  pdfNotes: Array.isArray(lesson.pdfNotes) ? lesson.pdfNotes : [],
-  attachments: Array.isArray(lesson.attachments) ? lesson.attachments : [],
+  videoParts:  sanitizeFiles(lesson.videoParts),
+  pdfNotes:    sanitizeFiles(lesson.pdfNotes),
+  attachments: sanitizeFiles(lesson.attachments),
   meetingUrl: lesson.meetingUrl || '',
   status: lesson.status || 'Published',
   createdAt: lesson.createdAt,
