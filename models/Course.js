@@ -41,11 +41,21 @@ const lessonSchema = new mongoose.Schema({
     default: '',
   },
   pdfNotes: {
-    type: [String],
+    type: [{
+      name: String,
+      size: String,
+      url: String,
+      category: String
+    }],
     default: [],
   },
   assignments: {
-    type: [String],
+    type: [{
+      name: String,
+      size: String,
+      url: String,
+      category: String
+    }],
     default: [],
   },
   status: {

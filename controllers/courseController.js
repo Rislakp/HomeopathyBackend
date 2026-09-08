@@ -5,6 +5,21 @@ const path = require('path');
 
 const isValidObjectId = (id) => mongoose.Types.ObjectId.isValid(id);
 
+const parseFileItems = (items) => {
+  if (!items) return [];
+  if (Array.isArray(items)) return [...items];
+  if (typeof items === 'object') return [items];
+  if (typeof items === 'string') {
+    try {
+      const parsed = JSON.parse(items);
+      return Array.isArray(parsed) ? parsed : [parsed];
+    } catch (e) {
+      return [{ url: items }];
+    }
+  }
+  return [];
+};
+
 // Helper to handle querying by custom courseId or _id
 const getQueryById = (id) => {
   if (mongoose.Types.ObjectId.isValid(id)) {
@@ -353,8 +368,8 @@ exports.addLesson = async (req, res) => {
 
     // File processing
     let finalVideoUrl = videoUrl ? videoUrl.trim() : '';
-    let finalPdfNotes = Array.isArray(pdfNotes) ? [...pdfNotes] : (typeof pdfNotes === 'string' && pdfNotes ? [pdfNotes] : []);
-    let finalAssignments = Array.isArray(assignments) ? [...assignments] : (typeof assignments === 'string' && assignments ? [assignments] : []);
+    let finalPdfNotes = parseFileItems(pdfNotes);
+    let finalAssignments = parseFileItems(assignments);
 
     const filesList = [];
     if (req.file) filesList.push(req.file);
@@ -366,13 +381,14 @@ exports.addLesson = async (req, res) => {
     filesList.forEach((f) => {
       if (f && f.filename) {
         const path = `/uploads/${f.filename}`;
+        const fileObj = { url: path, name: f.originalname || f.filename, size: f.size ? f.size.toString() : '' };
         if (f.fieldname === 'videoUrl' || f.fieldname === 'video') finalVideoUrl = path;
-        else if (f.fieldname === 'pdfNotes' || f.fieldname === 'pdf') finalPdfNotes.push(path);
-        else if (f.fieldname === 'assignments' || f.fieldname === 'assignment') finalAssignments.push(path);
+        else if (f.fieldname === 'pdfNotes' || f.fieldname === 'pdf') finalPdfNotes.push(fileObj);
+        else if (f.fieldname === 'assignments' || f.fieldname === 'assignment') finalAssignments.push(fileObj);
         // Fallback parsing based on mimetype if fieldname is generic
         else if (f.mimetype && f.mimetype.startsWith('video/')) finalVideoUrl = path;
-        else if (f.mimetype === 'application/pdf') finalPdfNotes.push(path);
-        else finalAssignments.push(path);
+        else if (f.mimetype === 'application/pdf') finalPdfNotes.push(fileObj);
+        else finalAssignments.push(fileObj);
       }
     });
 
@@ -454,12 +470,10 @@ exports.updateLesson = async (req, res) => {
       targetLesson.videoUrl = videoUrl;
     }
     if (pdfNotes !== undefined) {
-      const arr = Array.isArray(pdfNotes) ? pdfNotes : (typeof pdfNotes === 'string' && pdfNotes ? [pdfNotes] : []);
-      targetLesson.pdfNotes = arr;
+      targetLesson.pdfNotes = parseFileItems(pdfNotes);
     }
     if (assignments !== undefined) {
-      const arr = Array.isArray(assignments) ? assignments : (typeof assignments === 'string' && assignments ? [assignments] : []);
-      targetLesson.assignments = arr;
+      targetLesson.assignments = parseFileItems(assignments);
     }
 
     // -----------------------------------------------------------------
@@ -475,18 +489,19 @@ exports.updateLesson = async (req, res) => {
     filesList.forEach((f) => {
       if (f && f.filename) {
         const path = `/uploads/${f.filename}`;
+        const fileObj = { url: path, name: f.originalname || f.filename, size: f.size ? f.size.toString() : '' };
         if (f.fieldname === 'videoUrl' || f.fieldname === 'video') {
           targetLesson.videoUrl = path;
         } else if (f.fieldname === 'pdfNotes' || f.fieldname === 'pdf') {
-          targetLesson.pdfNotes.push(path);
+          targetLesson.pdfNotes.push(fileObj);
         } else if (f.fieldname === 'assignments' || f.fieldname === 'assignment') {
-          targetLesson.assignments.push(path);
+          targetLesson.assignments.push(fileObj);
         } else if (f.mimetype && f.mimetype.startsWith('video/')) {
           targetLesson.videoUrl = path;
         } else if (f.mimetype === 'application/pdf') {
-          targetLesson.pdfNotes.push(path);
+          targetLesson.pdfNotes.push(fileObj);
         } else {
-          targetLesson.assignments.push(path);
+          targetLesson.assignments.push(fileObj);
         }
       }
     });
@@ -539,10 +554,16 @@ exports.deleteLesson = async (req, res) => {
       filesToDelete.push(targetLesson.videoUrl);
     }
     if (Array.isArray(targetLesson.pdfNotes)) {
-      targetLesson.pdfNotes.forEach(f => { if (f && f.startsWith('/uploads/')) filesToDelete.push(f); });
+      targetLesson.pdfNotes.forEach(f => {
+        const fileUrl = typeof f === 'object' ? f.url : f;
+        if (fileUrl && fileUrl.startsWith('/uploads/')) filesToDelete.push(fileUrl);
+      });
     }
     if (Array.isArray(targetLesson.assignments)) {
-      targetLesson.assignments.forEach(f => { if (f && f.startsWith('/uploads/')) filesToDelete.push(f); });
+      targetLesson.assignments.forEach(f => {
+        const fileUrl = typeof f === 'object' ? f.url : f;
+        if (fileUrl && fileUrl.startsWith('/uploads/')) filesToDelete.push(fileUrl);
+      });
     }
 
     // 2. Perform the atomic pull from the nested array as requested
