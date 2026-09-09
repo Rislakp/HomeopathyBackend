@@ -78,29 +78,39 @@ async function getAdminStudents(req, res) {
       matchConditions.status = new RegExp(`^${statusStr}$`, 'i');
     }
 
-    // Course Filter (course_id or course)
+    // Course Filter (course_id or course). Students may store either the
+    // course title or custom courseId, so resolve both forms before matching.
     const courseFilter = req.query.course_id || req.query.course;
     if (courseFilter && typeof courseFilter === 'string' && courseFilter.trim()) {
       const cleanCourse = courseFilter.trim();
       const escapedCourse = cleanCourse.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
       const courseRegex = new RegExp(escapedCourse, 'i');
 
+      const matchingCourses = await Course.find({
+        $or: [
+          { courseId: courseRegex },
+          { courseTitle: courseRegex },
+          ...(mongoose.Types.ObjectId.isValid(cleanCourse) ? [{ _id: cleanCourse }] : [])
+        ]
+      }).select('courseId courseTitle').lean();
+
+      const courseValues = [cleanCourse];
+      matchingCourses.forEach((matchedCourse) => {
+        if (matchedCourse.courseId) courseValues.push(matchedCourse.courseId);
+        if (matchedCourse.courseTitle) courseValues.push(matchedCourse.courseTitle);
+      });
+      const uniqueCourseValues = [...new Set(courseValues)];
+
       if (matchConditions.$or) {
         matchConditions.$and = [
           { $or: matchConditions.$or },
           {
-            $or: [
-              { course: courseRegex },
-              { 'courseObj.courseId': courseRegex },
-              { 'courseObj.courseTitle': courseRegex }
-            ]
+            $or: uniqueCourseValues.map((value) => ({ course: value }))
           }
         ];
         delete matchConditions.$or;
       } else {
-        matchConditions.$or = [
-          { course: courseRegex }
-        ];
+        matchConditions.course = { $in: uniqueCourseValues };
       }
     }
 
@@ -930,6 +940,43 @@ async function deleteAdminStudent(req, res) {
  * PUT or PATCH /api/v1/admin/students/:id (also /api/admin/students/:id, /api/students/:id)
  * Updates student details in MongoDB using Mongoose findByIdAndUpdate with runValidators.
  */
+async function resolveCourseAssignment(courseId, course) {
+  const rawCourseId = courseId !== undefined && courseId !== null
+    ? String(courseId).trim()
+    : '';
+  const rawCourse = course !== undefined && course !== null
+    ? String(course).trim()
+    : '';
+  const selectedCourse = rawCourseId || rawCourse;
+
+  if (!selectedCourse) return null;
+
+  const courseQuery = [
+    { courseId: selectedCourse },
+    { courseTitle: selectedCourse }
+  ];
+  if (mongoose.Types.ObjectId.isValid(selectedCourse)) {
+    courseQuery.push({ _id: selectedCourse });
+  }
+
+  const matchedCourse = await Course.findOne({ $or: courseQuery })
+    .select('courseId courseTitle')
+    .lean();
+
+  if (courseId !== undefined && courseId !== null && !matchedCourse) {
+    const error = new Error('Assigned course not found in database');
+    error.statusCode = 404;
+    throw error;
+  }
+
+  return matchedCourse
+    ? {
+        courseId: matchedCourse.courseId || matchedCourse._id.toString(),
+        course: matchedCourse.courseTitle
+      }
+    : { course: rawCourse };
+}
+
 async function updateAdminStudent(req, res) {
   try {
     const { id } = req.params;
@@ -971,21 +1018,13 @@ async function updateAdminStudent(req, res) {
       updateFields.qualification = String(req.body.qualification).trim();
     }
 
-    if (req.body.courseId !== undefined && req.body.courseId !== null) {
-      const courseIdStr = String(req.body.courseId).trim();
-      if (mongoose.Types.ObjectId.isValid(courseIdStr)) {
-        const foundCourse = await Course.findById(courseIdStr);
-        if (!foundCourse) {
-          return res.status(404).json({ success: false, message: 'Assigned course not found in database' });
-        }
-        updateFields.courseId = courseIdStr;
-        updateFields.course = foundCourse.courseTitle || foundCourse.courseId || 'General';
-      } else {
-        updateFields.courseId = courseIdStr;
-        updateFields.course = req.body.course ? String(req.body.course).trim() : courseIdStr;
-      }
-    } else if (req.body.course !== undefined && req.body.course !== null) {
-      updateFields.course = String(req.body.course).trim();
+    if (
+      (req.body.courseId !== undefined && req.body.courseId !== null) ||
+      (req.body.course !== undefined && req.body.course !== null)
+    ) {
+      const courseAssignment = await resolveCourseAssignment(req.body.courseId, req.body.course);
+      if (courseAssignment.courseId) updateFields.courseId = courseAssignment.courseId;
+      updateFields.course = courseAssignment.course;
     }
 
     if (req.body.subscription !== undefined && req.body.subscription !== null) {
@@ -995,7 +1034,7 @@ async function updateAdminStudent(req, res) {
     if (req.body.status !== undefined && req.body.status !== null) {
       // Normalise to the exact enum casing the schema requires:
       //   ['Active', 'Inactive', 'Trial', 'Expired']
-      const STATUS_ENUM = ['Active', 'Inactive', 'Trial', 'Expired'];
+      const STATUS_ENUM = ['Pending', 'Active', 'Inactive', 'Trial', 'Expired'];
       const rawStatus = String(req.body.status).trim();
       const normStatus = STATUS_ENUM.find(
         (s) => s.toLowerCase() === rawStatus.toLowerCase()
@@ -1092,6 +1131,10 @@ async function updateAdminStudent(req, res) {
       data: updatedStudent
     });
   } catch (error) {
+    if (error.statusCode) {
+      return res.status(error.statusCode).json({ success: false, message: error.message });
+    }
+
     // 400 Bad Request for Mongoose schema validation failure
     if (error.name === 'ValidationError') {
       console.warn('Student update validation error:', error.message);
@@ -1127,7 +1170,18 @@ async function updateAdminStudent(req, res) {
  */
 async function createAdminStudent(req, res) {
   try {
-    const { name, email, phone, dateOfBirth, qualification, course, subscription, status, password } = req.body;
+    const {
+      name,
+      email,
+      phone,
+      dateOfBirth,
+      qualification,
+      course,
+      courseId,
+      subscription,
+      status,
+      password
+    } = req.body;
 
     if (!name || !email) {
       return res.status(400).json({
@@ -1162,6 +1216,20 @@ async function createAdminStudent(req, res) {
       });
     }
 
+    const courseAssignment = await resolveCourseAssignment(courseId, course);
+    const statusValues = ['Pending', 'Active', 'Inactive', 'Trial', 'Expired'];
+    const selectedStatus = status ? String(status).trim() : 'Active';
+    const normalizedStatus = statusValues.find(
+      (value) => value.toLowerCase() === selectedStatus.toLowerCase()
+    );
+    if (!normalizedStatus) {
+      return res.status(400).json({
+        success: false,
+        message: `Invalid status value "${selectedStatus}". Allowed values: ${statusValues.join(', ')}`,
+        code: 'INVALID_STATUS'
+      });
+    }
+
     const student = await Student.create({
       userId: linkedUser ? linkedUser._id : null,
       name: String(name).trim(),
@@ -1170,9 +1238,9 @@ async function createAdminStudent(req, res) {
       contactNumber: phone ? String(phone).trim() : '',
       dateOfBirth: dateOfBirth ? String(dateOfBirth).trim() : '',
       qualification: qualification ? String(qualification).trim() : '',
-      course: course ? String(course).trim() : 'General',
+      ...(courseAssignment || { course: 'General' }),
       subscription: subscription ? String(subscription).trim() : 'Free',
-      status: status ? String(status).trim() : 'Active',
+      status: normalizedStatus,
       joinedDate: new Date(),
     });
 
@@ -1182,6 +1250,10 @@ async function createAdminStudent(req, res) {
       data: student,
     });
   } catch (error) {
+    if (error.statusCode) {
+      return res.status(error.statusCode).json({ success: false, message: error.message });
+    }
+
     console.error('Error creating student:', error);
     return res.status(500).json({
       success: false,

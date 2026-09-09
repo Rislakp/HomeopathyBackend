@@ -43,7 +43,8 @@ const buildUserResponse = (user, studentDoc = null) => {
     phone: user.phone || user.contactNumber || '',
     contactNumber: user.contactNumber || user.phone || '',
     qualification: user.qualification || '',
-    preferredCourse: user.preferredCourse || '',
+    preferredCourse: user.preferredCourse || user.course || '',
+    course: (studentDoc && studentDoc.course) || user.course || user.preferredCourse || '',
     dateOfBirth: user.dateOfBirth || '',
   };
 
@@ -77,6 +78,8 @@ const registerStudent = async (req, res) => {
       phone,
       contactNumber,
       qualification,
+      course,
+      selectedCourse,
       preferredCourse,
     } = req.body;
 
@@ -84,7 +87,7 @@ const registerStudent = async (req, res) => {
     const finalPhone = (contactNumber || phone || '').toString().trim();
     const finalQualification = (qualification || '').toString().trim();
     const finalName = (name || '').toString().trim();
-    const finalPreferredCourse = (preferredCourse || '').toString().trim();
+    const finalCourse = (course || selectedCourse || preferredCourse || '').toString().trim();
 
     // -----------------------------
     // VALIDATION
@@ -115,6 +118,10 @@ const registerStudent = async (req, res) => {
 
     if (!finalQualification) {
       errors.push('Qualification is required');
+    }
+
+    if ((course !== undefined || selectedCourse !== undefined || preferredCourse !== undefined) && !finalCourse) {
+      errors.push('Course cannot be empty');
     }
 
     if (errors.length > 0) {
@@ -160,15 +167,17 @@ const registerStudent = async (req, res) => {
       contactNumber: finalPhone,
       phone: finalPhone,
       qualification: finalQualification,
-      preferredCourse: finalPreferredCourse,
+      preferredCourse: finalCourse,
+      course: finalCourse,
     });
 
     // -----------------------------
     // SYNC STUDENT MODEL IF AVAILABLE
     // -----------------------------
+    let studentDoc = null;
     if (Student) {
       try {
-        await Student.create({
+        studentDoc = await Student.create({
           userId: user._id,
           name: finalName,
           email: cleanEmail,
@@ -176,7 +185,8 @@ const registerStudent = async (req, res) => {
           contactNumber: finalPhone,
           phone: finalPhone,
           qualification: finalQualification,
-          preferredCourse: finalPreferredCourse,
+          preferredCourse: finalCourse,
+          course: finalCourse,
           // course & subscription now have safe defaults in the schema
         });
       } catch (studentErr) {
@@ -195,7 +205,7 @@ const registerStudent = async (req, res) => {
       message: 'Student registered successfully',
       token,
       role: 'student',
-      user: buildUserResponse(user),
+      user: buildUserResponse(user, studentDoc),
     });
   } catch (error) {
     console.error('Student Registration Error:', error);
