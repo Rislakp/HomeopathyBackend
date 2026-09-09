@@ -1,5 +1,6 @@
 const DemoVideo = require('../models/DemoVideo');
 const mongoose = require('mongoose');
+const { deleteCloudinaryByUrl } = require('../config/cloudinary');
 
 // @desc    Create a new demo video
 // @route   POST /api/v1/demo-videos
@@ -8,9 +9,9 @@ exports.createDemoVideo = async (req, res) => {
   try {
     const { title, description, duration, courseId } = req.body;
 
-    // Accept either an uploaded file or a plain URL string from the request body
+    // Accept either an uploaded file or a plain URL string from the request body.
     const videoUrl = req.file
-      ? `/uploads/${req.file.filename}`
+      ? (req.file.secure_url || req.file.url || req.file.path || (req.file.filename ? `/uploads/${req.file.filename}` : ''))
       : (req.body.videoUrl || '').trim();
 
     if (!title) {
@@ -137,9 +138,9 @@ exports.updateDemoVideo = async (req, res) => {
 
     const updateData = { ...req.body };
 
-    // If a new video file was uploaded, overwrite videoUrl with the file path
+    // If a new video file was uploaded, overwrite videoUrl with the uploaded public URL.
     if (req.file) {
-      updateData.videoUrl = `/uploads/${req.file.filename}`;
+      updateData.videoUrl = req.file.secure_url || req.file.url || req.file.path || (req.file.filename ? `/uploads/${req.file.filename}` : '');
     }
 
     if (updateData.courseId !== undefined) {
@@ -190,6 +191,10 @@ exports.deleteDemoVideo = async (req, res) => {
 
     if (!deletedVideo) {
       return res.status(404).json({ success: false, message: 'Demo video not found' });
+    }
+
+    if (deletedVideo.videoUrl && deletedVideo.videoUrl.includes('cloudinary.com')) {
+      await deleteCloudinaryByUrl(deletedVideo.videoUrl);
     }
 
     return res.status(200).json({

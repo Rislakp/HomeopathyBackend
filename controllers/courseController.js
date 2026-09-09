@@ -2,6 +2,7 @@ const Course = require('../models/Course');
 const mongoose = require('mongoose');
 const fs = require('fs');
 const path = require('path');
+const { deleteCloudinaryByUrl } = require('../config/cloudinary');
 
 const isValidObjectId = (id) => mongoose.Types.ObjectId.isValid(id);
 
@@ -499,12 +500,12 @@ exports.addLesson = async (req, res) => {
     }
 
     filesList.forEach((f) => {
-      if (f && f.filename) {
-        const path = `/uploads/${f.filename}`;
-        const fileObj = { url: path, title: f.originalname || f.filename };
-        
+      if (f && (f.filename || f.originalname || f.url || f.path)) {
+        const fileUrl = f.secure_url || f.url || f.path || (f.filename ? `/uploads/${f.filename}` : '');
+        const fileObj = { url: fileUrl, title: f.originalname || f.filename };
+
         if (f.fieldname === 'videoUrl' || f.fieldname === 'video') {
-          finalVideoUrl = path;
+          finalVideoUrl = fileUrl;
         } else if (f.fieldname === 'videoParts') {
           finalVideoParts.push(fileObj);
         } else if (f.fieldname === 'pdfNotes' || f.fieldname === 'pdf') {
@@ -512,7 +513,7 @@ exports.addLesson = async (req, res) => {
         } else if (f.fieldname === 'attachments' || f.fieldname === 'attachment' || f.fieldname === 'assignments' || f.fieldname === 'assignment') {
           finalAttachments.push(fileObj);
         } else if (f.mimetype && f.mimetype.startsWith('video/')) {
-          finalVideoUrl = path;
+          finalVideoUrl = fileUrl;
         } else if (f.mimetype === 'application/pdf') {
           finalPdfNotes.push(fileObj);
         } else {
@@ -616,12 +617,12 @@ exports.updateLesson = async (req, res) => {
     }
 
     filesList.forEach((f) => {
-      if (f && f.filename) {
-        const path = `/uploads/${f.filename}`;
-        const fileObj = { url: path, title: f.originalname || f.filename };
-        
+      if (f && (f.filename || f.originalname || f.url || f.path)) {
+        const fileUrl = f.secure_url || f.url || f.path || (f.filename ? `/uploads/${f.filename}` : '');
+        const fileObj = { url: fileUrl, title: f.originalname || f.filename };
+
         if (f.fieldname === 'videoUrl' || f.fieldname === 'video') {
-          targetLesson.videoUrl = path;
+          targetLesson.videoUrl = fileUrl;
         } else if (f.fieldname === 'videoParts') {
           targetLesson.videoParts.push(fileObj);
         } else if (f.fieldname === 'pdfNotes' || f.fieldname === 'pdf') {
@@ -629,7 +630,7 @@ exports.updateLesson = async (req, res) => {
         } else if (f.fieldname === 'attachments' || f.fieldname === 'attachment' || f.fieldname === 'assignments' || f.fieldname === 'assignment') {
           targetLesson.attachments.push(fileObj);
         } else if (f.mimetype && f.mimetype.startsWith('video/')) {
-          targetLesson.videoUrl = path;
+          targetLesson.videoUrl = fileUrl;
         } else if (f.mimetype === 'application/pdf') {
           targetLesson.pdfNotes.push(fileObj);
         } else {
@@ -680,21 +681,26 @@ exports.deleteLesson = async (req, res) => {
       return res.status(404).json({ success: false, message: 'Lesson not found' });
     }
 
-    // Collect local paths associated with this lesson
+    // Collect local paths or Cloudinary URLs associated with this lesson.
     const filesToDelete = [];
     if (targetLesson.videoUrl && targetLesson.videoUrl.startsWith('/uploads/')) {
+      filesToDelete.push(targetLesson.videoUrl);
+    }
+    if (targetLesson.videoUrl && targetLesson.videoUrl.includes('cloudinary.com')) {
       filesToDelete.push(targetLesson.videoUrl);
     }
     if (Array.isArray(targetLesson.pdfNotes)) {
       targetLesson.pdfNotes.forEach(f => {
         const fileUrl = typeof f === 'object' ? f.url : f;
         if (fileUrl && fileUrl.startsWith('/uploads/')) filesToDelete.push(fileUrl);
+        if (fileUrl && fileUrl.includes('cloudinary.com')) filesToDelete.push(fileUrl);
       });
     }
     if (Array.isArray(targetLesson.attachments)) {
       targetLesson.attachments.forEach(f => {
         const fileUrl = typeof f === 'object' ? f.url : f;
         if (fileUrl && fileUrl.startsWith('/uploads/')) filesToDelete.push(fileUrl);
+        if (fileUrl && fileUrl.includes('cloudinary.com')) filesToDelete.push(fileUrl);
       });
     }
 
@@ -709,16 +715,24 @@ exports.deleteLesson = async (req, res) => {
       return res.status(404).json({ success: false, message: 'Course, module, or lesson not found' });
     }
 
-    // 3. Clean up the physical files gracefully (doesn't block response and ignores missing files)
-    filesToDelete.forEach((filePath) => {
-      // Remove leading slash to correctly join path from project root
-      const absolutePath = path.join(__dirname, '..', filePath.replace(/^\//, ''));
-      fs.unlink(absolutePath, (err) => {
-        if (err && err.code !== 'ENOENT') {
-          console.error(`Failed to delete local file ${absolutePath}:`, err);
+    // 3. Clean up the physical files gracefully (doesn't block response and ignores missing files).
+    await Promise.all(
+      filesToDelete.map(async (filePath) => {
+        if (filePath && filePath.includes('cloudinary.com')) {
+          await deleteCloudinaryByUrl(filePath);
+          return;
         }
-      });
-    });
+
+        if (filePath && filePath.startsWith('/uploads/')) {
+          const absolutePath = path.join(__dirname, '..', filePath.replace(/^\//, ''));
+          fs.unlink(absolutePath, (err) => {
+            if (err && err.code !== 'ENOENT') {
+              console.error(`Failed to delete local file ${absolutePath}:`, err);
+            }
+          });
+        }
+      })
+    );
 
     const serializedCourse = {
       ...updatedCourse.toObject(),

@@ -45,6 +45,7 @@ router.delete('/:courseId/modules/:moduleId', requireAdmin, courseController.del
 // ==========================================
 
 const upload = require('../middleware/upload');
+const { processUploadsToCloudinary } = upload;
 
 // Helper wrapper for optional file uploads with error handling
 const handleUpload = (req, res, next) => {
@@ -53,7 +54,8 @@ const handleUpload = (req, res, next) => {
       console.error('File Upload Error:', err);
       return res.status(400).json({ success: false, message: err.message || 'File upload error' });
     }
-    next();
+
+    return processUploadsToCloudinary(req, res, next);
   });
 };
 
