@@ -87,12 +87,12 @@ const courseSchema = new mongoose.Schema({
   },
   shortDescription: {
     type: String,
-    required: [true, 'Please add a short description'],
+    default: '',
     trim: true,
   },
   duration: {
     type: String,
-    required: [true, 'Please specify a duration'],
+    default: '',
     trim: true,
   },
   instructor: {
@@ -143,6 +143,11 @@ const courseSchema = new mongoose.Schema({
 courseSchema.virtual('description')
   .get(function() { return this.shortDescription; })
   .set(function(val) { this.shortDescription = val; });
+
+// API-friendly aliases for the legacy courseTitle/shortDescription storage.
+courseSchema.virtual('title')
+  .get(function() { return this.courseTitle; })
+  .set(function(val) { this.courseTitle = val; });
 
 // Virtual aliases for banner/thumbnail fields -> thumbnail
 const bannerAliasFields = ['banner', 'thumbnailUrl', 'image', 'imageUrl', 'courseBanner'];

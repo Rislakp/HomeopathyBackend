@@ -58,6 +58,11 @@ const studentSchema = new mongoose.Schema({
     trim: true,
     default: '',          // was required: true — caused every signup sync to fail silently
   },
+  courseRef: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'Course',
+    default: null,
+  },
   subscription: {
     type: String,
     trim: true,

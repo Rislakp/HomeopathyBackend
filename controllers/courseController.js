@@ -220,7 +220,7 @@ exports.createCourse = async (req, res) => {
       modules,
     } = req.body;
 
-    const actualShortDescription = shortDescription || description || courseDescription;
+    const actualShortDescription = shortDescription || description || courseDescription || '';
     const actualThumbnail =
       thumbnail || banner || bannerUrl || thumbnailUrl || image || imageUrl || courseBanner || '';
 
@@ -270,6 +270,15 @@ exports.updateCourse = async (req, res) => {
     const updateData = { ...req.body };
 
     delete updateData.courseId; // Prevent mutating auto-generated courseId
+
+    if (updateData.title !== undefined) {
+      updateData.courseTitle = updateData.title;
+      delete updateData.title;
+    }
+    if (updateData.description !== undefined) {
+      updateData.shortDescription = updateData.description;
+      delete updateData.description;
+    }
 
     if (!updateData.shortDescription) {
       if (updateData.description) updateData.shortDescription = updateData.description;

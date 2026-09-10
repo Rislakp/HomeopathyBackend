@@ -150,12 +150,13 @@ async function getAdminStudents(req, res) {
       {
         $lookup: {
           from: 'courses',
-          let: { studentCourse: '$course' },
+          let: { studentCourse: '$course', studentCourseRef: '$courseRef' },
           pipeline: [
             {
               $match: {
                 $expr: {
                   $or: [
+                    { $eq: ['$_id', '$$studentCourseRef'] },
                     { $eq: ['$courseId', '$$studentCourse'] },
                     { $eq: ['$courseTitle', '$$studentCourse'] }
                   ]
@@ -495,12 +496,13 @@ async function getAdminStudentById(req, res) {
       {
         $lookup: {
           from: 'courses',
-          let: { studentCourse: '$course' },
+          let: { studentCourse: '$course', studentCourseRef: '$courseRef' },
           pipeline: [
             {
               $match: {
                 $expr: {
                   $or: [
+                    { $eq: ['$_id', '$$studentCourseRef'] },
                     { $eq: ['$courseId', '$$studentCourse'] },
                     { $eq: ['$courseTitle', '$$studentCourse'] }
                   ]
@@ -960,7 +962,7 @@ async function resolveCourseAssignment(courseId, course) {
   }
 
   const matchedCourse = await Course.findOne({ $or: courseQuery })
-    .select('courseId courseTitle')
+    .select('_id courseId courseTitle')
     .lean();
 
   if (courseId !== undefined && courseId !== null && !matchedCourse) {
@@ -972,7 +974,8 @@ async function resolveCourseAssignment(courseId, course) {
   return matchedCourse
     ? {
         courseId: matchedCourse.courseId || matchedCourse._id.toString(),
-        course: matchedCourse.courseTitle
+        course: matchedCourse.courseTitle,
+        courseRef: matchedCourse._id
       }
     : { course: rawCourse };
 }
@@ -1024,6 +1027,7 @@ async function updateAdminStudent(req, res) {
     ) {
       const courseAssignment = await resolveCourseAssignment(req.body.courseId, req.body.course);
       if (courseAssignment.courseId) updateFields.courseId = courseAssignment.courseId;
+      if (courseAssignment.courseRef) updateFields.courseRef = courseAssignment.courseRef;
       updateFields.course = courseAssignment.course;
     }
 

@@ -436,11 +436,27 @@ async function getAllGrandMocks(req, res) {
       .sort({ createdAt: -1 })
       .lean();
 
+    const TestResult = mongoose.models.TestResult || require('../src/common/models/testResult.model');
+    const examIds = exams.map(e => e._id);
+
+    // Aggregate unique students per exam
+    const attendanceCounts = await TestResult.aggregate([
+      { $match: { examId: { $in: examIds } } },
+      { $group: { _id: { examId: '$examId', studentId: '$studentId' } } },
+      { $group: { _id: '$_id.examId', studentsAttended: { $sum: 1 } } }
+    ]);
+
+    const countMap = {};
+    attendanceCounts.forEach(item => {
+      countMap[item._id.toString()] = item.studentsAttended;
+    });
+
     const formattedExams = exams.map((exam) => ({
       ...exam,
       negativeMark: exam.negativeMark !== undefined && exam.negativeMark !== null
         ? exam.negativeMark
-        : (exam.negativeMarkPenalty ?? 0)
+        : (exam.negativeMarkPenalty ?? 0),
+      studentsAttended: countMap[exam._id.toString()] || 0
     }));
 
     return res.status(200).json({
