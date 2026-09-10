@@ -1,5 +1,6 @@
 const jwt = require('jsonwebtoken');
 const User = require('../models/User');
+const Course = require('../models/Course');
 let Student;
 try {
   Student = require('../models/Student');
@@ -134,6 +135,18 @@ const registerStudent = async (req, res) => {
 
     const cleanEmail = email.trim().toLowerCase();
 
+    let enrolledCourse = null;
+    if (finalCourse) {
+      const courseQuery = [
+        { courseId: finalCourse },
+        { courseTitle: finalCourse },
+      ];
+      if (require('mongoose').Types.ObjectId.isValid(finalCourse)) {
+        courseQuery.push({ _id: finalCourse });
+      }
+      enrolledCourse = await Course.findOne({ $or: courseQuery }).select('_id courseId courseTitle');
+    }
+
     // -----------------------------
     // CHECK DUPLICATE USER (EMAIL / PHONE)
     // -----------------------------
@@ -187,6 +200,7 @@ const registerStudent = async (req, res) => {
           qualification: finalQualification,
           preferredCourse: finalCourse,
           course: finalCourse,
+          courseRef: enrolledCourse ? enrolledCourse._id : null,
           // course & subscription now have safe defaults in the schema
         });
       } catch (studentErr) {
