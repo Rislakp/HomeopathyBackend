@@ -4,7 +4,7 @@ const fs = require('fs');
 const path = require('path');
 const { deleteCloudinaryByUrl } = require('../config/cloudinary');
 
-const isValidObjectId = (id) => mongoose.Types.ObjectId.isValid(id);
+const isValidObjectId = (id) => mongoose.Types.ObjectId.isValid(id); 
 
 /**
  * Normalise a single raw resource item (string or object) into the
