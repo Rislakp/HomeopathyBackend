@@ -23,7 +23,14 @@ const diskStorage = multer.diskStorage({
   },
 });
 
-// Cloudinary storage configuration when Cloudinary credentials are provided.
+// Supported file extensions
+const ALLOWED_VIDEO_FORMATS = ['mp4', 'mov', 'avi', 'mkv', 'webm', 'flv', 'wmv', 'm4v'];
+const ALLOWED_IMAGE_FORMATS = ['jpg', 'jpeg', 'png', 'webp', 'gif', 'svg'];
+const ALLOWED_DOC_FORMATS = ['pdf', 'doc', 'docx', 'ppt', 'pptx', 'xls', 'xlsx', 'txt', 'csv', 'zip', 'rar'];
+const ALL_ALLOWED_FORMATS = [...ALLOWED_VIDEO_FORMATS, ...ALLOWED_IMAGE_FORMATS, ...ALLOWED_DOC_FORMATS];
+const MAX_UPLOAD_SIZE = 100 * 1024 * 1024;
+
+// Cloudinary storage configuration
 let cloudinaryStorage;
 if (isCloudinaryConfigured()) {
   try {
@@ -35,17 +42,25 @@ if (isCloudinaryConfigured()) {
 
         const mimetype = (file.mimetype || '').toLowerCase();
         const fieldname = (file.fieldname || '').toLowerCase();
+        const ext = path.extname(file.originalname || '').toLowerCase().replace('.', '');
 
-        if (mimetype.startsWith('video/') || fieldname.includes('video')) {
+        // 1. Video files -> homeopathy-media/videos
+        if (mimetype.startsWith('video/') || fieldname.includes('video') || ALLOWED_VIDEO_FORMATS.includes(ext)) {
           folder = 'homeopathy-media/videos';
           resource_type = 'video';
-        } else if (mimetype === 'application/pdf' || fieldname.includes('pdf')) {
+        }
+        // 2. PDF notes -> homeopathy-media/pdf-notes
+        else if (mimetype === 'application/pdf' || fieldname.includes('pdf') || ext === 'pdf') {
           folder = 'homeopathy-media/pdf-notes';
           resource_type = 'auto';
-        } else if (mimetype.startsWith('image/')) {
+        }
+        // 3. Images -> homeopathy-media/images
+        else if (mimetype.startsWith('image/') || ALLOWED_IMAGE_FORMATS.includes(ext)) {
           folder = 'homeopathy-media/images';
           resource_type = 'image';
-        } else {
+        }
+        // 4. Attachments & Docs -> homeopathy-media/attachments
+        else {
           folder = 'homeopathy-media/attachments';
           resource_type = 'auto';
         }
@@ -66,23 +81,52 @@ if (isCloudinaryConfigured()) {
   }
 }
 
-// Comprehensive file filter for video parts, PDF notes, documents, and media
+// File filter with informative error messages
 const fileFilter = (req, file, cb) => {
-  const allowedExtensions = /pdf|doc|docx|ppt|pptx|xls|xlsx|txt|csv|rtf|odt|jpg|jpeg|png|webp|gif|svg|mp4|avi|mov|mkv|flv|wmv|webm|m4v|mp3|wav|ogg|m4a|aac|zip|rar|7z/i;
   const ext = path.extname(file.originalname || '').toLowerCase().replace('.', '');
 
-  if (!ext || allowedExtensions.test(ext)) {
+  if (!ext || ALL_ALLOWED_FORMATS.includes(ext)) {
     cb(null, true);
   } else {
-    cb(new Error(`File type .${ext} is not allowed for lesson materials`));
+    cb(new Error(`File format .${ext} is not supported. Allowed formats include: ${ALL_ALLOWED_FORMATS.join(', ')}`));
   }
 };
 
 const upload = multer({
   storage: cloudinaryStorage || (isCloudinaryConfigured() ? multer.memoryStorage() : diskStorage),
-  limits: { fileSize: 500 * 1024 * 1024 }, // 500MB limit for high-quality video & documents
+  limits: {
+    fileSize: MAX_UPLOAD_SIZE,
+  },
   fileFilter,
 });
+
+const handleUploadError = (err, req, res, next) => {
+  if (!err) return next();
+
+  if (err.code === 'LIMIT_FILE_SIZE') {
+    return res.status(413).json({
+      success: false,
+      message: 'File size exceeds the allowed limit (100MB). Please select a smaller file.',
+      error: err.message,
+    });
+  }
+
+  const cloudinaryMessage = err.http_code || err.name === 'CloudinaryError' || err.message?.toLowerCase().includes('cloudinary');
+  if (cloudinaryMessage) {
+    const status = Number(err.http_code) >= 400 && Number(err.http_code) < 500 ? Number(err.http_code) : 400;
+    return res.status(status).json({
+      success: false,
+      message: 'Cloudinary rejected the upload. Check the file format and size limits.',
+      error: err.message || 'Cloudinary upload failed',
+    });
+  }
+
+  return res.status(400).json({
+    success: false,
+    message: err.message || 'File upload error',
+    error: err.message,
+  });
+};
 
 /**
  * Middleware ensuring uploaded files have normalized secure URLs.
@@ -117,12 +161,26 @@ const processUploadsToCloudinary = async (req, res, next) => {
       // Case 2: In-memory buffer from memoryStorage -> stream to Cloudinary
       if (file.buffer && isCloudinaryConfigured()) {
         let folder = 'homeopathy-media';
-        const mimetype = (file.mimetype || '').toLowerCase();
-        if (mimetype.startsWith('video/')) folder = 'homeopathy-media/videos';
-        else if (mimetype === 'application/pdf') folder = 'homeopathy-media/pdf-notes';
-        else folder = 'homeopathy-media/attachments';
+        let resource_type = 'auto';
 
-        const uploaded = await uploadBufferToCloudinary(file, folder);
+        const mimetype = (file.mimetype || '').toLowerCase();
+        const ext = path.extname(file.originalname || '').toLowerCase().replace('.', '');
+
+        if (mimetype.startsWith('video/') || ALLOWED_VIDEO_FORMATS.includes(ext)) {
+          folder = 'homeopathy-media/videos';
+          resource_type = 'video';
+        } else if (mimetype === 'application/pdf' || ext === 'pdf') {
+          folder = 'homeopathy-media/pdf-notes';
+          resource_type = 'auto';
+        } else if (mimetype.startsWith('image/')) {
+          folder = 'homeopathy-media/images';
+          resource_type = 'image';
+        } else {
+          folder = 'homeopathy-media/attachments';
+          resource_type = 'auto';
+        }
+
+        const uploaded = await uploadBufferToCloudinary(file, folder, { resource_type });
         file.path = uploaded.secure_url;
         file.url = uploaded.secure_url;
         file.secure_url = uploaded.secure_url;
@@ -145,13 +203,20 @@ const processUploadsToCloudinary = async (req, res, next) => {
     console.error('Upload processing error:', error);
     return res.status(400).json({
       success: false,
-      message: 'File upload processing failed',
+      message: 'Cloudinary upload failed',
       error: error.message,
     });
   }
 };
 
 upload.processUploadsToCloudinary = processUploadsToCloudinary;
+upload.ALLOWED_VIDEO_FORMATS = ALLOWED_VIDEO_FORMATS;
+upload.ALL_ALLOWED_FORMATS = ALL_ALLOWED_FORMATS;
+upload.MAX_UPLOAD_SIZE = MAX_UPLOAD_SIZE;
+upload.handleUploadError = handleUploadError;
+
 module.exports = upload;
 module.exports.processUploadsToCloudinary = processUploadsToCloudinary;
+module.exports.handleUploadError = handleUploadError;
+
 

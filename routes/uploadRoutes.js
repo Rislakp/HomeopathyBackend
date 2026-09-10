@@ -2,20 +2,18 @@ const express = require('express');
 const router = express.Router();
 const uploadController = require('../controllers/uploadController');
 const upload = require('../middleware/upload');
-const { processUploadsToCloudinary } = upload;
+const { handleUploadError, processUploadsToCloudinary } = upload;
 
 // Flexible wrapper that accepts multiple files under 'files', 'images', 'file', 'image', or any field name
 const handleFileUpload = (req, res, next) => {
   upload.any()(req, res, (err) => {
     if (err) {
-      return res.status(400).json({
-        success: false,
-        message: err.message || 'File upload error',
-      });
+      return handleUploadError(err, req, res, next);
     }
     return processUploadsToCloudinary(req, res, next);
   });
 };
+
 
 // GET /api/media or GET /api/upload - List stored Cloudinary assets
 router.get('/', uploadController.getMediaAssets);

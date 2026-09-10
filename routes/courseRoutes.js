@@ -45,19 +45,19 @@ router.delete('/:courseId/modules/:moduleId', requireAdmin, courseController.del
 // ==========================================
 
 const upload = require('../middleware/upload');
-const { processUploadsToCloudinary } = upload;
+const { handleUploadError, processUploadsToCloudinary } = upload;
 
 // Helper wrapper for optional file uploads with error handling
 const handleUpload = (req, res, next) => {
   upload.any()(req, res, (err) => {
     if (err) {
-      console.error('File Upload Error:', err);
-      return res.status(400).json({ success: false, message: err.message || 'File upload error' });
+      return handleUploadError(err, req, res, next);
     }
 
     return processUploadsToCloudinary(req, res, next);
   });
 };
+
 
 // GET /api/courses/:courseId/modules/:moduleId/lessons - Get all lessons for a module
 router.get('/:courseId/modules/:moduleId/lessons', courseController.getLessonsByModule);
@@ -87,4 +87,4 @@ router.post(
   recordingController.uploadRecording
 );
 
-module.exports = router;
+module.exports = router;
