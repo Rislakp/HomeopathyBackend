@@ -71,4 +71,20 @@ router.put('/:courseId/modules/:moduleId/lessons/:lessonId', requireAdmin, handl
 // DELETE /api/courses/:courseId/modules/:moduleId/lessons/:lessonId - Delete lesson from module
 router.delete('/:courseId/modules/:moduleId/lessons/:lessonId', requireAdmin, courseController.deleteLesson);
 
-module.exports = router;
+// ==========================================
+// LIVE RECORDINGS SUBDOCUMENT CRUD
+// ==========================================
+const recordingController = require('../controllers/recordingController');
+
+// GET /api/courses/live-records
+router.get('/live-records', recordingController.getLiveRecords);
+
+// POST /api/courses/:courseId/modules/:moduleId/lessons/:lessonId/recordings
+router.post(
+  '/:courseId/modules/:moduleId/lessons/:lessonId/recordings',
+  requireAdmin,
+  handleUpload,
+  recordingController.uploadRecording
+);
+
+module.exports = router;

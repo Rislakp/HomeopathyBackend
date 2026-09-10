@@ -101,6 +101,9 @@ app.use('/api/admin/courses', require('./routes/adminCourseRoutes'));
 app.use('/api/v1/demo-videos', require('./routes/demoVideoRoutes'));
 app.use('/api/subscriptions', require('./routes/subscriptionPlanRoutes'));
 app.use('/api/v1/subscriptions', require('./routes/subscriptionPlanRoutes'));
+app.use('/api', require('./routes/recordingRoutes'));
+app.use('/api/v1', require('./routes/recordingRoutes'));
+
 
 const studentFacultyRoutes = require('./routes/studentFacultyRoutes');
 app.use('/api/student/faculty', studentFacultyRoutes);
