@@ -86,8 +86,9 @@ app.use((req, res, next) => {
   next();
 });
 
-// Serve static files from the uploads directory
+// Serve static files from the uploads and public directory
 app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
+app.use(express.static(path.join(__dirname, 'public')));
 
 // Routes
 const authRoutes = require('./routes/authRoutes');
@@ -96,6 +97,11 @@ app.use('/api/auth', authRoutes);
 app.use('/api/v1/auth', authRoutes);
 app.use('/auth', authRoutes);
 
+app.use('/api/upload', require('./routes/uploadRoutes'));
+app.use('/api/v1/upload', require('./routes/uploadRoutes'));
+app.use('/api/media', require('./routes/uploadRoutes'));
+app.use('/api/uploads', require('./routes/uploadRoutes'));
+
 app.use('/api/courses', require('./routes/courseRoutes'));
 app.use('/api/admin/courses', require('./routes/adminCourseRoutes'));
 app.use('/api/v1/demo-videos', require('./routes/demoVideoRoutes'));
@@ -103,6 +109,7 @@ app.use('/api/subscriptions', require('./routes/subscriptionPlanRoutes'));
 app.use('/api/v1/subscriptions', require('./routes/subscriptionPlanRoutes'));
 app.use('/api', require('./routes/recordingRoutes'));
 app.use('/api/v1', require('./routes/recordingRoutes'));
+
 
 
 const studentFacultyRoutes = require('./routes/studentFacultyRoutes');
