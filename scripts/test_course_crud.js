@@ -8,7 +8,10 @@ async function testCourseModel() {
     instructor: 'Dr. A. K. Sharma',
     price: 4999,
     courseDescription: 'Comprehensive overview of polycrest remedies, potencies, and clinical posology.',
+    shortDescription: 'Comprehensive overview of polycrest remedies, potencies, and clinical posology.',
+    duration: '10 hours',
     status: 'Published',
+
     modules: [
       {
         moduleName: 'Module 1 — Introduction to Homeopathy',

@@ -12,13 +12,40 @@ const isValidObjectId = (id) => mongoose.Types.ObjectId.isValid(id);
  */
 const toResourceObj = (item) => {
   if (!item) return null;
-  if (typeof item === 'string' && item.trim()) {
-    return { title: item.trim(), url: item.trim() };
+  if (typeof item === 'string') {
+    const trimmed = item.trim();
+    if (!trimmed) return null;
+    let title = trimmed;
+    try {
+      if (trimmed.startsWith('http')) {
+        const parsed = new URL(trimmed);
+        const name = path.basename(parsed.pathname);
+        title = name ? decodeURIComponent(name) : trimmed;
+      }
+    } catch (_) {
+      title = trimmed;
+    }
+    return { title, url: trimmed };
   }
   if (typeof item === 'object' && !Array.isArray(item)) {
+    const url = item.url || item.secure_url || item.path || item.partUrl || item.fileUrl || item.link || '';
+    let title = item.title || item.name || item.partTitle || item.originalname || item.filename || '';
+    if (!title && url) {
+      try {
+        if (typeof url === 'string' && url.startsWith('http')) {
+          const parsed = new URL(url);
+          const name = path.basename(parsed.pathname);
+          title = name ? decodeURIComponent(name) : 'Resource';
+        } else if (typeof url === 'string') {
+          title = path.basename(url) || 'Resource';
+        }
+      } catch (_) {
+        title = 'Resource';
+      }
+    }
     return {
-      title: item.title || item.name || item.partTitle || '',
-      url:   item.url   || item.partUrl || item.fileUrl || '',
+      title: (title || '').trim(),
+      url: (url || '').trim(),
     };
   }
   return null;
@@ -34,17 +61,23 @@ const parseFileItems = (items) => {
 
   // Already an array — normalise every element
   if (Array.isArray(items)) {
-    return items.map(toResourceObj).filter(Boolean);
+    return items.map(toResourceObj).filter((item) => item && (item.url || item.title));
   }
 
-  // Single string — try JSON-parse first, then treat as bare filename
+  // Single string — try JSON-parse first, then treat as bare URL/filename or comma-separated
   if (typeof items === 'string') {
+    const trimmed = items.trim();
+    if (!trimmed) return [];
     try {
-      const parsed = JSON.parse(items);
+      const parsed = JSON.parse(trimmed);
       const arr = Array.isArray(parsed) ? parsed : [parsed];
-      return arr.map(toResourceObj).filter(Boolean);
+      return arr.map(toResourceObj).filter((item) => item && (item.url || item.title));
     } catch (e) {
-      return [{ title: items.trim(), url: items.trim() }];
+      if (trimmed.includes(',') && trimmed.startsWith('http')) {
+        return trimmed.split(',').map((s) => toResourceObj(s.trim())).filter(Boolean);
+      }
+      const obj = toResourceObj(trimmed);
+      return obj ? [obj] : [];
     }
   }
 
@@ -56,6 +89,7 @@ const parseFileItems = (items) => {
 
   return [];
 };
+
 
 /**
  * Sanitize a multi-file array (videoParts, pdfNotes, attachments).
@@ -463,18 +497,26 @@ exports.addLesson = async (req, res) => {
 
     const {
       lessonTitle,
+      title,
       lessonType,
+      type,
       durationOrPages,
+      duration,
+      pages,
       description,
       meetingUrl,
       videoUrl,
       videoParts,
       pdfNotes,
       attachments,
-      status
+      uploadFileOrLink,
+      fileOrLink,
+      lessonFile,
+      status,
     } = req.body;
 
-    if (!lessonTitle || !lessonTitle.trim()) {
+    const actualLessonTitle = (lessonTitle || title || '').trim();
+    if (!actualLessonTitle) {
       return res.status(400).json({ success: false, message: 'lessonTitle is required' });
     }
 
@@ -484,14 +526,36 @@ exports.addLesson = async (req, res) => {
     const moduleItem = course.modules.id(moduleId);
     if (!moduleItem) return res.status(404).json({ success: false, message: 'Module not found' });
 
-    // Build initial arrays from body fields.
-    // normalizeVideoParts handles bare strings, {partUrl}, {url}, {videoUrl} objects.
-    let finalVideoUrl = videoUrl ? videoUrl.trim() : '';
+    const actualLessonType = (lessonType || type || 'Recorded Video').trim();
+    let actualMeetingUrl = (meetingUrl || '').trim();
+    let finalVideoUrl = (videoUrl || '').trim();
     let finalVideoParts = parseFileItems(videoParts);
     let finalPdfNotes = parseFileItems(pdfNotes);
     let finalAttachments = parseFileItems(attachments);
 
-    // Map uploaded files to the correct field based on fieldname / mimetype
+    // Map legacy single link/file fields if provided
+    const singleLink = (uploadFileOrLink || fileOrLink || lessonFile || '').trim();
+    if (singleLink) {
+      const lowerType = actualLessonType.toLowerCase();
+      if (lowerType.includes('video') || lowerType === 'recorded video') {
+        if (!finalVideoUrl) finalVideoUrl = singleLink;
+        if (!finalVideoParts.some((p) => p.url === singleLink)) {
+          finalVideoParts.push({ title: actualLessonTitle || 'Video Part 1', url: singleLink });
+        }
+      } else if (lowerType.includes('pdf')) {
+        if (!finalPdfNotes.some((p) => p.url === singleLink)) {
+          finalPdfNotes.push({ title: actualLessonTitle || 'PDF Notes', url: singleLink });
+        }
+      } else if (lowerType.includes('live') || lowerType === 'link') {
+        if (!actualMeetingUrl) actualMeetingUrl = singleLink;
+      } else {
+        if (!finalAttachments.some((p) => p.url === singleLink)) {
+          finalAttachments.push({ title: actualLessonTitle || 'Attachment', url: singleLink });
+        }
+      }
+    }
+
+    // Map uploaded multipart files (streamed to Cloudinary or disk)
     const filesList = [];
     if (req.file) filesList.push(req.file);
     if (req.files) {
@@ -500,21 +564,38 @@ exports.addLesson = async (req, res) => {
     }
 
     filesList.forEach((f) => {
-      if (f && (f.filename || f.originalname || f.url || f.path)) {
+      if (f && (f.secure_url || f.url || f.path || f.filename)) {
         const fileUrl = f.secure_url || f.url || f.path || (f.filename ? `/uploads/${f.filename}` : '');
-        const fileObj = { url: fileUrl, title: f.originalname || f.filename };
+        const fileTitle = f.originalname || f.filename || 'Resource';
+        const fileObj = { title: fileTitle, url: fileUrl };
+        const field = (f.fieldname || '').toLowerCase();
+        const mime = (f.mimetype || '').toLowerCase();
 
-        if (f.fieldname === 'videoUrl' || f.fieldname === 'video') {
+        if (field === 'videourl' || field === 'video' || field === 'videofile') {
           finalVideoUrl = fileUrl;
-        } else if (f.fieldname === 'videoParts') {
+          if (!finalVideoParts.some((p) => p.url === fileUrl)) {
+            finalVideoParts.push(fileObj);
+          }
+        } else if (field === 'videoparts' || field === 'videopart' || field.startsWith('videoparts') || field === 'videos') {
           finalVideoParts.push(fileObj);
-        } else if (f.fieldname === 'pdfNotes' || f.fieldname === 'pdf') {
+          if (!finalVideoUrl) finalVideoUrl = fileUrl;
+        } else if (field === 'pdfnotes' || field === 'pdf' || field === 'pdffile' || field.startsWith('pdfnotes') || field === 'pdfs') {
           finalPdfNotes.push(fileObj);
-        } else if (f.fieldname === 'attachments' || f.fieldname === 'attachment' || f.fieldname === 'assignments' || f.fieldname === 'assignment') {
+        } else if (field === 'attachments' || field === 'attachment' || field === 'assignments' || field === 'assignment' || field.startsWith('attachments')) {
           finalAttachments.push(fileObj);
-        } else if (f.mimetype && f.mimetype.startsWith('video/')) {
+        } else if (field === 'file' || field === 'lessonfile' || field === 'uploadfileorlink') {
+          if (mime.startsWith('video/')) {
+            finalVideoUrl = fileUrl;
+            if (!finalVideoParts.some((p) => p.url === fileUrl)) finalVideoParts.push(fileObj);
+          } else if (mime === 'application/pdf') {
+            finalPdfNotes.push(fileObj);
+          } else {
+            finalAttachments.push(fileObj);
+          }
+        } else if (mime.startsWith('video/')) {
           finalVideoUrl = fileUrl;
-        } else if (f.mimetype === 'application/pdf') {
+          if (!finalVideoParts.some((p) => p.url === fileUrl)) finalVideoParts.push(fileObj);
+        } else if (mime === 'application/pdf') {
           finalPdfNotes.push(fileObj);
         } else {
           finalAttachments.push(fileObj);
@@ -522,30 +603,39 @@ exports.addLesson = async (req, res) => {
       }
     });
 
+    // Auto-sync videoUrl with videoParts if single video was provided
+    if (finalVideoUrl && finalVideoParts.length === 0) {
+      finalVideoParts.push({ title: actualLessonTitle || 'Video Part 1', url: finalVideoUrl });
+    } else if (!finalVideoUrl && finalVideoParts.length > 0) {
+      finalVideoUrl = finalVideoParts[0].url;
+    }
+
     const newLesson = {
-      lessonTitle: lessonTitle.trim(),
-      lessonType: lessonType || 'Recorded Video',
-      durationOrPages: durationOrPages ? durationOrPages.trim() : '',
-      description: description ? description.trim() : '',
-      meetingUrl: meetingUrl ? meetingUrl.trim() : '',
+      lessonTitle: actualLessonTitle,
+      lessonType: actualLessonType,
+      durationOrPages: (durationOrPages || duration || pages || '').trim(),
+      description: (description || '').trim(),
+      meetingUrl: actualMeetingUrl,
       videoUrl: finalVideoUrl,
       videoParts: finalVideoParts,
       pdfNotes: finalPdfNotes,
       attachments: finalAttachments,
-      status: status || 'Published',
+      status: (status || 'Published').trim(),
     };
 
     moduleItem.lessons.push(newLesson);
     await course.save();
 
     const saved = moduleItem.lessons[moduleItem.lessons.length - 1];
-    res.status(201).json({
+    return res.status(201).json({
       success: true,
       message: 'Lesson added successfully',
       data: serializeLesson(saved),
+      lesson: serializeLesson(saved),
     });
   } catch (error) {
-    res.status(500).json({ success: false, message: 'Failed to add lesson', error: error.message });
+    console.error('Failed to add lesson:', error);
+    return res.status(500).json({ success: false, message: 'Failed to add lesson', error: error.message });
   }
 };
 
@@ -559,15 +649,22 @@ exports.updateLesson = async (req, res) => {
 
     const {
       lessonTitle,
+      title,
       lessonType,
+      type,
       durationOrPages,
+      duration,
+      pages,
       description,
       meetingUrl,
       videoUrl,
       videoParts,
       pdfNotes,
       attachments,
-      status
+      uploadFileOrLink,
+      fileOrLink,
+      lessonFile,
+      status,
     } = req.body;
 
     const course = await findCourseByIdOrCustomId(courseId);
@@ -585,16 +682,22 @@ exports.updateLesson = async (req, res) => {
       return res.status(404).json({ success: false, message: 'Lesson not found' });
     }
 
-    // Cleanly map scalar fields with undefined guards
-    if (lessonTitle !== undefined) targetLesson.lessonTitle = lessonTitle;
-    if (lessonType !== undefined) targetLesson.lessonType = lessonType;
-    if (durationOrPages !== undefined) targetLesson.durationOrPages = durationOrPages;
-    if (description !== undefined) targetLesson.description = description;
-    if (meetingUrl !== undefined) targetLesson.meetingUrl = meetingUrl;
-    if (status !== undefined) targetLesson.status = status;
-    if (videoUrl !== undefined) targetLesson.videoUrl = videoUrl;
+    // Update scalar fields when defined
+    if (lessonTitle !== undefined || title !== undefined) {
+      targetLesson.lessonTitle = (lessonTitle || title || '').trim();
+    }
+    if (lessonType !== undefined || type !== undefined) {
+      targetLesson.lessonType = (lessonType || type || '').trim();
+    }
+    if (durationOrPages !== undefined || duration !== undefined || pages !== undefined) {
+      targetLesson.durationOrPages = (durationOrPages || duration || pages || '').trim();
+    }
+    if (description !== undefined) targetLesson.description = description.trim();
+    if (meetingUrl !== undefined) targetLesson.meetingUrl = meetingUrl.trim();
+    if (status !== undefined) targetLesson.status = status.trim();
+    if (videoUrl !== undefined) targetLesson.videoUrl = videoUrl.trim();
 
-    // Array fields — replace entirely when provided via body.
+    // Array fields — replace when provided in body
     if (videoParts !== undefined) {
       targetLesson.videoParts = parseFileItems(videoParts);
     }
@@ -605,10 +708,29 @@ exports.updateLesson = async (req, res) => {
       targetLesson.attachments = parseFileItems(attachments);
     }
 
-    // -----------------------------------------------------------------
-    // MULTER FILE ATTACHMENT MAPPING
-    // Uploaded files are appended to the matching array field.
-    // -----------------------------------------------------------------
+    // Map single link if provided
+    const singleLink = (uploadFileOrLink || fileOrLink || lessonFile || '').trim();
+    if (singleLink) {
+      const lowerType = (targetLesson.lessonType || '').toLowerCase();
+      if (lowerType.includes('video') || lowerType === 'recorded video') {
+        targetLesson.videoUrl = singleLink;
+        if (!targetLesson.videoParts.some((p) => p.url === singleLink)) {
+          targetLesson.videoParts.push({ title: targetLesson.lessonTitle || 'Video Part', url: singleLink });
+        }
+      } else if (lowerType.includes('pdf')) {
+        if (!targetLesson.pdfNotes.some((p) => p.url === singleLink)) {
+          targetLesson.pdfNotes.push({ title: targetLesson.lessonTitle || 'PDF Notes', url: singleLink });
+        }
+      } else if (lowerType.includes('live') || lowerType === 'link') {
+        targetLesson.meetingUrl = singleLink;
+      } else {
+        if (!targetLesson.attachments.some((p) => p.url === singleLink)) {
+          targetLesson.attachments.push({ title: targetLesson.lessonTitle || 'Attachment', url: singleLink });
+        }
+      }
+    }
+
+    // Map newly uploaded multipart files
     const filesList = [];
     if (req.file) filesList.push(req.file);
     if (req.files) {
@@ -617,21 +739,38 @@ exports.updateLesson = async (req, res) => {
     }
 
     filesList.forEach((f) => {
-      if (f && (f.filename || f.originalname || f.url || f.path)) {
+      if (f && (f.secure_url || f.url || f.path || f.filename)) {
         const fileUrl = f.secure_url || f.url || f.path || (f.filename ? `/uploads/${f.filename}` : '');
-        const fileObj = { url: fileUrl, title: f.originalname || f.filename };
+        const fileTitle = f.originalname || f.filename || 'Resource';
+        const fileObj = { title: fileTitle, url: fileUrl };
+        const field = (f.fieldname || '').toLowerCase();
+        const mime = (f.mimetype || '').toLowerCase();
 
-        if (f.fieldname === 'videoUrl' || f.fieldname === 'video') {
+        if (field === 'videourl' || field === 'video' || field === 'videofile') {
           targetLesson.videoUrl = fileUrl;
-        } else if (f.fieldname === 'videoParts') {
+          if (!targetLesson.videoParts.some((p) => p.url === fileUrl)) {
+            targetLesson.videoParts.push(fileObj);
+          }
+        } else if (field === 'videoparts' || field === 'videopart' || field.startsWith('videoparts') || field === 'videos') {
           targetLesson.videoParts.push(fileObj);
-        } else if (f.fieldname === 'pdfNotes' || f.fieldname === 'pdf') {
+          if (!targetLesson.videoUrl) targetLesson.videoUrl = fileUrl;
+        } else if (field === 'pdfnotes' || field === 'pdf' || field === 'pdffile' || field.startsWith('pdfnotes') || field === 'pdfs') {
           targetLesson.pdfNotes.push(fileObj);
-        } else if (f.fieldname === 'attachments' || f.fieldname === 'attachment' || f.fieldname === 'assignments' || f.fieldname === 'assignment') {
+        } else if (field === 'attachments' || field === 'attachment' || field === 'assignments' || field === 'assignment' || field.startsWith('attachments')) {
           targetLesson.attachments.push(fileObj);
-        } else if (f.mimetype && f.mimetype.startsWith('video/')) {
+        } else if (field === 'file' || field === 'lessonfile' || field === 'uploadfileorlink') {
+          if (mime.startsWith('video/')) {
+            targetLesson.videoUrl = fileUrl;
+            if (!targetLesson.videoParts.some((p) => p.url === fileUrl)) targetLesson.videoParts.push(fileObj);
+          } else if (mime === 'application/pdf') {
+            targetLesson.pdfNotes.push(fileObj);
+          } else {
+            targetLesson.attachments.push(fileObj);
+          }
+        } else if (mime.startsWith('video/')) {
           targetLesson.videoUrl = fileUrl;
-        } else if (f.mimetype === 'application/pdf') {
+          if (!targetLesson.videoParts.some((p) => p.url === fileUrl)) targetLesson.videoParts.push(fileObj);
+        } else if (mime === 'application/pdf') {
           targetLesson.pdfNotes.push(fileObj);
         } else {
           targetLesson.attachments.push(fileObj);
@@ -639,12 +778,17 @@ exports.updateLesson = async (req, res) => {
       }
     });
 
+    if (targetLesson.videoUrl && targetLesson.videoParts.length === 0) {
+      targetLesson.videoParts.push({ title: targetLesson.lessonTitle || 'Video Part 1', url: targetLesson.videoUrl });
+    }
+
     await course.save();
 
     return res.status(200).json({
       success: true,
       message: 'Lesson updated successfully',
       data: serializeLesson(targetLesson),
+      lesson: serializeLesson(targetLesson),
     });
   } catch (error) {
     console.error('Error updating lesson:', error);
@@ -655,7 +799,7 @@ exports.updateLesson = async (req, res) => {
 exports.deleteLesson = async (req, res) => {
   try {
     const { courseId, moduleId, lessonId } = req.params;
-    
+
     if (!isValidObjectId(moduleId) || !isValidObjectId(lessonId)) {
       return res.status(400).json({ success: false, message: 'Invalid module or lesson ID format' });
     }
@@ -676,35 +820,36 @@ exports.deleteLesson = async (req, res) => {
 
     const targetModule = course.modules.id(moduleId);
     const targetLesson = targetModule ? targetModule.lessons.id(lessonId) : null;
-    
+
     if (!targetLesson) {
       return res.status(404).json({ success: false, message: 'Lesson not found' });
     }
 
-    // Collect local paths or Cloudinary URLs associated with this lesson.
+    // Collect local paths or Cloudinary URLs associated with this lesson across all fields.
     const filesToDelete = [];
-    if (targetLesson.videoUrl && targetLesson.videoUrl.startsWith('/uploads/')) {
+    if (targetLesson.videoUrl) {
       filesToDelete.push(targetLesson.videoUrl);
     }
-    if (targetLesson.videoUrl && targetLesson.videoUrl.includes('cloudinary.com')) {
-      filesToDelete.push(targetLesson.videoUrl);
+    if (Array.isArray(targetLesson.videoParts)) {
+      targetLesson.videoParts.forEach((f) => {
+        const fileUrl = typeof f === 'object' ? f.url : f;
+        if (fileUrl) filesToDelete.push(fileUrl);
+      });
     }
     if (Array.isArray(targetLesson.pdfNotes)) {
-      targetLesson.pdfNotes.forEach(f => {
+      targetLesson.pdfNotes.forEach((f) => {
         const fileUrl = typeof f === 'object' ? f.url : f;
-        if (fileUrl && fileUrl.startsWith('/uploads/')) filesToDelete.push(fileUrl);
-        if (fileUrl && fileUrl.includes('cloudinary.com')) filesToDelete.push(fileUrl);
+        if (fileUrl) filesToDelete.push(fileUrl);
       });
     }
     if (Array.isArray(targetLesson.attachments)) {
-      targetLesson.attachments.forEach(f => {
+      targetLesson.attachments.forEach((f) => {
         const fileUrl = typeof f === 'object' ? f.url : f;
-        if (fileUrl && fileUrl.startsWith('/uploads/')) filesToDelete.push(fileUrl);
-        if (fileUrl && fileUrl.includes('cloudinary.com')) filesToDelete.push(fileUrl);
+        if (fileUrl) filesToDelete.push(fileUrl);
       });
     }
 
-    // 2. Perform the atomic pull from the nested array as requested
+    // 2. Perform the atomic pull from the nested array
     const updatedCourse = await Course.findOneAndUpdate(
       query,
       { $pull: { "modules.$.lessons": { _id: lessonId } } },
@@ -715,9 +860,10 @@ exports.deleteLesson = async (req, res) => {
       return res.status(404).json({ success: false, message: 'Course, module, or lesson not found' });
     }
 
-    // 3. Clean up the physical files gracefully (doesn't block response and ignores missing files).
+    // 3. Clean up the physical / Cloudinary files gracefully
+    const uniqueUrls = [...new Set(filesToDelete.filter(Boolean))];
     await Promise.all(
-      filesToDelete.map(async (filePath) => {
+      uniqueUrls.map(async (filePath) => {
         if (filePath && filePath.includes('cloudinary.com')) {
           await deleteCloudinaryByUrl(filePath);
           return;
@@ -749,3 +895,4 @@ exports.deleteLesson = async (req, res) => {
     return res.status(500).json({ success: false, message: 'Failed to delete lesson', error: error.message });
   }
 };
+
