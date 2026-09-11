@@ -9,9 +9,17 @@ exports.createDemoVideo = async (req, res) => {
   try {
     const { title, description, duration, courseId } = req.body;
 
+    const extractUrl = (f) => {
+      if (!f) return '';
+      if (f.secure_url && f.secure_url.startsWith('http')) return f.secure_url;
+      if (f.url && f.url.startsWith('http')) return f.url;
+      if (f.path && f.path.startsWith('http')) return f.path;
+      return f.secure_url || f.url || f.path || (f.filename ? `/uploads/${f.filename}` : '');
+    };
+
     // Accept either an uploaded file or a plain URL string from the request body.
     const videoUrl = req.file
-      ? (req.file.secure_url || req.file.url || req.file.path || (req.file.filename ? `/uploads/${req.file.filename}` : ''))
+      ? extractUrl(req.file)
       : (req.body.videoUrl || '').trim();
 
     if (!title) {
@@ -140,7 +148,14 @@ exports.updateDemoVideo = async (req, res) => {
 
     // If a new video file was uploaded, overwrite videoUrl with the uploaded public URL.
     if (req.file) {
-      updateData.videoUrl = req.file.secure_url || req.file.url || req.file.path || (req.file.filename ? `/uploads/${req.file.filename}` : '');
+      const extractUrl = (f) => {
+        if (!f) return '';
+        if (f.secure_url && f.secure_url.startsWith('http')) return f.secure_url;
+        if (f.url && f.url.startsWith('http')) return f.url;
+        if (f.path && f.path.startsWith('http')) return f.path;
+        return f.secure_url || f.url || f.path || (f.filename ? `/uploads/${f.filename}` : '');
+      };
+      updateData.videoUrl = extractUrl(req.file);
     }
 
     if (updateData.courseId !== undefined) {

@@ -1,5 +1,35 @@
 const { deleteCloudinaryByUrl, cloudinary } = require('../config/cloudinary');
 
+const getBaseUrl = (req) => {
+  if (process.env.BASE_URL) {
+    return process.env.BASE_URL.replace(/\/+$/, '');
+  }
+  if (process.env.SERVER_URL) {
+    return process.env.SERVER_URL.replace(/\/+$/, '');
+  }
+  if (req && req.get && typeof req.get === 'function' && req.get('host')) {
+    const protocol = req.headers && req.headers['x-forwarded-proto']
+      ? req.headers['x-forwarded-proto']
+      : (req.protocol || 'https');
+    return `${protocol}://${req.get('host')}`;
+  }
+  return 'https://homeopathybackend-1.onrender.com';
+};
+
+const toAbsoluteUrl = (urlStr, req) => {
+  if (typeof urlStr !== 'string') return '';
+  const trimmed = urlStr.trim();
+  if (!trimmed) return '';
+
+  if (/^https?:\/\//i.test(trimmed) || trimmed.startsWith('data:')) {
+    return trimmed;
+  }
+
+  const baseUrl = getBaseUrl(req);
+  const cleanPath = trimmed.startsWith('/') ? trimmed : `/${trimmed}`;
+  return `${baseUrl}${cleanPath}`;
+};
+
 /**
  * @desc    Upload multiple files/images to Cloudinary
  * @route   POST /api/upload
@@ -28,7 +58,16 @@ exports.uploadFiles = async (req, res) => {
     }
 
     const uploadedFiles = rawFiles.map((file) => {
-      const secureUrl = file.secure_url || file.path || file.url || (file.filename ? `/uploads/${file.filename}` : '');
+      const cloudUrl = (file.secure_url && file.secure_url.startsWith('http'))
+        ? file.secure_url
+        : (file.url && file.url.startsWith('http'))
+          ? file.url
+          : (file.path && file.path.startsWith('http'))
+            ? file.path
+            : null;
+
+      const rawUrl = cloudUrl || (file.secure_url || file.url || file.path || (file.filename ? `/uploads/${file.filename}` : ''));
+      const secureUrl = toAbsoluteUrl(rawUrl, req);
       const publicId = file.public_id || file.filename || '';
       
       let resourceType = file.resource_type || 'image';

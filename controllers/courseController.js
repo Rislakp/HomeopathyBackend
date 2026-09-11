@@ -45,7 +45,15 @@ const toResourceObj = (item) => {
     return { title, url };
   }
   if (typeof item === 'object' && !Array.isArray(item)) {
-    const url = normalizeFileUrl(item.url || item.secure_url || item.path || item.partUrl || item.fileUrl || item.link || item.filename || '');
+    const cloudUrl = (item.secure_url && item.secure_url.startsWith('http'))
+      ? item.secure_url
+      : (item.url && item.url.startsWith('http'))
+        ? item.url
+        : (item.path && item.path.startsWith('http'))
+          ? item.path
+          : null;
+    const rawUrl = cloudUrl || item.url || item.secure_url || item.path || item.partUrl || item.fileUrl || item.link || item.filename || '';
+    const url = normalizeFileUrl(rawUrl);
     let title = item.title || item.name || item.partTitle || item.originalname || item.filename || '';
     if (!title && url) {
       try {
@@ -653,7 +661,14 @@ exports.addLesson = async (req, res) => {
 
     filesList.forEach((f) => {
       if (f && (f.secure_url || f.url || f.path || f.filename)) {
-        const fileUrl = normalizeFileUrl(f.secure_url || f.url || f.path || f.filename || '');
+        const rawFileUrl = (f.secure_url && f.secure_url.startsWith('http'))
+          ? f.secure_url
+          : (f.url && f.url.startsWith('http'))
+            ? f.url
+            : (f.path && f.path.startsWith('http'))
+              ? f.path
+              : (f.secure_url || f.url || f.path || (f.filename ? `/uploads/${f.filename}` : ''));
+        const fileUrl = normalizeFileUrl(rawFileUrl);
         const fileTitle = f.originalname || f.filename || 'Resource';
         const fileObj = { title: fileTitle, url: fileUrl };
         const field = (f.fieldname || '').toLowerCase();
@@ -828,7 +843,14 @@ exports.updateLesson = async (req, res) => {
 
     filesList.forEach((f) => {
       if (f && (f.secure_url || f.url || f.path || f.filename)) {
-        const fileUrl = normalizeFileUrl(f.secure_url || f.url || f.path || f.filename || '');
+        const rawFileUrl = (f.secure_url && f.secure_url.startsWith('http'))
+          ? f.secure_url
+          : (f.url && f.url.startsWith('http'))
+            ? f.url
+            : (f.path && f.path.startsWith('http'))
+              ? f.path
+              : (f.secure_url || f.url || f.path || (f.filename ? `/uploads/${f.filename}` : ''));
+        const fileUrl = normalizeFileUrl(rawFileUrl);
         const fileTitle = f.originalname || f.filename || 'Resource';
         const fileObj = { title: fileTitle, url: fileUrl };
         const field = (f.fieldname || '').toLowerCase();

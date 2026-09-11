@@ -46,11 +46,18 @@ exports.uploadRecording = async (req, res) => {
 
     // Resolve uploaded file or body URL
     let recordingFileUrl = '';
+    const extractFileUrl = (f) => {
+      if (!f) return '';
+      if (f.secure_url && f.secure_url.startsWith('http')) return f.secure_url;
+      if (f.url && f.url.startsWith('http')) return f.url;
+      if (f.path && f.path.startsWith('http')) return f.path;
+      return f.secure_url || f.url || f.path || (f.filename ? `/uploads/${f.filename}` : '');
+    };
+
     if (req.file) {
-      recordingFileUrl = req.file.secure_url || req.file.path || req.file.url || (req.file.filename ? `/uploads/${req.file.filename}` : '');
+      recordingFileUrl = extractFileUrl(req.file);
     } else if (req.files && Array.isArray(req.files) && req.files.length > 0) {
-      const f = req.files[0];
-      recordingFileUrl = f.secure_url || f.path || f.url || (f.filename ? `/uploads/${f.filename}` : '');
+      recordingFileUrl = extractFileUrl(req.files[0]);
     } else if (req.body.recordingFileUrl) {
       recordingFileUrl = req.body.recordingFileUrl.trim();
     } else if (req.body.videoUrl) {
