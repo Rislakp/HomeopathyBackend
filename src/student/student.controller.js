@@ -92,6 +92,18 @@ async function getStudentProfile(req, res) {
   }
 }
 
+function normalizeTestType(input) {
+  if (!input || typeof input !== 'string') return 'grand_mock';
+  const clean = input.trim().toLowerCase().replace(/[\s-]+/g, '_');
+  if (clean === 'course_test' || clean === 'course' || clean.includes('course')) {
+    return 'course_test';
+  }
+  if (clean === 'grand_mock' || clean === 'mock' || clean.includes('grand') || clean.includes('mock')) {
+    return 'grand_mock';
+  }
+  return 'grand_mock';
+}
+
 /**
  * GET /api/student/exams
  * Fetch all available exams for student, annotating each with attempt status and previous score.
@@ -109,7 +121,7 @@ async function getAvailableExams(req, res) {
     const filter = {};
     const queryType = req.query.testType || req.query.type;
     if (queryType && queryType.trim()) {
-      filter.testType = queryType.trim().toLowerCase();
+      filter.testType = normalizeTestType(queryType);
     }
 
     // 1. Fetch all exams matching filter (excluding questions for lightweight summary)
@@ -493,7 +505,7 @@ async function getStudentResults(req, res) {
     const filterType = req.query.testType || req.query.type;
     let matchingExamIds = null;
     if (filterType && filterType.trim()) {
-      const targetType = filterType.trim().toLowerCase();
+      const targetType = normalizeTestType(filterType);
       const matchingExams = await Exam.find({ testType: targetType }).select('_id').lean();
       matchingExamIds = matchingExams.map(e => e._id.toString());
     }
