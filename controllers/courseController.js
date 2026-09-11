@@ -670,7 +670,7 @@ exports.addLesson = async (req, res) => {
               : (f.secure_url || f.url || f.path || (f.filename ? `/uploads/${f.filename}` : ''));
         const fileUrl = normalizeFileUrl(rawFileUrl);
         const fileTitle = f.originalname || f.filename || 'Resource';
-        const fileObj = { title: fileTitle, url: fileUrl };
+        const fileObj = { title: fileTitle, url: fileUrl, public_id: f.public_id || '', secure_url: f.secure_url || fileUrl, resource_type: f.resource_type || (mime.startsWith('video/') ? 'video' : 'raw') };
         const field = (f.fieldname || '').toLowerCase();
         const mime = (f.mimetype || '').toLowerCase();
 
@@ -852,7 +852,7 @@ exports.updateLesson = async (req, res) => {
               : (f.secure_url || f.url || f.path || (f.filename ? `/uploads/${f.filename}` : ''));
         const fileUrl = normalizeFileUrl(rawFileUrl);
         const fileTitle = f.originalname || f.filename || 'Resource';
-        const fileObj = { title: fileTitle, url: fileUrl };
+        const fileObj = { title: fileTitle, url: fileUrl, public_id: f.public_id || '', secure_url: f.secure_url || fileUrl, resource_type: f.resource_type || (mime.startsWith('video/') ? 'video' : 'raw') };
         const field = (f.fieldname || '').toLowerCase();
         const mime = (f.mimetype || '').toLowerCase();
 

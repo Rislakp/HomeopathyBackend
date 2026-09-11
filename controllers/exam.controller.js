@@ -336,6 +336,7 @@ async function createGrandMockExam(req, res) {
   try {
     const {
       title,
+      testType,
       marksPerQuestion,
       negativeMark,
       negativeMarks,
@@ -399,9 +400,12 @@ async function createGrandMockExam(req, res) {
       });
     }
 
+    const validTestType = (testType === 'Course Test') ? 'Course Test' : 'Grand Mock Test';
+
     // Create final exam in database
     const newExam = await Exam.create({
       title: title.trim(),
+      testType: validTestType,
       marksPerQuestion: parsedMarksPerQuestion,
       negativeMark: parsedNegMark,
       negativeMarkPenalty: parsedNegMark,
@@ -431,7 +435,12 @@ async function createGrandMockExam(req, res) {
  */
 async function getAllGrandMocks(req, res) {
   try {
-    const exams = await Exam.find()
+    const filter = {};
+    if (req.query.testType && req.query.testType !== 'All Tests' && req.query.testType !== 'All') {
+      filter.testType = req.query.testType;
+    }
+
+    const exams = await Exam.find(filter)
       .select('-questions')
       .sort({ createdAt: -1 })
       .lean();
@@ -453,6 +462,7 @@ async function getAllGrandMocks(req, res) {
 
     const formattedExams = exams.map((exam) => ({
       ...exam,
+      testType: exam.testType || 'Grand Mock Test',
       negativeMark: exam.negativeMark !== undefined && exam.negativeMark !== null
         ? exam.negativeMark
         : (exam.negativeMarkPenalty ?? 0),
@@ -499,6 +509,7 @@ async function getGrandMockById(req, res) {
 
     const formattedExam = {
       ...exam,
+      testType: exam.testType || 'Grand Mock Test',
       negativeMark: exam.negativeMark !== undefined && exam.negativeMark !== null
         ? exam.negativeMark
         : (exam.negativeMarkPenalty ?? 0)
@@ -545,6 +556,9 @@ async function updateGrandMockExam(req, res) {
     const updates = {};
 
     if (req.body.title !== undefined) updates.title = req.body.title.trim();
+    if (req.body.testType !== undefined) {
+      updates.testType = req.body.testType === 'Course Test' ? 'Course Test' : 'Grand Mock Test';
+    }
     if (req.body.marksPerQuestion !== undefined) {
       const parsedMarks = Number(req.body.marksPerQuestion);
       if (isNaN(parsedMarks) || parsedMarks <= 0) {

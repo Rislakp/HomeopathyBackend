@@ -5,6 +5,9 @@ const Counter = require('./Counter');
 const resourceSchema = new mongoose.Schema({
   title: { type: String, trim: true, default: '' },
   url:   { type: String, trim: true, default: '' },
+  public_id: { type: String, trim: true, default: '' },
+  secure_url: { type: String, trim: true, default: '' },
+  resource_type: { type: String, trim: true, default: '' },
 }, { _id: false });
 
 // Subdocument Schema for Lessons
