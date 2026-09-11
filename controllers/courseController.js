@@ -6,6 +6,22 @@ const { deleteCloudinaryByUrl } = require('../config/cloudinary');
 
 const isValidObjectId = (id) => mongoose.Types.ObjectId.isValid(id); 
 
+const normalizeFileUrl = (value) => {
+  if (typeof value !== 'string') return '';
+  const trimmed = value.trim();
+  if (!trimmed) return '';
+
+  if (/^https?:\/\//i.test(trimmed)) return trimmed;
+
+  const normalizedPath = trimmed.replace(/\\/g, '/');
+  const uploadsIndex = normalizedPath.toLowerCase().lastIndexOf('/uploads/');
+  if (uploadsIndex >= 0) {
+    return `/uploads/${normalizedPath.slice(uploadsIndex + '/uploads/'.length)}`;
+  }
+  if (normalizedPath.startsWith('/uploads/')) return normalizedPath;
+  return `/uploads/${normalizedPath.replace(/^\/+/, '')}`;
+};
+
 /**
  * Normalise a single raw resource item (string or object) into the
  * { title, url } shape expected by resourceSchema.
@@ -15,24 +31,25 @@ const toResourceObj = (item) => {
   if (typeof item === 'string') {
     const trimmed = item.trim();
     if (!trimmed) return null;
+    const url = normalizeFileUrl(trimmed);
     let title = trimmed;
     try {
-      if (trimmed.startsWith('http')) {
-        const parsed = new URL(trimmed);
+      if (/^https?:\/\//i.test(url)) {
+        const parsed = new URL(url);
         const name = path.basename(parsed.pathname);
         title = name ? decodeURIComponent(name) : trimmed;
       }
     } catch (_) {
       title = trimmed;
     }
-    return { title, url: trimmed };
+    return { title, url };
   }
   if (typeof item === 'object' && !Array.isArray(item)) {
-    const url = item.url || item.secure_url || item.path || item.partUrl || item.fileUrl || item.link || '';
+    const url = normalizeFileUrl(item.url || item.secure_url || item.path || item.partUrl || item.fileUrl || item.link || item.filename || '');
     let title = item.title || item.name || item.partTitle || item.originalname || item.filename || '';
     if (!title && url) {
       try {
-        if (typeof url === 'string' && url.startsWith('http')) {
+        if (/^https?:\/\//i.test(url)) {
           const parsed = new URL(url);
           const name = path.basename(parsed.pathname);
           title = name ? decodeURIComponent(name) : 'Resource';
@@ -574,7 +591,7 @@ exports.addLesson = async (req, res) => {
 
     filesList.forEach((f) => {
       if (f && (f.secure_url || f.url || f.path || f.filename)) {
-        const fileUrl = f.secure_url || f.url || f.path || (f.filename ? `/uploads/${f.filename}` : '');
+        const fileUrl = normalizeFileUrl(f.secure_url || f.url || f.path || f.filename || '');
         const fileTitle = f.originalname || f.filename || 'Resource';
         const fileObj = { title: fileTitle, url: fileUrl };
         const field = (f.fieldname || '').toLowerCase();
@@ -749,7 +766,7 @@ exports.updateLesson = async (req, res) => {
 
     filesList.forEach((f) => {
       if (f && (f.secure_url || f.url || f.path || f.filename)) {
-        const fileUrl = f.secure_url || f.url || f.path || (f.filename ? `/uploads/${f.filename}` : '');
+        const fileUrl = normalizeFileUrl(f.secure_url || f.url || f.path || f.filename || '');
         const fileTitle = f.originalname || f.filename || 'Resource';
         const fileObj = { title: fileTitle, url: fileUrl };
         const field = (f.fieldname || '').toLowerCase();

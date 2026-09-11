@@ -87,7 +87,14 @@ app.use((req, res, next) => {
 });
 
 // Serve static files from the uploads and public directory
-app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
+app.use('/uploads', express.static(path.join(__dirname, 'uploads'), {
+  setHeaders: (res, filePath) => {
+    if (path.extname(filePath).toLowerCase() === '.pdf') {
+      res.setHeader('Content-Type', 'application/pdf');
+      res.setHeader('Content-Disposition', 'inline');
+    }
+  },
+}));
 app.use(express.static(path.join(__dirname, 'public')));
 
 // Routes
