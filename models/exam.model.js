@@ -60,8 +60,8 @@ const examSchema = new mongoose.Schema({
   },
   testType: {
     type: String,
-    enum: ['Grand Mock Test', 'Course Test'],
-    default: 'Grand Mock Test',
+    enum: ['grand_mock', 'course_test'],
+    default: 'grand_mock',
     trim: true
   },
   marksPerQuestion: {

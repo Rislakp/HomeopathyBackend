@@ -106,8 +106,14 @@ async function getAvailableExams(req, res) {
       });
     }
 
-    // 1. Fetch all exams (excluding questions for lightweight summary)
-    const exams = await Exam.find()
+    const filter = {};
+    const queryType = req.query.testType || req.query.type;
+    if (queryType && queryType.trim()) {
+      filter.testType = queryType.trim().toLowerCase();
+    }
+
+    // 1. Fetch all exams matching filter (excluding questions for lightweight summary)
+    const exams = await Exam.find(filter)
       .select('-questions')
       .sort({ createdAt: -1 })
       .lean();
@@ -484,10 +490,22 @@ async function getStudentResults(req, res) {
       });
     }
 
-    const results = await TestResult.find({ studentId })
-      .populate('examId', 'title marksPerQuestion negativeMark negativeMarkPenalty durationMinutes totalQuestions questions')
+    const filterType = req.query.testType || req.query.type;
+    let matchingExamIds = null;
+    if (filterType && filterType.trim()) {
+      const targetType = filterType.trim().toLowerCase();
+      const matchingExams = await Exam.find({ testType: targetType }).select('_id').lean();
+      matchingExamIds = matchingExams.map(e => e._id.toString());
+    }
+
+    let results = await TestResult.find({ studentId })
+      .populate('examId', 'title testType marksPerQuestion negativeMark negativeMarkPenalty durationMinutes totalQuestions questions')
       .sort({ createdAt: -1 })
       .lean();
+
+    if (matchingExamIds !== null) {
+      results = results.filter(r => r.examId && matchingExamIds.includes(r.examId._id ? r.examId._id.toString() : r.examId.toString()));
+    }
 
     const formattedResults = results.map((result) => {
       const exam = result.examId;

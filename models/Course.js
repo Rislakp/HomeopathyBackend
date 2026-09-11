@@ -3,11 +3,13 @@ const Counter = require('./Counter');
 
 // Shared subdocument schema for any file/resource (video part, PDF note, attachment)
 const resourceSchema = new mongoose.Schema({
-  title: { type: String, trim: true, default: '' },
-  url:   { type: String, trim: true, default: '' },
-  public_id: { type: String, trim: true, default: '' },
-  secure_url: { type: String, trim: true, default: '' },
+  title:         { type: String, trim: true, default: '' },
+  url:           { type: String, trim: true, default: '' },
+  public_id:     { type: String, trim: true, default: '' },
   resource_type: { type: String, trim: true, default: '' },
+  mimetype:      { type: String, trim: true, default: '' },
+  duration:      { type: Number, default: 0 },
+  size:          { type: Number, default: 0 },
 }, { _id: false });
 
 // Subdocument Schema for Lessons
