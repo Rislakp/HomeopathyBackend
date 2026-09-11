@@ -125,6 +125,11 @@ const courseSchema = new mongoose.Schema({
     trim: true,
     default: '',
   },
+  courseBanner: {
+    type: String,
+    trim: true,
+    default: '',
+  },
   modules: {
     type: [moduleSchema],
     default: [],
@@ -139,6 +144,42 @@ const courseSchema = new mongoose.Schema({
   toObject: { virtuals: true },
 });
 
+// Getter helper for resolving primary banner without triggering path getters recursively
+function getPrimaryBanner(doc) {
+  if (!doc) return '';
+  if (doc._doc) {
+    return doc._doc.courseBanner || doc._doc.thumbnail || doc._doc.bannerUrl || '';
+  }
+  if (typeof doc.get === 'function') {
+    return doc.get('courseBanner', null, { getters: false }) ||
+           doc.get('thumbnail', null, { getters: false }) ||
+           doc.get('bannerUrl', null, { getters: false }) || '';
+  }
+  return doc.courseBanner || doc.thumbnail || doc.bannerUrl || '';
+}
+
+// Path getters so accessing courseBanner, thumbnail, or bannerUrl always returns the available banner URL
+courseSchema.path('thumbnail').get(function(v) {
+  return v || getPrimaryBanner(this);
+});
+courseSchema.path('bannerUrl').get(function(v) {
+  return v || getPrimaryBanner(this);
+});
+courseSchema.path('courseBanner').get(function(v) {
+  return v || getPrimaryBanner(this);
+});
+
+// Synchronize banner fields on save
+courseSchema.pre('save', function(next) {
+  const primary = getPrimaryBanner(this);
+  if (primary) {
+    if (!this.thumbnail) this.thumbnail = primary;
+    if (!this.bannerUrl) this.bannerUrl = primary;
+    if (!this.courseBanner) this.courseBanner = primary;
+  }
+  next();
+});
+
 // Virtual alias for description -> shortDescription
 courseSchema.virtual('description')
   .get(function() { return this.shortDescription; })
@@ -149,12 +190,16 @@ courseSchema.virtual('title')
   .get(function() { return this.courseTitle; })
   .set(function(val) { this.courseTitle = val; });
 
-// Virtual aliases for banner/thumbnail fields -> thumbnail
-const bannerAliasFields = ['banner', 'thumbnailUrl', 'image', 'imageUrl', 'courseBanner'];
+// Virtual aliases for banner/thumbnail fields
+const bannerAliasFields = ['banner', 'thumbnailUrl', 'image', 'imageUrl'];
 bannerAliasFields.forEach((field) => {
   courseSchema.virtual(field)
-    .get(function() { return this.thumbnail; })
-    .set(function(val) { this.thumbnail = val; });
+    .get(function() { return getPrimaryBanner(this); })
+    .set(function(val) {
+      this.thumbnail = val;
+      this.bannerUrl = val;
+      this.courseBanner = val;
+    });
 });
 
 // Virtual for enrolledCount

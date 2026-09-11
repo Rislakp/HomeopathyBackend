@@ -139,38 +139,100 @@ const sanitizeFiles = (files) => {
     .filter(Boolean);
 };
 
+const getBaseUrl = (req) => {
+  if (process.env.BASE_URL) {
+    return process.env.BASE_URL.replace(/\/+$/, '');
+  }
+  if (process.env.SERVER_URL) {
+    return process.env.SERVER_URL.replace(/\/+$/, '');
+  }
+  if (req && req.get && typeof req.get === 'function' && req.get('host')) {
+    const protocol = req.headers && req.headers['x-forwarded-proto']
+      ? req.headers['x-forwarded-proto']
+      : (req.protocol || 'https');
+    return `${protocol}://${req.get('host')}`;
+  }
+  return 'https://homeopathybackend-1.onrender.com';
+};
+
+const toAbsoluteUrl = (urlStr, req) => {
+  if (typeof urlStr !== 'string') return '';
+  const trimmed = urlStr.trim();
+  if (!trimmed) return '';
+
+  if (/^https?:\/\//i.test(trimmed) || trimmed.startsWith('data:')) {
+    return trimmed;
+  }
+
+  const baseUrl = getBaseUrl(req);
+  const cleanPath = trimmed.startsWith('/') ? trimmed : `/${trimmed}`;
+  return `${baseUrl}${cleanPath}`;
+};
+
 /**
- * Serialize a lesson subdocument into a plain object that always
- * includes every multi-file array so the frontend can safely iterate
- * without defensive null checks on each field.
- * sanitizeFiles() is applied to every array field so that legacy or
- * malformed subdocuments never reach the client.
+ * Serialize a lesson subdocument into a plain object with absolute file URLs.
  */
-const serializeLesson = (lesson) => ({
-  _id: lesson._id,
-  lessonTitle: lesson.lessonTitle || '',
-  lessonType: lesson.lessonType || 'Recorded Video',
-  durationOrPages: lesson.durationOrPages || '',
-  description: lesson.description || '',
-  videoUrl: lesson.videoUrl || '',
-  videoParts:  sanitizeFiles(lesson.videoParts),
-  pdfNotes:    sanitizeFiles(lesson.pdfNotes),
-  attachments: sanitizeFiles(lesson.attachments),
-  meetingUrl: lesson.meetingUrl || '',
-  status: lesson.status || 'Published',
-  createdAt: lesson.createdAt,
-  updatedAt: lesson.updatedAt,
-});
+const serializeLesson = (lesson, req) => {
+  const sanitizeResource = (items) => {
+    const list = sanitizeFiles(items);
+    return list.map((item) => ({
+      ...item,
+      url: toAbsoluteUrl(item.url, req),
+    }));
+  };
+
+  return {
+    _id: lesson._id,
+    lessonTitle: lesson.lessonTitle || '',
+    lessonType: lesson.lessonType || 'Recorded Video',
+    durationOrPages: lesson.durationOrPages || '',
+    description: lesson.description || '',
+    videoUrl: toAbsoluteUrl(lesson.videoUrl || '', req),
+    videoParts:  sanitizeResource(lesson.videoParts),
+    pdfNotes:    sanitizeResource(lesson.pdfNotes),
+    attachments: sanitizeResource(lesson.attachments),
+    meetingUrl: lesson.meetingUrl || '',
+    status: lesson.status || 'Published',
+    createdAt: lesson.createdAt,
+    updatedAt: lesson.updatedAt,
+  };
+};
 
 /**
  * Serialize a module subdocument, mapping each lesson through serializeLesson.
  */
-const serializeModule = (mod) => ({
-  ...mod.toObject ? mod.toObject() : mod,
+const serializeModule = (mod, req) => ({
+  ...mod.toObject ? mod.toObject({ virtuals: true }) : mod,
   lessons: Array.isArray(mod.lessons)
-    ? mod.lessons.map(serializeLesson)
+    ? mod.lessons.map((l) => serializeLesson(l, req))
     : [],
 });
+
+/**
+ * Serialize a course document with standardized absolute banner URLs and module trees.
+ */
+const serializeCourse = (courseDoc, req) => {
+  if (!courseDoc) return null;
+  const obj = courseDoc.toObject ? courseDoc.toObject({ virtuals: true }) : { ...courseDoc };
+
+  const rawBanner = obj.courseBanner || obj.thumbnail || obj.bannerUrl || obj.banner || obj.thumbnailUrl || obj.image || obj.imageUrl || '';
+  const absoluteBanner = toAbsoluteUrl(rawBanner, req);
+
+  obj.thumbnail = absoluteBanner;
+  obj.bannerUrl = absoluteBanner;
+  obj.courseBanner = absoluteBanner;
+  obj.banner = absoluteBanner;
+  obj.thumbnailUrl = absoluteBanner;
+  obj.image = absoluteBanner;
+  obj.imageUrl = absoluteBanner;
+
+  if (Array.isArray(obj.modules)) {
+    obj.modules = obj.modules.map((mod) => serializeModule(mod, req));
+  }
+
+  return obj;
+};
+
 // Helper to handle querying by custom courseId or _id
 const getQueryById = (id) => {
   if (mongoose.Types.ObjectId.isValid(id)) {
@@ -195,10 +257,7 @@ const findCourseByIdOrCustomId = async (id) => {
 exports.getCourses = async (req, res) => {
   try {
     const courses = await Course.find();
-    const serialized = courses.map((course) => ({
-      ...course.toObject(),
-      modules: course.modules.map(serializeModule),
-    }));
+    const serialized = courses.map((course) => serializeCourse(course, req));
     return res.status(200).json({
       success: true,
       count: serialized.length,
@@ -227,10 +286,7 @@ exports.getCourseById = async (req, res) => {
       });
     }
 
-    const serialized = {
-      ...course.toObject(),
-      modules: course.modules.map(serializeModule),
-    };
+    const serialized = serializeCourse(course, req);
 
     return res.status(200).json({
       success: true,
@@ -292,17 +348,20 @@ exports.createCourse = async (req, res) => {
       duration: duration || '',
       status: status || 'Published',
       thumbnail: actualThumbnail,
+      bannerUrl: actualThumbnail,
+      courseBanner: actualThumbnail,
       category: category || 'Homeopathy',
       modules: formattedModules,
     });
 
     await newCourse.save();
+    const serialized = serializeCourse(newCourse, req);
 
     return res.status(201).json({
       success: true,
       message: 'Course created successfully',
-      data: newCourse,
-      course: newCourse,
+      data: serialized,
+      course: serialized,
     });
   } catch (error) {
     console.error('Create Course Error:', error);
@@ -337,7 +396,11 @@ exports.updateCourse = async (req, res) => {
     }
 
     const bannerVal = updateData.thumbnail || updateData.banner || updateData.bannerUrl || updateData.thumbnailUrl || updateData.image || updateData.imageUrl || updateData.courseBanner;
-    if (bannerVal) updateData.thumbnail = bannerVal;
+    if (bannerVal) {
+      updateData.thumbnail = bannerVal;
+      updateData.bannerUrl = bannerVal;
+      updateData.courseBanner = bannerVal;
+    }
 
     const updatedCourse = await Course.findOneAndUpdate(query, updateData, { new: true, runValidators: true });
 
@@ -345,11 +408,13 @@ exports.updateCourse = async (req, res) => {
       return res.status(404).json({ success: false, message: 'Course not found' });
     }
 
+    const serialized = serializeCourse(updatedCourse, req);
+
     return res.status(200).json({
       success: true,
       message: 'Course updated successfully',
-      data: updatedCourse,
-      course: updatedCourse,
+      data: serialized,
+      course: serialized,
     });
   } catch (error) {
     console.error('Update Course Error:', error);
@@ -390,7 +455,7 @@ exports.getModules = async (req, res) => {
       return res.status(404).json({ success: false, message: 'Course not found' });
     }
 
-    const modules = course.modules.map(serializeModule);
+    const modules = course.modules.map((m) => serializeModule(m, req));
     return res.status(200).json({ success: true, data: modules });
   } catch (error) {
     return res.status(500).json({ success: false, message: 'Failed to fetch modules', error: error.message });
@@ -473,10 +538,7 @@ exports.deleteModule = async (req, res) => {
     course.modules.pull(moduleId);
     await course.save();
 
-    const serializedCourse = {
-      ...course.toObject(),
-      modules: course.modules.map(serializeModule)
-    };
+    const serializedCourse = serializeCourse(course, req);
 
     return res.status(200).json({ 
       success: true, 
@@ -506,7 +568,7 @@ exports.getLessonsByModule = async (req, res) => {
     const moduleItem = course.modules.id(moduleId);
     if (!moduleItem) return res.status(404).json({ success: false, message: 'Module not found' });
 
-    const lessons = moduleItem.lessons.map(serializeLesson);
+    const lessons = moduleItem.lessons.map((l) => serializeLesson(l, req));
     res.status(200).json({ success: true, message: 'Lessons fetched successfully', data: lessons });
   } catch (error) {
     res.status(500).json({ success: false, message: 'Failed to fetch lessons', error: error.message });
@@ -656,8 +718,8 @@ exports.addLesson = async (req, res) => {
     return res.status(201).json({
       success: true,
       message: 'Lesson added successfully',
-      data: serializeLesson(saved),
-      lesson: serializeLesson(saved),
+      data: serializeLesson(saved, req),
+      lesson: serializeLesson(saved, req),
     });
   } catch (error) {
     console.error('Failed to add lesson:', error);
@@ -813,8 +875,8 @@ exports.updateLesson = async (req, res) => {
     return res.status(200).json({
       success: true,
       message: 'Lesson updated successfully',
-      data: serializeLesson(targetLesson),
-      lesson: serializeLesson(targetLesson),
+      data: serializeLesson(targetLesson, req),
+      lesson: serializeLesson(targetLesson, req),
     });
   } catch (error) {
     console.error('Error updating lesson:', error);
@@ -906,10 +968,7 @@ exports.deleteLesson = async (req, res) => {
       })
     );
 
-    const serializedCourse = {
-      ...updatedCourse.toObject(),
-      modules: updatedCourse.modules.map(serializeModule)
-    };
+    const serializedCourse = serializeCourse(updatedCourse, req);
 
     return res.status(200).json({ 
       success: true, 

@@ -19,6 +19,13 @@ const express = require('express');
 const cors = require('cors');
 const connectDB = require('./config/db');
 const path = require('path');
+const fs = require('fs');
+
+// Ensure static uploads directory exists
+const uploadsDir = path.join(__dirname, 'uploads');
+if (!fs.existsSync(uploadsDir)) {
+  fs.mkdirSync(uploadsDir, { recursive: true });
+}
 
 const app = express();
 
@@ -87,7 +94,7 @@ app.use((req, res, next) => {
 });
 
 // Serve static files from the uploads and public directory
-app.use('/uploads', express.static(path.join(__dirname, 'uploads'), {
+app.use('/uploads', express.static(uploadsDir, {
   setHeaders: (res, filePath) => {
     if (path.extname(filePath).toLowerCase() === '.pdf') {
       res.setHeader('Content-Type', 'application/pdf');
@@ -95,6 +102,7 @@ app.use('/uploads', express.static(path.join(__dirname, 'uploads'), {
     }
   },
 }));
+app.use(express.static(uploadsDir));
 app.use(express.static(path.join(__dirname, 'public')));
 
 // Routes
