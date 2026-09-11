@@ -181,6 +181,7 @@ async function createGrandMockExam(req, res) {
   try {
     const {
       title,
+      testType,
       marksPerQuestion,
       negativeMark,
       negativeMarks,
@@ -189,6 +190,20 @@ async function createGrandMockExam(req, res) {
       totalQuestions,
       questions
     } = req.body;
+
+    // Validate testType if provided
+    const allowedTestTypes = ['grand_mock', 'course_test'];
+    let finalTestType = 'grand_mock';
+    if (testType !== undefined && testType !== null && testType !== '') {
+      const normalizedType = String(testType).trim().toLowerCase();
+      if (!allowedTestTypes.includes(normalizedType)) {
+        return res.status(400).json({
+          success: false,
+          message: `Invalid testType. Allowed values are: ${allowedTestTypes.join(', ')}`
+        });
+      }
+      finalTestType = normalizedType;
+    }
 
     if (!title || marksPerQuestion === undefined || durationMinutes === undefined || totalQuestions === undefined || !questions) {
       return res.status(400).json({
@@ -244,6 +259,7 @@ async function createGrandMockExam(req, res) {
 
     const newExam = await Exam.create({
       title: title.trim(),
+      testType: finalTestType,
       marksPerQuestion: parsedMarksPerQuestion,
       negativeMark: parsedNegMark,
       negativeMarkPenalty: parsedNegMark,
@@ -254,26 +270,33 @@ async function createGrandMockExam(req, res) {
 
     return res.status(201).json({
       success: true,
-      message: 'Grand Mock Exam created successfully.',
+      message: 'Exam created successfully.',
       exam: newExam
     });
   } catch (error) {
-    console.error('Error creating Grand Mock Exam:', error);
+    console.error('Error creating Exam:', error);
     return res.status(500).json({
       success: false,
-      message: 'Failed to save the Grand Mock Exam to database.',
+      message: 'Failed to save the Exam to database.',
       error: error.message
     });
   }
 }
 
 /**
- * GET /api/exams/grand-mock
+ * GET /api/exams/grand-mock or /api/exams
  * Admin screen 1: Fetch summary list without questions.
+ * Optionally filters by ?testType=grand_mock or ?testType=course_test.
  */
 async function getAllGrandMocks(req, res) {
   try {
-    const exams = await Exam.find()
+    const filter = {};
+    const queryType = req.query.testType || req.query.type;
+    if (queryType && queryType.trim()) {
+      filter.testType = queryType.trim().toLowerCase();
+    }
+
+    const exams = await Exam.find(filter)
       .select('-questions')
       .sort({ createdAt: -1 })
       .lean();
@@ -370,6 +393,17 @@ async function updateGrandMockExam(req, res) {
     const updates = {};
 
     if (req.body.title !== undefined) updates.title = req.body.title.trim();
+    if (req.body.testType !== undefined && req.body.testType !== null && req.body.testType !== '') {
+      const allowedTestTypes = ['grand_mock', 'course_test'];
+      const normalizedType = String(req.body.testType).trim().toLowerCase();
+      if (!allowedTestTypes.includes(normalizedType)) {
+        return res.status(400).json({
+          success: false,
+          message: `Invalid testType. Allowed values are: ${allowedTestTypes.join(', ')}`
+        });
+      }
+      updates.testType = normalizedType;
+    }
     if (req.body.marksPerQuestion !== undefined) {
       const parsedMarks = Number(req.body.marksPerQuestion);
       if (isNaN(parsedMarks) || parsedMarks <= 0) {

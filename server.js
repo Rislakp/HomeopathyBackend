@@ -129,6 +129,8 @@ app.use('/api/v1', require('./routes/recordingRoutes'));
 
 const studentFacultyRoutes = require('./routes/studentFacultyRoutes');
 app.use('/api/student/faculty', studentFacultyRoutes);
+app.use('/api/student', require('./routes/studentCurriculumRoutes'));
+app.use('/api/v1/student', require('./routes/studentCurriculumRoutes'));
 app.use('/api/student_new', require('./routes/studentRoutes'));
 // Student self-service profile CRUD (must be registered BEFORE the /api/students admin catch-all below)
 app.use('/api/students/self', require('./routes/studentRoutes'));
