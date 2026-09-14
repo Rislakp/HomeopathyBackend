@@ -408,3 +408,9 @@ exports.deleteRecording = async (req, res) => {
     });
   }
 };
+
+// Backward-compatibility export aliases for legacy route files (courseRoutes.js, adminCourseRoutes.js)
+exports.getLiveRecords = exports.getRecordings;
+exports.uploadRecording = exports.createRecording;
+exports.getLiveRecordById = exports.getRecordingById;
+
