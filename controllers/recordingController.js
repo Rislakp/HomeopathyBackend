@@ -74,18 +74,20 @@ const calculateResolutionMetrics = (width, height, bytes, format) => {
 };
 
 /**
- * Helper to sanitize video URLs: rejects restricted GCP storage links (storage.googleapis.com)
- * and returns clean, public HTTPS URLs (e.g. Cloudinary secure_url) or empty string.
+ * Helper to sanitize video URLs: rejects restricted GCP storage links (storage.googleapis.com),
+ * dummy/sample placeholder URLs, and returns clean, public HTTPS URLs (e.g. Cloudinary secure_url) or empty string.
  */
 const sanitizeVideoUrl = (url) => {
   if (!url || typeof url !== 'string') return '';
   const trimmed = url.trim();
 
-  // Reject restricted Google Cloud Storage links or broken GCP bucket links
+  // Reject restricted Google Cloud Storage links, private drive links, or dummy/sample placeholder URLs
   if (
     trimmed.includes('storage.googleapis.com') ||
     trimmed.includes('storage.cloud.google.com') ||
-    trimmed.includes('drive.google.com/file')
+    trimmed.includes('drive.google.com') ||
+    trimmed.includes('sample-videos.com') ||
+    trimmed.includes('example.com')
   ) {
     return '';
   }
@@ -102,7 +104,7 @@ const extractFileUrl = (f) => {
   if (f.secure_url && f.secure_url.startsWith('http')) candidate = f.secure_url;
   else if (f.url && f.url.startsWith('http')) candidate = f.url;
   else if (f.path && f.path.startsWith('http')) candidate = f.path;
-  else candidate = f.secure_url || f.url || f.path || (f.filename ? `/uploads/${f.filename}` : '');
+  else candidate = f.secure_url || f.url || f.path || '';
 
   return sanitizeVideoUrl(candidate);
 };
