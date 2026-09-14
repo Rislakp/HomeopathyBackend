@@ -5,6 +5,24 @@ const fs = require('fs');
 const path = require('path');
 const { deleteCloudinaryByUrl } = require('../config/cloudinary');
 
+// 2. Helper to safely process file attachments without naming any local variable "mime"
+const processAttachments = (filesArray) => {
+  if (!filesArray || !Array.isArray(filesArray)) return [];
+  return filesArray.map((f) => {
+    const fileUrl = f.secure_url || f.url || '';
+    const fileTitle = f.originalname || f.filename || 'Resource';
+    const fileMimeType = (f.mimetype || (f.originalname ? mimeTypes.lookup(f.originalname) : '') || '').toLowerCase();
+
+    return {
+      title: fileTitle,
+      url: fileUrl,
+      public_id: f.public_id || '',
+      secure_url: fileUrl,
+      resource_type: f.resource_type || (fileMimeType.startsWith('video/') ? 'video' : (fileMimeType === 'application/pdf' ? 'raw' : 'auto'))
+    };
+  });
+};
+
 const isValidObjectId = (id) => mongoose.Types.ObjectId.isValid(id); 
 
 const normalizeFileUrl = (value) => {
@@ -1004,3 +1022,4 @@ exports.deleteLesson = async (req, res) => {
   }
 };
 
+exports.processAttachments = processAttachments;

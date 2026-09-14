@@ -9,4 +9,5 @@ module.exports = {
   getLessonsByModule: courseController.getLessonsByModule,
   // Aliases for backward compatibility
   addModuleToCourse: courseController.addLesson,
+  processAttachments: courseController.processAttachments,
 };
