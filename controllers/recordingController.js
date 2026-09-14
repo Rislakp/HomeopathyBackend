@@ -14,14 +14,37 @@ const findCourseByIdOrCustomId = async (id) => {
 };
 
 /**
- * Extract file URL from multer request object
+ * Helper to sanitize video URLs: rejects restricted GCP storage links (storage.googleapis.com)
+ * and returns clean, public HTTPS URLs (e.g. Cloudinary secure_url) or empty string.
+ */
+const sanitizeVideoUrl = (url) => {
+  if (!url || typeof url !== 'string') return '';
+  const trimmed = url.trim();
+
+  // Reject restricted Google Cloud Storage links or broken GCP bucket links
+  if (
+    trimmed.includes('storage.googleapis.com') ||
+    trimmed.includes('storage.cloud.google.com') ||
+    trimmed.includes('drive.google.com/file')
+  ) {
+    return '';
+  }
+
+  return trimmed;
+};
+
+/**
+ * Extract public file URL (e.g., Cloudinary secure_url) from multer request object
  */
 const extractFileUrl = (f) => {
   if (!f) return '';
-  if (f.secure_url && f.secure_url.startsWith('http')) return f.secure_url;
-  if (f.url && f.url.startsWith('http')) return f.url;
-  if (f.path && f.path.startsWith('http')) return f.path;
-  return f.secure_url || f.url || f.path || (f.filename ? `/uploads/${f.filename}` : '');
+  let candidate = '';
+  if (f.secure_url && f.secure_url.startsWith('http')) candidate = f.secure_url;
+  else if (f.url && f.url.startsWith('http')) candidate = f.url;
+  else if (f.path && f.path.startsWith('http')) candidate = f.path;
+  else candidate = f.secure_url || f.url || f.path || (f.filename ? `/uploads/${f.filename}` : '');
+
+  return sanitizeVideoUrl(candidate);
 };
 
 /**
@@ -61,7 +84,8 @@ const formatRecordingDocument = (rec) => {
   }
 
   const streamUrl = (rec.streamUrl || rec.liveClassUrl || '').trim();
-  const recordedVideoUrl = (rec.recordedVideoUrl || rec.recordingFileUrl || '').trim();
+  // Ensure recordedVideoUrl is strictly clean public URL or empty string "" if pending
+  const recordedVideoUrl = sanitizeVideoUrl(rec.recordedVideoUrl || rec.recordingFileUrl || '');
 
   return {
     _id: rec._id,
@@ -69,7 +93,7 @@ const formatRecordingDocument = (rec) => {
     moduleName,
     lessonTitle,
     streamUrl,
-    recordedVideoUrl,
+    recordedVideoUrl, // "" if pending / no video uploaded yet
     status: rec.status || 'pending',
     duration: rec.duration || '',
     // Hierarchical metadata if present
@@ -112,6 +136,8 @@ exports.createRecording = async (req, res) => {
     const paramLessonId = req.params.lessonId || bodyLessonId;
 
     const resolvedStreamUrl = (streamUrl || liveClassUrl || '').trim();
+    // Validate recorded video URL if provided in body; default to "" if pending
+    const initialRecordedVideoUrl = sanitizeVideoUrl(req.body.recordedVideoUrl || req.body.recordingFileUrl || '');
 
     let resolvedCourseName = (courseName || '').trim();
     let resolvedModuleName = (moduleName || '').trim();
@@ -143,6 +169,8 @@ exports.createRecording = async (req, res) => {
       lessonTitle: resolvedLessonTitle,
       streamUrl: resolvedStreamUrl,
       liveClassUrl: resolvedStreamUrl,
+      recordedVideoUrl: initialRecordedVideoUrl,
+      recordingFileUrl: initialRecordedVideoUrl,
       duration: (duration || '').trim(),
       status: status || 'pending',
       courseId: courseDoc ? courseDoc._id : (mongoose.Types.ObjectId.isValid(paramCourseId) ? paramCourseId : undefined),
@@ -301,23 +329,25 @@ exports.uploadRecordingVideo = async (req, res) => {
     }
 
     // Extract Cloudinary URL from req.file or req.files or req.body
-    let videoUrl = '';
+    let rawVideoUrl = '';
     if (req.file) {
-      videoUrl = extractFileUrl(req.file);
+      rawVideoUrl = extractFileUrl(req.file);
     } else if (req.files && Array.isArray(req.files) && req.files.length > 0) {
-      videoUrl = extractFileUrl(req.files[0]);
+      rawVideoUrl = extractFileUrl(req.files[0]);
     } else if (req.body.recordedVideoUrl) {
-      videoUrl = req.body.recordedVideoUrl.trim();
+      rawVideoUrl = req.body.recordedVideoUrl;
     } else if (req.body.recordingFileUrl) {
-      videoUrl = req.body.recordingFileUrl.trim();
+      rawVideoUrl = req.body.recordingFileUrl;
     } else if (req.body.videoUrl) {
-      videoUrl = req.body.videoUrl.trim();
+      rawVideoUrl = req.body.videoUrl;
     }
+
+    const videoUrl = sanitizeVideoUrl(rawVideoUrl);
 
     if (!videoUrl) {
       return res.status(400).json({
         success: false,
-        message: 'A video file upload or recordedVideoUrl field is required',
+        message: 'A valid public video file upload or Cloudinary secure_url is required',
       });
     }
 
@@ -413,4 +443,3 @@ exports.deleteRecording = async (req, res) => {
 exports.getLiveRecords = exports.getRecordings;
 exports.uploadRecording = exports.createRecording;
 exports.getLiveRecordById = exports.getRecordingById;
-
