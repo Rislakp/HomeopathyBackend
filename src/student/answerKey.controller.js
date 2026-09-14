@@ -32,53 +32,52 @@ function getWatermarkLogoPath() {
 }
 
 /**
- * Renders the brand watermark (website logo + static brand text "WHITE COAT ACADEMY") diagonally across the PDF layout.
- * Dynamic student metadata (names, emails, user IDs) is strictly excluded.
+ * Renders a standalone large centered logo background watermark on each page.
+ * All text strings ("WHITE COAT ACADEMY", student metadata, etc.) are completely removed.
  *
  * @param {PDFDocument} doc - PDFKit document instance
  * @param {number} [pageWidth=595.28] - Page width in points (default: A4 width)
  * @param {number} [pageHeight=841.89] - Page height in points (default: A4 height)
- * @param {string} [customLogoPath=null] - Optional override path for brand logo image
+ * @param {Object|string} [options={}] - Custom options object or customLogoPath string
+ * @param {number} [options.opacity=0.10] - Faint opacity (10-15%) so exam text is 100% readable
+ * @param {number} [options.size=340] - Large logo width/height in points (~300-360pt)
+ * @param {number} [options.angle=0] - Optional rotation angle in degrees (default: 0 for clean upright center)
+ * @param {string} [options.logoPath] - Optional override path for brand logo image
  */
-function buildPdfWatermark(doc, pageWidth = 595.28, pageHeight = 841.89, customLogoPath = null) {
-  const logoPath = customLogoPath || getWatermarkLogoPath();
-  const brandText = 'WHITE COAT ACADEMY';
+function buildPdfWatermark(doc, pageWidth = 595.28, pageHeight = 841.89, options = {}) {
+  const customPath = typeof options === 'string' ? options : options?.logoPath;
+  const logoPath = customPath || getWatermarkLogoPath();
+
+  if (!logoPath || !fs.existsSync(logoPath)) {
+    return;
+  }
+
+  const opts = typeof options === 'object' && options !== null ? options : {};
+  const opacity = opts.opacity !== undefined ? opts.opacity : 0.10;
+  const logoSize = opts.size || 340;
+  const angle = opts.angle !== undefined ? opts.angle : 0;
 
   doc.save();
-  doc.opacity(0.12);
+  doc.opacity(opacity);
 
   const centerX = pageWidth / 2;
   const centerY = pageHeight / 2;
 
-  // Rotate canvas diagonally across the page center (-45 degrees)
-  doc.rotate(-45, { origin: [centerX, centerY] });
-
-  const logoSize = 48;
-  const spacing = 14;
-
-  doc.font('Helvetica-Bold').fontSize(26);
-  const textWidth = doc.widthOfString(brandText);
-  const totalWidth = logoSize + spacing + textWidth;
-
-  const startX = centerX - totalWidth / 2;
-  const startY = centerY - logoSize / 2;
-
-  // 1. Embed the website logo image asset diagonally
-  if (logoPath && fs.existsSync(logoPath)) {
-    try {
-      doc.image(logoPath, startX, startY, {
-        width: logoSize,
-        height: logoSize
-      });
-    } catch (err) {
-      console.warn('Unable to embed logo image in watermark:', err.message);
-    }
+  if (angle !== 0) {
+    doc.rotate(angle, { origin: [centerX, centerY] });
   }
 
-  // 2. Draw static brand text "WHITE COAT ACADEMY"
-  doc.fillColor('#4A5568');
-  const textY = centerY - doc.currentLineHeight() / 2;
-  doc.text(brandText, startX + logoSize + spacing, textY, { lineBreak: false });
+  const startX = centerX - logoSize / 2;
+  const startY = centerY - logoSize / 2;
+
+  try {
+    doc.image(logoPath, startX, startY, {
+      width: logoSize,
+      height: logoSize
+    });
+  } catch (err) {
+    console.warn('Unable to embed standalone logo in watermark:', err.message);
+  }
 
   doc.restore();
 }
@@ -293,7 +292,7 @@ function generateWatermarkedAnswerKeyPDF(exam, user = {}) {
           doc.restore();
         }
 
-        // 2. Diagonal Semi-Transparent Watermark (Static Brand Text & Website Logo Asset)
+        // 2. Standalone Large Centered Logo Background Watermark (No Text Strings)
         buildPdfWatermark(doc, PAGE_WIDTH, PAGE_HEIGHT);
 
         // 3. Running Footer on ALL pages
