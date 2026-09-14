@@ -547,3 +547,16 @@ exports.deleteRecording = async (req, res) => {
 exports.getLiveRecords = exports.getRecordings;
 exports.uploadRecording = exports.createRecording;
 exports.getLiveRecordById = exports.getRecordingById;
+
+module.exports = {
+  createRecording: exports.createRecording,
+  getRecordings: exports.getRecordings,
+  getRecordingById: exports.getRecordingById,
+  updateRecording: exports.updateRecording,
+  uploadRecordingVideo: exports.uploadRecordingVideo,
+  deleteRecording: exports.deleteRecording,
+  getLiveRecords: exports.getRecordings,
+  uploadRecording: exports.createRecording,
+  getLiveRecordById: exports.getRecordingById,
+  ...exports,
+};

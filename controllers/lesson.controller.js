@@ -10,4 +10,6 @@ module.exports = {
   // Aliases for backward compatibility
   addModuleToCourse: courseController.addLesson,
   processAttachments: courseController.processAttachments,
+  getLiveRecords: courseController.getLiveRecords,
+  uploadRecording: courseController.uploadRecording,
 };

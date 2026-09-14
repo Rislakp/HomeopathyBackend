@@ -1023,3 +1023,8 @@ exports.deleteLesson = async (req, res) => {
 };
 
 exports.processAttachments = processAttachments;
+
+// Forward recording functions for backward-compatibility with routes
+const recordingController = require('./recordingController');
+exports.getLiveRecords = recordingController.getLiveRecords;
+exports.uploadRecording = recordingController.uploadRecording;
