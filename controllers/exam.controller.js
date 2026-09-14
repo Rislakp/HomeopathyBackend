@@ -329,6 +329,23 @@ async function extractMCQs(req, res) {
 }
 
 /**
+ * Helper to normalize testType strings into canonical enum values ('grand_mock' | 'course_test').
+ * Automatically handles variations gracefully (e.g. "Course Test", "course-test", "course_test" -> "course_test").
+ * Defaults to "grand_mock" if missing or unrecognized.
+ */
+function normalizeTestType(input) {
+  if (!input || typeof input !== 'string') return 'grand_mock';
+  const clean = input.trim().toLowerCase().replace(/[\s-]+/g, '_');
+  if (clean === 'course_test' || clean === 'course' || clean.includes('course')) {
+    return 'course_test';
+  }
+  if (clean === 'grand_mock' || clean === 'mock' || clean.includes('grand') || clean.includes('mock')) {
+    return 'grand_mock';
+  }
+  return 'grand_mock';
+}
+
+/**
  * POST /api/exams/grand-mock
  * Saves the final, verified exam to database.
  */
@@ -346,19 +363,7 @@ async function createGrandMockExam(req, res) {
       questions
     } = req.body;
 
-    // Validate testType if provided
-    const allowedTestTypes = ['grand_mock', 'course_test'];
-    let finalTestType = 'grand_mock';
-    if (testType !== undefined && testType !== null && testType !== '') {
-      const normalizedType = String(testType).trim().toLowerCase();
-      if (!allowedTestTypes.includes(normalizedType)) {
-        return res.status(400).json({
-          success: false,
-          message: `Invalid testType. Allowed values are: ${allowedTestTypes.join(', ')}`
-        });
-      }
-      finalTestType = normalizedType;
-    }
+    const finalTestType = normalizeTestType(testType);
 
     // Validate required fields
     if (!title || marksPerQuestion === undefined || durationMinutes === undefined || totalQuestions === undefined || !questions) {
@@ -414,8 +419,6 @@ async function createGrandMockExam(req, res) {
       });
     }
 
-    const validTestType = (testType === 'Course Test') ? 'Course Test' : 'Grand Mock Test';
-
     // Create final exam in database
     const newExam = await Exam.create({
       title: title.trim(),
@@ -446,14 +449,14 @@ async function createGrandMockExam(req, res) {
 /**
  * GET /api/exams/grand-mock or /api/exams
  * Fetches exams excluding the questions array for summary list.
- * Optionally filters by ?testType=grand_mock or ?testType=course_test.
+ * Optionally filters by ?testType=grand_mock or ?testType=course_test (handles query parameter variations gracefully).
  */
 async function getAllGrandMocks(req, res) {
   try {
     const filter = {};
     const queryType = req.query.testType || req.query.type;
     if (queryType && queryType.trim()) {
-      filter.testType = queryType.trim().toLowerCase();
+      filter.testType = normalizeTestType(queryType);
     }
 
     const exams = await Exam.find(filter)
@@ -573,15 +576,7 @@ async function updateGrandMockExam(req, res) {
 
     if (req.body.title !== undefined) updates.title = req.body.title.trim();
     if (req.body.testType !== undefined && req.body.testType !== null && req.body.testType !== '') {
-      const allowedTestTypes = ['grand_mock', 'course_test'];
-      const normalizedType = String(req.body.testType).trim().toLowerCase();
-      if (!allowedTestTypes.includes(normalizedType)) {
-        return res.status(400).json({
-          success: false,
-          message: `Invalid testType. Allowed values are: ${allowedTestTypes.join(', ')}`
-        });
-      }
-      updates.testType = normalizedType;
+      updates.testType = normalizeTestType(req.body.testType);
     }
     if (req.body.marksPerQuestion !== undefined) {
       const parsedMarks = Number(req.body.marksPerQuestion);
@@ -854,6 +849,7 @@ module.exports = {
   deleteQuestionFromExam,
   validateAndSanitizeQuestion,
   validateAndSanitizeQuestions,
+  normalizeTestType,
   parseRawTextToMCQs,
   parseMCQText: parseRawTextToMCQs // Exported for test verification
 };

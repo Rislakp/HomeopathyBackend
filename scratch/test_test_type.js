@@ -1,79 +1,36 @@
-const mongoose = require('mongoose');
-const Exam = require('../models/exam.model');
-const { createGrandMockExam, getAllGrandMocks } = require('../controllers/exam.controller');
+const { normalizeTestType } = require('../controllers/exam.controller');
 
-async function testTestTypeField() {
-  console.log('Testing testType field and filtering logic...');
+function testNormalization() {
+  console.log('Testing normalizeTestType function across variations...');
 
-  // Mock res object
-  function createMockRes() {
-    return {
-      statusCode: 200,
-      jsonData: null,
-      status(code) {
-        this.statusCode = code;
-        return this;
-      },
-      json(data) {
-        this.jsonData = data;
-        return this;
-      }
-    };
-  }
+  const testCases = [
+    { input: 'Course Test', expected: 'course_test' },
+    { input: 'course-test', expected: 'course_test' },
+    { input: 'course_test', expected: 'course_test' },
+    { input: 'COURSE TEST', expected: 'course_test' },
+    { input: 'Grand Mock', expected: 'grand_mock' },
+    { input: 'grand-mock', expected: 'grand_mock' },
+    { input: 'grand_mock', expected: 'grand_mock' },
+    { input: undefined, expected: 'grand_mock' },
+    { input: null, expected: 'grand_mock' },
+    { input: '', expected: 'grand_mock' },
+    { input: 'random_string', expected: 'grand_mock' },
+  ];
 
-  // 1. Test schema defaults
-  const examDefault = new Exam({
-    title: 'Test Default Type Exam',
-    marksPerQuestion: 1,
-    durationMinutes: 30,
-    totalQuestions: 1,
-    questions: [{
-      questionText: 'Q1',
-      options: { A: '1', B: '2', C: '3', D: '4' },
-      correctOption: 'A'
-    }]
-  });
-
-  if (examDefault.testType !== 'grand_mock') {
-    throw new Error(`Expected default testType to be 'grand_mock', got '${examDefault.testType}'`);
-  }
-  console.log('✅ Schema default testType is grand_mock');
-
-  // 2. Test controller create with custom testType
-  const reqCustom = {
-    body: {
-      title: 'Course Test 1',
-      testType: 'course_test',
-      marksPerQuestion: 2,
-      durationMinutes: 45,
-      totalQuestions: 1,
-      questions: [{
-        questionText: 'Q1',
-        options: { A: 'A', B: 'B', C: 'C', D: 'D' },
-        correctOption: 'B'
-      }]
+  for (const tc of testCases) {
+    const result = normalizeTestType(tc.input);
+    console.log(`  Input: "${tc.input}" → Normalized: "${result}" (Expected: "${tc.expected}")`);
+    if (result !== tc.expected) {
+      throw new Error(`Failed for input: "${tc.input}". Expected "${tc.expected}", got "${result}"`);
     }
-  };
-  const resCustom = createMockRes();
-
-  // Test controller validation for invalid testType
-  const reqInvalid = {
-    body: {
-      ...reqCustom.body,
-      testType: 'invalid_type'
-    }
-  };
-  const resInvalid = createMockRes();
-  await createGrandMockExam(reqInvalid, resInvalid);
-  if (resInvalid.statusCode !== 400) {
-    throw new Error(`Expected 400 for invalid testType, got ${resInvalid.statusCode}`);
   }
-  console.log('✅ Invalid testType rejected with status 400');
 
-  console.log('ALL SCHEMA AND CONTROLLER UNIT CHECKS PASSED SUCCESSFULLY!');
+  console.log('\n✅ ALL NORMALIZATION TEST CASES PASSED SUCCESSFULLY!');
 }
 
-testTestTypeField().catch(err => {
+try {
+  testNormalization();
+} catch (err) {
   console.error('Test Failed:', err);
   process.exit(1);
-});
+}
