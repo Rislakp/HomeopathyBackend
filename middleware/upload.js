@@ -12,16 +12,24 @@ if (!fs.existsSync(uploadsDir)) {
   fs.mkdirSync(uploadsDir, { recursive: true });
 }
 
+// Helper to sanitize filenames: replace spaces with hyphens and remove special characters
+const sanitizeFilename = (filename) => {
+  if (!filename || typeof filename !== 'string') return 'file';
+  return filename.replace(/\s+/g, '-').replace(/[^a-zA-Z0-9.\-_]/g, '');
+};
+
 // Disk storage — used ONLY when Cloudinary is NOT configured (local dev without .env)
 const diskStorage = multer.diskStorage({
   destination: (req, file, cb) => {
     cb(null, uploadsDir);
   },
   filename: (req, file, cb) => {
-    const cleanName = path.parse(file.originalname || 'file').name.replace(/[^a-zA-Z0-9_-]/g, '_');
-    const uniqueSuffix = `${Date.now()}-${Math.round(Math.random() * 1e9)}`;
-    const ext = path.extname(file.originalname || '');
-    cb(null, `${file.fieldname}-${cleanName}-${uniqueSuffix}${ext}`);
+    const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
+    const sanitizedName = (file.originalname || 'file')
+      .replace(/\s+/g, '-')
+      .replace(/[^a-zA-Z0-9.\-_]/g, '');
+    file.originalname = sanitizedName;
+    cb(null, uniqueSuffix + '-' + sanitizedName);
   },
 });
 
@@ -62,7 +70,9 @@ if (isCloudinaryConfigured()) {
           resource_type = 'auto';
         }
 
-        const cleanName = path.parse(file.originalname || 'file').name.replace(/[^a-zA-Z0-9_-]/g, '_');
+        const sanitizedName = sanitizeFilename(file.originalname || 'file');
+        file.originalname = sanitizedName;
+        const cleanName = path.parse(sanitizedName).name.replace(/[^a-zA-Z0-9_-]/g, '_');
         const uniqueSuffix = `${Date.now()}-${Math.round(Math.random() * 1e6)}`;
 
         return {
@@ -169,6 +179,10 @@ const processUploadsToCloudinary = async (req, res, next) => {
     for (const file of files) {
       if (!file) continue;
 
+      if (file.originalname) {
+        file.originalname = sanitizeFilename(file.originalname);
+      }
+
       // ── Case 1: CloudinaryStorage already uploaded — normalize URL fields ──
       const existingCloudUrl = (file.secure_url && file.secure_url.startsWith('http'))
         ? file.secure_url
@@ -207,7 +221,12 @@ const processUploadsToCloudinary = async (req, res, next) => {
           resource_type = 'auto';
         }
 
-        const uploaded = await uploadBufferToCloudinary(file, folder, { resource_type });
+        const cleanBaseName = path.parse(file.originalname || 'file').name.replace(/[^a-zA-Z0-9_-]/g, '_');
+        const uniqueSuffix = `${Date.now()}-${Math.round(Math.random() * 1e6)}`;
+        const uploaded = await uploadBufferToCloudinary(file, folder, {
+          resource_type,
+          public_id: `${cleanBaseName}-${uniqueSuffix}`,
+        });
         file.secure_url = uploaded.secure_url;
         file.url = uploaded.secure_url;
         file.path = uploaded.secure_url;
@@ -300,15 +319,38 @@ const processUploadsToCloudinary = async (req, res, next) => {
   }
 };
 
+// Standalone sanitize filename middleware for Express routes if needed
+const sanitizeFilenameMiddleware = (req, res, next) => {
+  const sanitizeFile = (file) => {
+    if (!file) return;
+    if (file.originalname) file.originalname = sanitizeFilename(file.originalname);
+    if (file.filename) file.filename = sanitizeFilename(file.filename);
+  };
+
+  if (req.file) sanitizeFile(req.file);
+  if (req.files) {
+    if (Array.isArray(req.files)) {
+      req.files.forEach(sanitizeFile);
+    } else {
+      Object.values(req.files).flat().forEach(sanitizeFile);
+    }
+  }
+  next();
+};
+
 upload.processUploadsToCloudinary = processUploadsToCloudinary;
 upload.ALLOWED_VIDEO_FORMATS = ALLOWED_VIDEO_FORMATS;
 upload.ALL_ALLOWED_FORMATS = ALL_ALLOWED_FORMATS;
 upload.MAX_UPLOAD_SIZE = MAX_UPLOAD_SIZE;
 upload.handleUploadError = handleUploadError;
+upload.sanitizeFilename = sanitizeFilename;
+upload.sanitizeFilenameMiddleware = sanitizeFilenameMiddleware;
 
 module.exports = upload;
 module.exports.processUploadsToCloudinary = processUploadsToCloudinary;
 module.exports.handleUploadError = handleUploadError;
+module.exports.sanitizeFilename = sanitizeFilename;
+module.exports.sanitizeFilenameMiddleware = sanitizeFilenameMiddleware;
 
 
 

@@ -78,11 +78,15 @@ exports.uploadFiles = async (req, res) => {
         else if (!file.mimetype.startsWith('image/')) resourceType = 'raw';
       }
 
+      const originalName = (file.originalname || file.filename || 'file')
+        .replace(/\s+/g, '-')
+        .replace(/[^a-zA-Z0-9.\-_]/g, '');
+
       return {
         public_id: publicId,
         secure_url: secureUrl,
         url: secureUrl,
-        original_name: file.originalname || file.filename || 'file',
+        original_name: originalName,
         mimetype: file.mimetype || 'application/octet-stream',
         size: file.size || 0,
         resource_type: resourceType,

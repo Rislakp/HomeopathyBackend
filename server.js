@@ -93,6 +93,30 @@ app.use((req, res, next) => {
   next();
 });
 
+// Fallback handler for requests to /uploads that contain spaces or encoded spaces
+app.use('/uploads', (req, res, next) => {
+  try {
+    const decodedPath = decodeURIComponent(req.path);
+    const targetPath = path.join(uploadsDir, decodedPath);
+    if (fs.existsSync(targetPath)) {
+      return next();
+    }
+    // Check if sanitized version exists (spaces replaced with hyphens)
+    const sanitizedName = decodedPath.replace(/\s+/g, '-').replace(/[^a-zA-Z0-9.\-_/]/g, '');
+    const sanitizedPath = path.join(uploadsDir, sanitizedName);
+    if (fs.existsSync(sanitizedPath)) {
+      if (path.extname(sanitizedPath).toLowerCase() === '.pdf') {
+        res.setHeader('Content-Type', 'application/pdf');
+        res.setHeader('Content-Disposition', 'inline');
+      }
+      return res.sendFile(sanitizedPath);
+    }
+  } catch (e) {
+    // Malformed URI, continue to express.static
+  }
+  next();
+});
+
 // Serve static files from the uploads and public directory
 app.use('/uploads', express.static(uploadsDir, {
   setHeaders: (res, filePath) => {

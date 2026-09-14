@@ -1,3 +1,5 @@
+const path = require('path');
+const fs = require('fs');
 const mongoose = require('mongoose');
 const PDFDocument = require('pdfkit');
 const Exam = require('../common/models/exam.model');
@@ -5,13 +7,90 @@ const User = require('../../models/User');
 const Student = require('../../models/Student');
 
 /**
+ * Resolves the filesystem path to the brand logo image asset.
+ * Checks multiple relative and project locations so it reliably resolves across dev, test, and production.
+ *
+ * @returns {string|null} Resolved logo path or null if not found
+ */
+function getWatermarkLogoPath() {
+  const candidates = [
+    path.join(__dirname, '../../assets/images/WCA_LOGO.jpg'),
+    path.join(__dirname, '../../assets/images/logo.jpg'),
+    path.join(__dirname, '../../public/images/WCA_LOGO.jpg'),
+    path.join(__dirname, '../../public/images/logo.jpg'),
+    path.resolve(__dirname, '../../../student-frontend/assets/images/WCA_LOGO.jpg'),
+    path.resolve(__dirname, '../../../Homeopathy/assets/images/WCA_LOGO.jpg'),
+    path.resolve(__dirname, '../../../Homeopathy/student_frontend/assets/images/WCA_LOGO.jpg')
+  ];
+
+  for (const candidate of candidates) {
+    if (fs.existsSync(candidate)) {
+      return candidate;
+    }
+  }
+  return null;
+}
+
+/**
+ * Renders the brand watermark (website logo + static brand text "WHITE COAT ACADEMY") diagonally across the PDF layout.
+ * Dynamic student metadata (names, emails, user IDs) is strictly excluded.
+ *
+ * @param {PDFDocument} doc - PDFKit document instance
+ * @param {number} [pageWidth=595.28] - Page width in points (default: A4 width)
+ * @param {number} [pageHeight=841.89] - Page height in points (default: A4 height)
+ * @param {string} [customLogoPath=null] - Optional override path for brand logo image
+ */
+function buildPdfWatermark(doc, pageWidth = 595.28, pageHeight = 841.89, customLogoPath = null) {
+  const logoPath = customLogoPath || getWatermarkLogoPath();
+  const brandText = 'WHITE COAT ACADEMY';
+
+  doc.save();
+  doc.opacity(0.12);
+
+  const centerX = pageWidth / 2;
+  const centerY = pageHeight / 2;
+
+  // Rotate canvas diagonally across the page center (-45 degrees)
+  doc.rotate(-45, { origin: [centerX, centerY] });
+
+  const logoSize = 48;
+  const spacing = 14;
+
+  doc.font('Helvetica-Bold').fontSize(26);
+  const textWidth = doc.widthOfString(brandText);
+  const totalWidth = logoSize + spacing + textWidth;
+
+  const startX = centerX - totalWidth / 2;
+  const startY = centerY - logoSize / 2;
+
+  // 1. Embed the website logo image asset diagonally
+  if (logoPath && fs.existsSync(logoPath)) {
+    try {
+      doc.image(logoPath, startX, startY, {
+        width: logoSize,
+        height: logoSize
+      });
+    } catch (err) {
+      console.warn('Unable to embed logo image in watermark:', err.message);
+    }
+  }
+
+  // 2. Draw static brand text "WHITE COAT ACADEMY"
+  doc.fillColor('#4A5568');
+  const textY = centerY - doc.currentLineHeight() / 2;
+  doc.text(brandText, startX + logoSize + spacing, textY, { lineBreak: false });
+
+  doc.restore();
+}
+
+/**
  * Generates a watermarked answer key PDF buffer for a given exam and user.
  * 
  * @param {Object} exam - The exam document from DB containing questions and metadata.
- * @param {Object} user - The requesting user object ({ id, name, email, role }).
+ * @param {Object} [user={}] - The requesting user object ({ id, name, email, role }).
  * @returns {Promise<Buffer>} - Resolves to the PDF binary buffer.
  */
-function generateWatermarkedAnswerKeyPDF(exam, user) {
+function generateWatermarkedAnswerKeyPDF(exam, user = {}) {
   return new Promise((resolve, reject) => {
     try {
       const doc = new PDFDocument({
@@ -82,9 +161,9 @@ function generateWatermarkedAnswerKeyPDF(exam, user) {
          .fillColor('#4A5568')
          .text(`Total Questions: ${totalQs}   |   Marks per Question: ${marksPerQ}   |   Negative Mark: -${negMark}   |   Duration: ${duration}`, MARGIN + 10, metaStartY + 30);
 
-      const userName = user.name || 'Student';
-      const userEmail = user.email || 'N/A';
-      const userId = user.id || user.userId || 'N/A';
+      const userName = (user && user.name) || 'Student';
+      const userEmail = (user && user.email) || 'N/A';
+      const userId = (user && (user.id || user.userId)) || 'N/A';
       const issueDate = new Date().toLocaleString('en-US', { timeZone: 'Asia/Kolkata', dateStyle: 'medium', timeStyle: 'short' });
 
       doc.text(`Issued To: ${userName} (${userEmail})   |   ID: ${userId}   |   Generated: ${issueDate}`, MARGIN + 10, metaStartY + 48);
@@ -190,8 +269,6 @@ function generateWatermarkedAnswerKeyPDF(exam, user) {
       const range = doc.bufferedPageRange();
       const totalPages = range.count;
 
-      const watermarkText = `WHITE COAT ACADEMY   •   ${userName.toUpperCase()}   •   ${userEmail}   •   ID: ${userId}`;
-
       for (let i = range.start; i < range.start + totalPages; i++) {
         doc.switchToPage(i);
 
@@ -216,22 +293,8 @@ function generateWatermarkedAnswerKeyPDF(exam, user) {
           doc.restore();
         }
 
-        // 2. Diagonal Semi-Transparent Watermark across page center
-        doc.save();
-        doc.opacity(0.14);
-        doc.fillColor('#4A5568');
-        doc.fontSize(13);
-        doc.font('Helvetica-Bold');
-
-        const centerX = PAGE_WIDTH / 2;
-        const centerY = PAGE_HEIGHT / 2;
-
-        doc.rotate(-45, { origin: [centerX, centerY] });
-        doc.text(watermarkText, centerX - 300, centerY, {
-          width: 600,
-          align: 'center'
-        });
-        doc.restore();
+        // 2. Diagonal Semi-Transparent Watermark (Static Brand Text & Website Logo Asset)
+        buildPdfWatermark(doc, PAGE_WIDTH, PAGE_HEIGHT);
 
         // 3. Running Footer on ALL pages
         doc.save();
@@ -325,5 +388,7 @@ async function downloadAnswerKey(req, res) {
 
 module.exports = {
   downloadAnswerKey,
-  generateWatermarkedAnswerKeyPDF
+  generateWatermarkedAnswerKeyPDF,
+  buildPdfWatermark,
+  getWatermarkLogoPath
 };
