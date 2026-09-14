@@ -1,4 +1,4 @@
-const mime = require('mime-types');
+const mimeTypes = require('mime-types');
 const Course = require('../models/Course');
 const mongoose = require('mongoose');
 const fs = require('fs');
@@ -672,7 +672,7 @@ exports.addLesson = async (req, res) => {
         const fileUrl = normalizeFileUrl(rawFileUrl);
         const fileTitle = f.originalname || f.filename || 'Resource';
         const field = (f.fieldname || '').toLowerCase();
-        const fileMimeType = (f.mimetype || (f.originalname ? mime.lookup(f.originalname) : '') || '').toLowerCase();
+        const fileMimeType = (f.mimetype || (f.originalname ? mimeTypes.lookup(f.originalname) : '') || '').toLowerCase();
         const fileObj = { title: fileTitle, url: fileUrl, public_id: f.public_id || '', secure_url: f.secure_url || fileUrl, resource_type: f.resource_type || (fileMimeType.startsWith('video/') ? 'video' : (fileMimeType === 'application/pdf' ? 'raw' : 'auto')) };
 
         if (field === 'videourl' || field === 'video' || field === 'videofile') {
@@ -854,7 +854,7 @@ exports.updateLesson = async (req, res) => {
         const fileUrl = normalizeFileUrl(rawFileUrl);
         const fileTitle = f.originalname || f.filename || 'Resource';
         const field = (f.fieldname || '').toLowerCase();
-        const fileMimeType = (f.mimetype || (f.originalname ? mime.lookup(f.originalname) : '') || '').toLowerCase();
+        const fileMimeType = (f.mimetype || (f.originalname ? mimeTypes.lookup(f.originalname) : '') || '').toLowerCase();
         const fileObj = { title: fileTitle, url: fileUrl, public_id: f.public_id || '', secure_url: f.secure_url || fileUrl, resource_type: f.resource_type || (fileMimeType.startsWith('video/') ? 'video' : (fileMimeType === 'application/pdf' ? 'raw' : 'auto')) };
 
         if (field === 'videourl' || field === 'video' || field === 'videofile') {

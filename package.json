@@ -25,6 +25,7 @@
         "dotenv": "^16.6.1",
         "express": "^4.19.2",
         "jsonwebtoken": "^9.0.3",
+        "mime-types": "^2.1.35",
         "mongoose": "^8.2.1",
         "multer": "^2.2.0",
         "multer-storage-cloudinary": "^4.0.0",

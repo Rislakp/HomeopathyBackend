@@ -32,17 +32,17 @@ async function testLessonMimeInitialization() {
     const rawFileUrl = f.secure_url;
     const fileTitle = f.originalname;
     const field = (f.fieldname || '').toLowerCase();
-    const mime = (f.mimetype || '').toLowerCase();
+    const fileMimeType = (f.mimetype || (f.originalname ? require('mime-types').lookup(f.originalname) : '') || '').toLowerCase();
     const fileObj = {
       title: fileTitle,
       url: rawFileUrl,
       public_id: f.public_id || '',
       secure_url: f.secure_url || rawFileUrl,
-      resource_type: f.resource_type || (mime.startsWith('video/') ? 'video' : (mime === 'application/pdf' ? 'raw' : 'auto'))
+      resource_type: f.resource_type || (fileMimeType.startsWith('video/') ? 'video' : (fileMimeType === 'application/pdf' ? 'raw' : 'auto'))
     };
 
     assert.ok(fileObj, 'fileObj must be instantiated without TDZ ReferenceError');
-    assert.strictEqual(typeof mime, 'string');
+    assert.strictEqual(typeof fileMimeType, 'string');
     if (f.mimetype === 'video/mp4') {
       assert.strictEqual(fileObj.resource_type, 'video');
     } else if (f.mimetype === 'application/pdf') {
