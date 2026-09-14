@@ -27,6 +27,33 @@ const recordingSchema = new mongoose.Schema(
       trim: true,
       default: '',
     },
+    width: {
+      type: Number,
+      default: 0,
+    },
+    height: {
+      type: Number,
+      default: 0,
+    },
+    bytes: {
+      type: Number,
+      default: 0,
+    },
+    format: {
+      type: String,
+      trim: true,
+      default: 'mp4',
+    },
+    resolution: {
+      type: String,
+      trim: true,
+      default: '',
+    },
+    qualityTag: {
+      type: String,
+      trim: true,
+      default: '',
+    },
     // Hierarchical / Course model references (optional)
     courseId: {
       type: mongoose.Schema.Types.ObjectId,

@@ -75,14 +75,18 @@ app.use(cors(corsOptions));
 app.options('*', cors(corsOptions));
 
 // Body Parser Middleware (Must be registered before any routes are defined)
-app.use(express.json({ limit: '50mb' }));
-app.use(express.urlencoded({ limit: '50mb', extended: true }));
+app.use(express.json({ limit: '100mb' }));
+app.use(express.urlencoded({ limit: '100mb', extended: true }));
 
 
-// ── Global request timeout (30 s) ─────────────────────────────────────────────
-// Ensures Flutter never waits forever if a handler gets stuck.
+// ── Request timeout middleware ─────────────────────────────────────────────
+// Uses 120s timeout for video uploads/recordings, 30s for general REST endpoints.
 app.use((req, res, next) => {
-  res.setTimeout(30000, () => {
+  const url = (req.originalUrl || req.url || '').toLowerCase();
+  const isUploadRoute = url.includes('/upload') || url.includes('/recordings') || url.includes('/media');
+  const timeoutMs = isUploadRoute ? 120000 : 30000;
+
+  res.setTimeout(timeoutMs, () => {
     if (!res.headersSent) {
       res.status(503).json({
         success: false,

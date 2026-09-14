@@ -5,8 +5,6 @@ const { CloudinaryStorage } = require('multer-storage-cloudinary');
 const { cloudinary, isCloudinaryConfigured, uploadBufferToCloudinary } = require('../config/cloudinary');
 
 // Ensure uploads directory exists ONLY as a last-resort dev fallback.
-// On Render (ephemeral FS) this folder is wiped on restart, so Cloudinary
-// must always be the primary destination in production.
 const uploadsDir = path.join(__dirname, '../uploads');
 if (!fs.existsSync(uploadsDir)) {
   fs.mkdirSync(uploadsDir, { recursive: true });
@@ -38,7 +36,9 @@ const ALLOWED_VIDEO_FORMATS = ['mp4', 'mov', 'avi', 'mkv', 'webm', 'flv', 'wmv',
 const ALLOWED_IMAGE_FORMATS = ['jpg', 'jpeg', 'png', 'webp', 'gif', 'svg'];
 const ALLOWED_DOC_FORMATS = ['pdf', 'doc', 'docx', 'ppt', 'pptx', 'xls', 'xlsx', 'txt', 'csv', 'zip', 'rar'];
 const ALL_ALLOWED_FORMATS = [...ALLOWED_VIDEO_FORMATS, ...ALLOWED_IMAGE_FORMATS, ...ALLOWED_DOC_FORMATS];
-const MAX_UPLOAD_SIZE = 100 * 1024 * 1024;
+
+// Max file upload limit: 200MB to support large video streams and live recordings
+const MAX_UPLOAD_SIZE = parseInt(process.env.MAX_UPLOAD_SIZE_BYTES || '', 10) || 200 * 1024 * 1024;
 
 // ── Cloudinary Storage (primary) ──────────────────────────────────────────────
 // multer-storage-cloudinary streams directly from the incoming multipart stream
@@ -56,12 +56,12 @@ if (isCloudinaryConfigured()) {
         let folder = 'homeopathy-media';
         let resource_type = 'auto';
 
-        if (mimetype.startsWith('video/') || fieldname.includes('video') || ALLOWED_VIDEO_FORMATS.includes(ext)) {
+        if (mimetype.startsWith('video/') || fieldname.includes('video') || fieldname.includes('recording') || ALLOWED_VIDEO_FORMATS.includes(ext)) {
           folder = 'homeopathy-media/videos';
           resource_type = 'video';
         } else if (mimetype === 'application/pdf' || fieldname.includes('pdf') || ext === 'pdf') {
           folder = 'homeopathy-media/pdf-notes';
-          resource_type = 'auto';
+          resource_type = 'raw';
         } else if (mimetype.startsWith('image/') || ALLOWED_IMAGE_FORMATS.includes(ext)) {
           folder = 'homeopathy-media/images';
           resource_type = 'image';
@@ -84,16 +84,12 @@ if (isCloudinaryConfigured()) {
     });
     console.log('✅ Cloudinary storage engine initialized — files will be uploaded to Cloudinary directly.');
   } catch (err) {
-    console.error('⚠️  Failed to initialize CloudinaryStorage:', err.message);
+    console.error('⚠️ Failed to initialize CloudinaryStorage:', err.message);
     cloudinaryStorage = null;
   }
 }
 
 // ── Storage selection ─────────────────────────────────────────────────────────
-// Priority:
-//   1. CloudinaryStorage (direct stream)  — when Cloudinary is configured
-//   2. memoryStorage                       — buffer fallback to stream via SDK
-//   3. diskStorage                         — ONLY when Cloudinary is absent (local dev)
 const chosenStorage = cloudinaryStorage
   ? cloudinaryStorage
   : isCloudinaryConfigured()
@@ -125,7 +121,7 @@ const handleUploadError = (err, req, res, next) => {
   if (err.code === 'LIMIT_FILE_SIZE') {
     return res.status(413).json({
       success: false,
-      message: 'File size exceeds the allowed limit (100MB). Please select a smaller file.',
+      message: 'File size exceeds the allowed limit (200MB). Please select a smaller file.',
       error: err.message,
     });
   }
@@ -135,7 +131,7 @@ const handleUploadError = (err, req, res, next) => {
     const status = Number(err.http_code) >= 400 && Number(err.http_code) < 500 ? Number(err.http_code) : 400;
     return res.status(status).json({
       success: false,
-      message: 'Cloudinary rejected the upload. Check the file format and size limits.',
+      message: 'Cloudinary rejected the upload. Check file format and size limits.',
       error: err.message || 'Cloudinary upload failed',
     });
   }
@@ -149,16 +145,6 @@ const handleUploadError = (err, req, res, next) => {
 
 /**
  * Middleware that guarantees every file object has a Cloudinary HTTPS secure_url.
- *
- * Handles three cases in order:
- *   1. CloudinaryStorage already uploaded the file and set file.path / file.secure_url.
- *   2. memoryStorage buffer — stream it to Cloudinary via uploadBufferToCloudinary.
- *   3. diskStorage fallback — if Cloudinary is configured, stream the saved file to
- *      Cloudinary then delete the local copy; otherwise keep the local relative URL
- *      (acceptable only in dev without Cloudinary).
- *
- * After this middleware, controllers can always trust `file.secure_url` to be a
- * fully qualified HTTPS URL (Cloudinary) or a relative /uploads/ path (dev-only).
  */
 const processUploadsToCloudinary = async (req, res, next) => {
   const files = [];
@@ -174,6 +160,8 @@ const processUploadsToCloudinary = async (req, res, next) => {
   if (!files.length) {
     return next();
   }
+
+  const isProd = process.env.NODE_ENV === 'production' || process.env.REQUIRE_CLOUDINARY === 'true';
 
   try {
     for (const file of files) {
@@ -202,17 +190,18 @@ const processUploadsToCloudinary = async (req, res, next) => {
       // ── Case 2: Memory buffer — stream to Cloudinary ───────────────────────
       if (file.buffer && isCloudinaryConfigured()) {
         const mimetype = (file.mimetype || '').toLowerCase();
+        const fieldname = (file.fieldname || '').toLowerCase();
         const ext = path.extname(file.originalname || '').toLowerCase().replace('.', '');
 
         let folder = 'homeopathy-media';
         let resource_type = 'auto';
 
-        if (mimetype.startsWith('video/') || ALLOWED_VIDEO_FORMATS.includes(ext)) {
+        if (mimetype.startsWith('video/') || fieldname.includes('video') || fieldname.includes('recording') || ALLOWED_VIDEO_FORMATS.includes(ext)) {
           folder = 'homeopathy-media/videos';
           resource_type = 'video';
         } else if (mimetype === 'application/pdf' || ext === 'pdf') {
           folder = 'homeopathy-media/pdf-notes';
-          resource_type = 'auto';
+          resource_type = 'raw';
         } else if (mimetype.startsWith('image/')) {
           folder = 'homeopathy-media/images';
           resource_type = 'image';
@@ -227,31 +216,35 @@ const processUploadsToCloudinary = async (req, res, next) => {
           resource_type,
           public_id: `${cleanBaseName}-${uniqueSuffix}`,
         });
+
         file.secure_url = uploaded.secure_url;
         file.url = uploaded.secure_url;
         file.path = uploaded.secure_url;
         file.public_id = uploaded.public_id;
         file.resource_type = uploaded.resource_type;
+        file.width = uploaded.width || file.width;
+        file.height = uploaded.height || file.height;
+        file.bytes = uploaded.bytes || file.size;
+        file.format = uploaded.format || ext;
         continue;
       }
 
-      // ── Case 3: Disk storage ───────────────────────────────────────────────
-      // If Cloudinary IS configured but the file landed on disk (e.g., CloudinaryStorage
-      // init failed at runtime), stream it to Cloudinary and delete the local copy.
+      // ── Case 3: Disk storage — stream to Cloudinary & delete local copy ────
       if (file.path && !file.path.startsWith('http') && isCloudinaryConfigured()) {
         try {
           const mimetype = (file.mimetype || '').toLowerCase();
+          const fieldname = (file.fieldname || '').toLowerCase();
           const ext = path.extname(file.originalname || file.path || '').toLowerCase().replace('.', '');
 
           let folder = 'homeopathy-media';
           let resource_type = 'auto';
 
-          if (mimetype.startsWith('video/') || ALLOWED_VIDEO_FORMATS.includes(ext)) {
+          if (mimetype.startsWith('video/') || fieldname.includes('video') || fieldname.includes('recording') || ALLOWED_VIDEO_FORMATS.includes(ext)) {
             folder = 'homeopathy-media/videos';
             resource_type = 'video';
           } else if (mimetype === 'application/pdf' || ext === 'pdf') {
             folder = 'homeopathy-media/pdf-notes';
-            resource_type = 'auto';
+            resource_type = 'raw';
           } else if (mimetype.startsWith('image/')) {
             folder = 'homeopathy-media/images';
             resource_type = 'image';
@@ -282,14 +275,31 @@ const processUploadsToCloudinary = async (req, res, next) => {
           file.path = uploaded.secure_url;
           file.public_id = uploaded.public_id;
           file.resource_type = uploaded.resource_type;
+          file.width = uploaded.width || file.width;
+          file.height = uploaded.height || file.height;
+          file.bytes = uploaded.bytes || file.size;
+          file.format = uploaded.format || ext;
           continue;
         } catch (diskUploadErr) {
           console.error('Failed to upload disk-landed file to Cloudinary:', diskUploadErr.message);
-          // Fall through to local path fallback below
+          if (isProd) {
+            return res.status(500).json({
+              success: false,
+              message: 'Failed to upload media file to Cloudinary storage in production.',
+              error: diskUploadErr.message,
+            });
+          }
         }
       }
 
-      // ── Case 4: Pure local fallback (no Cloudinary configured — dev only) ──
+      // ── Case 4: Pure local fallback (dev mode only) ──────────────────────
+      if (isProd && (!file.secure_url || !file.secure_url.startsWith('http'))) {
+        return res.status(500).json({
+          success: false,
+          message: 'Cloudinary storage is required in production. Local disk fallbacks are disabled.',
+        });
+      }
+
       if (file.filename || file.path) {
         const localPath = file.path && !file.path.startsWith('http')
           ? `/uploads/${path.basename(file.path)}`
@@ -297,14 +307,6 @@ const processUploadsToCloudinary = async (req, res, next) => {
         file.secure_url = file.secure_url || localPath;
         file.url = file.url || localPath;
         file.path = file.path || localPath;
-
-        if (isCloudinaryConfigured()) {
-          // Warn loudly — this should never happen in production
-          console.warn(
-            `⚠️  File "${file.originalname}" was stored locally at "${localPath}" even though ` +
-            `Cloudinary is configured. This URL will break on Render ephemeral storage.`
-          );
-        }
       }
     }
 
@@ -319,38 +321,14 @@ const processUploadsToCloudinary = async (req, res, next) => {
   }
 };
 
-// Standalone sanitize filename middleware for Express routes if needed
-const sanitizeFilenameMiddleware = (req, res, next) => {
-  const sanitizeFile = (file) => {
-    if (!file) return;
-    if (file.originalname) file.originalname = sanitizeFilename(file.originalname);
-    if (file.filename) file.filename = sanitizeFilename(file.filename);
-  };
-
-  if (req.file) sanitizeFile(req.file);
-  if (req.files) {
-    if (Array.isArray(req.files)) {
-      req.files.forEach(sanitizeFile);
-    } else {
-      Object.values(req.files).flat().forEach(sanitizeFile);
-    }
-  }
-  next();
-};
-
 upload.processUploadsToCloudinary = processUploadsToCloudinary;
 upload.ALLOWED_VIDEO_FORMATS = ALLOWED_VIDEO_FORMATS;
 upload.ALL_ALLOWED_FORMATS = ALL_ALLOWED_FORMATS;
 upload.MAX_UPLOAD_SIZE = MAX_UPLOAD_SIZE;
 upload.handleUploadError = handleUploadError;
 upload.sanitizeFilename = sanitizeFilename;
-upload.sanitizeFilenameMiddleware = sanitizeFilenameMiddleware;
 
 module.exports = upload;
 module.exports.processUploadsToCloudinary = processUploadsToCloudinary;
 module.exports.handleUploadError = handleUploadError;
 module.exports.sanitizeFilename = sanitizeFilename;
-module.exports.sanitizeFilenameMiddleware = sanitizeFilenameMiddleware;
-
-
-

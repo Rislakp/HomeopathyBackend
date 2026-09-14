@@ -11,7 +11,16 @@ const isCloudinaryConfigured = () => Boolean(
 );
 
 const configureCloudinary = () => {
+  const isProd = process.env.NODE_ENV === 'production' || process.env.REQUIRE_CLOUDINARY === 'true';
+
   if (!isCloudinaryConfigured()) {
+    if (isProd) {
+      throw new Error(
+        'FATAL: Cloudinary credentials (CLOUDINARY_CLOUD_NAME, CLOUDINARY_API_KEY, CLOUDINARY_API_SECRET or CLOUDINARY_URL) ' +
+        'are missing in production environment! All uploaded media assets must persist to Cloudinary.'
+      );
+    }
+    console.warn('⚠️  Cloudinary credentials not set in process.env — using local disk fallback for dev only.');
     return false;
   }
 
@@ -29,6 +38,8 @@ const configureCloudinary = () => {
     });
   }
 
+  const cloudName = process.env.CLOUDINARY_CLOUD_NAME || 'configured_cloud';
+  console.log(`✅ Cloudinary configured successfully (Cloud Name: ${cloudName}).`);
   return true;
 };
 

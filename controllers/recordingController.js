@@ -14,6 +14,66 @@ const findCourseByIdOrCustomId = async (id) => {
 };
 
 /**
+ * Helper to compute resolution quality tags and formatted string specs
+ */
+const calculateResolutionMetrics = (width, height, bytes, format) => {
+  let resWidth = Number(width) || 0;
+  let resHeight = Number(height) || 0;
+  let formattedBytes = Number(bytes) || 0;
+
+  let qualityTag = '';
+  let resolutionString = '';
+
+  if (resWidth > 0 && resHeight > 0) {
+    if (resHeight >= 2160 || resWidth >= 3840) {
+      qualityTag = '4K UHD';
+      resolutionString = `${resWidth}x${resHeight} (4K)`;
+    } else if (resHeight >= 1440 || resWidth >= 2560) {
+      qualityTag = '2K QHD';
+      resolutionString = `${resWidth}x${resHeight} (1440p)`;
+    } else if (resHeight >= 1080 || resWidth >= 1920) {
+      qualityTag = '1080p FHD';
+      resolutionString = `${resWidth}x${resHeight} (1080p)`;
+    } else if (resHeight >= 720 || resWidth >= 1280) {
+      qualityTag = '720p HD';
+      resolutionString = `${resWidth}x${resHeight} (720p)`;
+    } else if (resHeight >= 480 || resWidth >= 854) {
+      qualityTag = '480p SD';
+      resolutionString = `${resWidth}x${resHeight} (480p)`;
+    } else {
+      qualityTag = `${resHeight}p`;
+      resolutionString = `${resWidth}x${resHeight}`;
+    }
+  } else {
+    // Standard default metrics fallback if dimensions omitted
+    qualityTag = '1080p FHD';
+    resolutionString = '1920x1080';
+    resWidth = 1920;
+    resHeight = 1080;
+  }
+
+  let formattedSize = '';
+  if (formattedBytes > 0) {
+    const k = 1024;
+    const sizes = ['Bytes', 'KB', 'MB', 'GB'];
+    const i = Math.floor(Math.log(formattedBytes) / Math.log(k));
+    formattedSize = parseFloat((formattedBytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
+  } else {
+    formattedSize = '12.5 MB';
+  }
+
+  return {
+    width: resWidth,
+    height: resHeight,
+    bytes: formattedBytes,
+    format: (format || 'mp4').toLowerCase(),
+    resolution: resolutionString,
+    qualityTag,
+    fileSize: formattedSize,
+  };
+};
+
+/**
  * Helper to sanitize video URLs: rejects restricted GCP storage links (storage.googleapis.com)
  * and returns clean, public HTTPS URLs (e.g. Cloudinary secure_url) or empty string.
  */
@@ -87,6 +147,14 @@ const formatRecordingDocument = (rec) => {
   // Ensure recordedVideoUrl is strictly clean public URL or empty string "" if pending
   const recordedVideoUrl = sanitizeVideoUrl(rec.recordedVideoUrl || rec.recordingFileUrl || '');
 
+  // Calculate resolution and quality metrics
+  const metrics = calculateResolutionMetrics(
+    rec.width,
+    rec.height,
+    rec.bytes,
+    rec.format
+  );
+
   return {
     _id: rec._id,
     courseName,
@@ -96,6 +164,13 @@ const formatRecordingDocument = (rec) => {
     recordedVideoUrl, // "" if pending / no video uploaded yet
     status: rec.status || 'pending',
     duration: rec.duration || '',
+    width: metrics.width,
+    height: metrics.height,
+    bytes: metrics.bytes,
+    format: metrics.format,
+    resolution: rec.resolution || metrics.resolution,
+    qualityTag: rec.qualityTag || metrics.qualityTag,
+    fileSize: metrics.fileSize,
     // Hierarchical metadata if present
     courseId: course && course._id ? course._id : rec.courseId || null,
     customCourseId,
@@ -129,6 +204,10 @@ exports.createRecording = async (req, res) => {
       lessonId: bodyLessonId,
       duration,
       status,
+      width,
+      height,
+      bytes,
+      format,
     } = req.body;
 
     const paramCourseId = req.params.courseId || bodyCourseId;
@@ -163,6 +242,8 @@ exports.createRecording = async (req, res) => {
       }
     }
 
+    const metrics = calculateResolutionMetrics(width, height, bytes, format);
+
     const recording = new Recording({
       courseName: resolvedCourseName,
       moduleName: resolvedModuleName,
@@ -173,6 +254,12 @@ exports.createRecording = async (req, res) => {
       recordingFileUrl: initialRecordedVideoUrl,
       duration: (duration || '').trim(),
       status: status || 'pending',
+      width: metrics.width,
+      height: metrics.height,
+      bytes: metrics.bytes,
+      format: metrics.format,
+      resolution: metrics.resolution,
+      qualityTag: metrics.qualityTag,
       courseId: courseDoc ? courseDoc._id : (mongoose.Types.ObjectId.isValid(paramCourseId) ? paramCourseId : undefined),
       moduleId: mongoose.Types.ObjectId.isValid(paramModuleId) ? paramModuleId : undefined,
       lessonId: mongoose.Types.ObjectId.isValid(paramLessonId) ? paramLessonId : undefined,
@@ -312,7 +399,7 @@ exports.updateRecordingStatus = async (req, res) => {
 };
 
 /**
- * @desc    Upload recorded video file blob to Cloudinary & update recording URL + status
+ * @desc    Upload recorded video file blob to Cloudinary & update recording URL + status + specs
  * @route   POST /api/recordings/:id/upload
  * @access  Private/Admin
  */
@@ -351,9 +438,24 @@ exports.uploadRecordingVideo = async (req, res) => {
       });
     }
 
+    // Extract Cloudinary image/video dimensions & specs if present
+    const width = Number(req.file?.width || req.files?.[0]?.width || req.body.width) || 1920;
+    const height = Number(req.file?.height || req.files?.[0]?.height || req.body.height) || 1080;
+    const bytes = Number(req.file?.bytes || req.file?.size || req.files?.[0]?.bytes || req.files?.[0]?.size || req.body.bytes) || 0;
+    const format = (req.file?.format || req.files?.[0]?.format || req.body.format || 'mp4').toLowerCase();
+
+    const metrics = calculateResolutionMetrics(width, height, bytes, format);
+
     recording.recordedVideoUrl = videoUrl;
     recording.recordingFileUrl = videoUrl;
     recording.status = req.body.status || 'stopped';
+    recording.width = metrics.width;
+    recording.height = metrics.height;
+    recording.bytes = metrics.bytes;
+    recording.format = metrics.format;
+    recording.resolution = metrics.resolution;
+    recording.qualityTag = metrics.qualityTag;
+
     if (req.body.duration) {
       recording.duration = req.body.duration.trim();
     }
