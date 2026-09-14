@@ -1,3 +1,4 @@
+const mime = require('mime-types');
 const Course = require('../models/Course');
 const mongoose = require('mongoose');
 const fs = require('fs');
@@ -671,8 +672,8 @@ exports.addLesson = async (req, res) => {
         const fileUrl = normalizeFileUrl(rawFileUrl);
         const fileTitle = f.originalname || f.filename || 'Resource';
         const field = (f.fieldname || '').toLowerCase();
-        const mime = (f.mimetype || '').toLowerCase();
-        const fileObj = { title: fileTitle, url: fileUrl, public_id: f.public_id || '', secure_url: f.secure_url || fileUrl, resource_type: f.resource_type || (mime.startsWith('video/') ? 'video' : (mime === 'application/pdf' ? 'raw' : 'auto')) };
+        const fileMimeType = (f.mimetype || (f.originalname ? mime.lookup(f.originalname) : '') || '').toLowerCase();
+        const fileObj = { title: fileTitle, url: fileUrl, public_id: f.public_id || '', secure_url: f.secure_url || fileUrl, resource_type: f.resource_type || (fileMimeType.startsWith('video/') ? 'video' : (fileMimeType === 'application/pdf' ? 'raw' : 'auto')) };
 
         if (field === 'videourl' || field === 'video' || field === 'videofile') {
           finalVideoUrl = fileUrl;
@@ -687,18 +688,18 @@ exports.addLesson = async (req, res) => {
         } else if (field === 'attachments' || field === 'attachment' || field === 'assignments' || field === 'assignment' || field.startsWith('attachments')) {
           finalAttachments.push(fileObj);
         } else if (field === 'file' || field === 'lessonfile' || field === 'uploadfileorlink') {
-          if (mime.startsWith('video/')) {
+          if (fileMimeType.startsWith('video/')) {
             finalVideoUrl = fileUrl;
             if (!finalVideoParts.some((p) => p.url === fileUrl)) finalVideoParts.push(fileObj);
-          } else if (mime === 'application/pdf') {
+          } else if (fileMimeType === 'application/pdf') {
             finalPdfNotes.push(fileObj);
           } else {
             finalAttachments.push(fileObj);
           }
-        } else if (mime.startsWith('video/')) {
+        } else if (fileMimeType.startsWith('video/')) {
           finalVideoUrl = fileUrl;
           if (!finalVideoParts.some((p) => p.url === fileUrl)) finalVideoParts.push(fileObj);
-        } else if (mime === 'application/pdf') {
+        } else if (fileMimeType === 'application/pdf') {
           finalPdfNotes.push(fileObj);
         } else {
           finalAttachments.push(fileObj);
@@ -853,8 +854,8 @@ exports.updateLesson = async (req, res) => {
         const fileUrl = normalizeFileUrl(rawFileUrl);
         const fileTitle = f.originalname || f.filename || 'Resource';
         const field = (f.fieldname || '').toLowerCase();
-        const mime = (f.mimetype || '').toLowerCase();
-        const fileObj = { title: fileTitle, url: fileUrl, public_id: f.public_id || '', secure_url: f.secure_url || fileUrl, resource_type: f.resource_type || (mime.startsWith('video/') ? 'video' : (mime === 'application/pdf' ? 'raw' : 'auto')) };
+        const fileMimeType = (f.mimetype || (f.originalname ? mime.lookup(f.originalname) : '') || '').toLowerCase();
+        const fileObj = { title: fileTitle, url: fileUrl, public_id: f.public_id || '', secure_url: f.secure_url || fileUrl, resource_type: f.resource_type || (fileMimeType.startsWith('video/') ? 'video' : (fileMimeType === 'application/pdf' ? 'raw' : 'auto')) };
 
         if (field === 'videourl' || field === 'video' || field === 'videofile') {
           targetLesson.videoUrl = fileUrl;
@@ -869,18 +870,18 @@ exports.updateLesson = async (req, res) => {
         } else if (field === 'attachments' || field === 'attachment' || field === 'assignments' || field === 'assignment' || field.startsWith('attachments')) {
           targetLesson.attachments.push(fileObj);
         } else if (field === 'file' || field === 'lessonfile' || field === 'uploadfileorlink') {
-          if (mime.startsWith('video/')) {
+          if (fileMimeType.startsWith('video/')) {
             targetLesson.videoUrl = fileUrl;
             if (!targetLesson.videoParts.some((p) => p.url === fileUrl)) targetLesson.videoParts.push(fileObj);
-          } else if (mime === 'application/pdf') {
+          } else if (fileMimeType === 'application/pdf') {
             targetLesson.pdfNotes.push(fileObj);
           } else {
             targetLesson.attachments.push(fileObj);
           }
-        } else if (mime.startsWith('video/')) {
+        } else if (fileMimeType.startsWith('video/')) {
           targetLesson.videoUrl = fileUrl;
           if (!targetLesson.videoParts.some((p) => p.url === fileUrl)) targetLesson.videoParts.push(fileObj);
-        } else if (mime === 'application/pdf') {
+        } else if (fileMimeType === 'application/pdf') {
           targetLesson.pdfNotes.push(fileObj);
         } else {
           targetLesson.attachments.push(fileObj);

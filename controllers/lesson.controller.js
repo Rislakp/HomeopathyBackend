@@ -1,3 +1,4 @@
+const mime = require('mime-types');
 const courseController = require('./courseController');
 
 module.exports = {
