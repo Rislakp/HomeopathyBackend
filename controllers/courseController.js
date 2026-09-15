@@ -593,10 +593,16 @@ exports.getLessonsByModule = async (req, res) => {
     }
 
     const course = await findCourseByIdOrCustomId(courseId);
-    if (!course) return res.status(404).json({ success: false, message: 'Course not found' });
+    if (!course) {
+      console.log('[getLessonsByModule] Course not found:', courseId);
+      return res.status(404).json({ success: false, message: 'Course not found' });
+    }
 
     const moduleItem = course.modules.id(moduleId);
-    if (!moduleItem) return res.status(404).json({ success: false, message: 'Module not found' });
+    if (!moduleItem) {
+      console.log('[getLessonsByModule] Module not found:', moduleId);
+      return res.status(404).json({ success: false, message: 'Module not found' });
+    }
 
     const lessons = moduleItem.lessons.map((l) => serializeLesson(l, req));
     res.status(200).json({ success: true, message: 'Lessons fetched successfully', data: lessons });
