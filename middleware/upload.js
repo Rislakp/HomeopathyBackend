@@ -1,7 +1,7 @@
 const multer = require('multer');
 const path = require('path');
 const fs = require('fs');
-const { CloudinaryStorage } = require('multer-storage-cloudinary');
+
 const { cloudinary, isCloudinaryConfigured, uploadBufferToCloudinary } = require('../config/cloudinary');
 
 // Ensure uploads directory exists ONLY as a last-resort dev fallback.
@@ -40,61 +40,9 @@ const ALL_ALLOWED_FORMATS = [...ALLOWED_VIDEO_FORMATS, ...ALLOWED_IMAGE_FORMATS,
 // Max file upload limit: 200MB to support large video streams and live recordings
 const MAX_UPLOAD_SIZE = parseInt(process.env.MAX_UPLOAD_SIZE_BYTES || '', 10) || 200 * 1024 * 1024;
 
-// ── Cloudinary Storage (primary) ──────────────────────────────────────────────
-// multer-storage-cloudinary streams directly from the incoming multipart stream
-// to Cloudinary without touching the local disk — safe for Render ephemeral FS.
-let cloudinaryStorage = null;
-if (isCloudinaryConfigured()) {
-  try {
-    cloudinaryStorage = new CloudinaryStorage({
-      cloudinary: cloudinary,
-      params: async (req, file) => {
-        const mimetype = (file.mimetype || '').toLowerCase();
-        const fieldname = (file.fieldname || '').toLowerCase();
-        const ext = path.extname(file.originalname || '').toLowerCase().replace('.', '');
 
-        let folder = 'homeopathy-media';
-        let resource_type = 'auto';
 
-        if (mimetype.startsWith('video/') || fieldname.includes('video') || fieldname.includes('recording') || ALLOWED_VIDEO_FORMATS.includes(ext)) {
-          folder = 'homeopathy-media/videos';
-          resource_type = 'video';
-        } else if (mimetype === 'application/pdf' || fieldname.includes('pdf') || ext === 'pdf') {
-          folder = 'homeopathy-media/pdf-notes';
-          resource_type = 'raw';
-        } else if (mimetype.startsWith('image/') || ALLOWED_IMAGE_FORMATS.includes(ext)) {
-          folder = 'homeopathy-media/images';
-          resource_type = 'image';
-        } else {
-          folder = 'homeopathy-media/attachments';
-          resource_type = 'auto';
-        }
 
-        const sanitizedName = sanitizeFilename(file.originalname || 'file');
-        file.originalname = sanitizedName;
-        const cleanName = path.parse(sanitizedName).name.replace(/[^a-zA-Z0-9_-]/g, '_');
-        const uniqueSuffix = `${Date.now()}-${Math.round(Math.random() * 1e6)}`;
-
-        return {
-          folder,
-          resource_type,
-          public_id: `${cleanName}-${uniqueSuffix}`,
-        };
-      },
-    });
-    console.log('✅ Cloudinary storage engine initialized — files will be uploaded to Cloudinary directly.');
-  } catch (err) {
-    console.error('⚠️ Failed to initialize CloudinaryStorage:', err.message);
-    cloudinaryStorage = null;
-  }
-}
-
-// ── Storage selection ─────────────────────────────────────────────────────────
-const chosenStorage = cloudinaryStorage
-  ? cloudinaryStorage
-  : isCloudinaryConfigured()
-    ? multer.memoryStorage()   // buffer → streamed to Cloudinary in processUploadsToCloudinary
-    : diskStorage;             // dev fallback only
 
 // File filter with informative error messages
 const fileFilter = (req, file, cb) => {
@@ -108,7 +56,7 @@ const fileFilter = (req, file, cb) => {
 };
 
 const upload = multer({
-  storage: chosenStorage,
+  storage: multer.memoryStorage(),
   limits: {
     fileSize: MAX_UPLOAD_SIZE,
   },
