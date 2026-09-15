@@ -756,8 +756,12 @@ exports.addLesson = async (req, res) => {
       lesson: serializeLesson(saved, req),
     });
   } catch (error) {
-    console.error('Failed to add lesson:', error);
-    return res.status(500).json({ success: false, message: 'Failed to add lesson', error: error.message });
+    console.error("🔥 FULL ERROR STACK:", error.stack || error);
+    return res.status(500).json({ 
+      success: false, 
+      message: "Failed to add lesson", 
+      error: error.message 
+    });
   }
 };
 
@@ -920,8 +924,12 @@ exports.updateLesson = async (req, res) => {
       lesson: serializeLesson(targetLesson, req),
     });
   } catch (error) {
-    console.error('Error updating lesson:', error);
-    return res.status(500).json({ success: false, message: 'Failed to update lesson', error: error.message });
+    console.error("🔥 FULL ERROR STACK (updateLesson):", error.stack || error);
+    return res.status(500).json({ 
+      success: false, 
+      message: "Failed to update lesson", 
+      error: error.message 
+    });
   }
 };
 
