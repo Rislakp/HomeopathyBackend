@@ -5,6 +5,9 @@ const fs = require('fs');
 const path = require('path');
 const { deleteCloudinaryByUrl } = require('../config/cloudinary');
 
+// Version identifier for debugging
+console.log('✨ LESSON API VERSION: MIME-DEBUG-2026-09-15');
+
 // 2. Helper to safely process file attachments without naming any local variable "mime"
 const processAttachments = (filesArray) => {
   if (!filesArray || !Array.isArray(filesArray)) return [];
@@ -598,18 +601,26 @@ exports.getLessonsByModule = async (req, res) => {
     const lessons = moduleItem.lessons.map((l) => serializeLesson(l, req));
     res.status(200).json({ success: true, message: 'Lessons fetched successfully', data: lessons });
   } catch (error) {
+    console.error('Get Lessons Detailed Error:', {
+      message: error.message,
+      stack: error.stack,
+      params: req.params
+    });
     res.status(500).json({ success: false, message: 'Failed to fetch lessons', error: error.message });
   }
 };
 
 exports.addLesson = async (req, res) => {
   try {
+    console.log('[addLesson] Step 1: Starting add lesson process');
     const { courseId, moduleId } = req.params;
 
     if (!isValidObjectId(moduleId)) {
+      console.log('[addLesson] Step 1 failed: Invalid module ID format:', moduleId);
       return res.status(400).json({ success: false, message: 'Invalid module ID format' });
     }
 
+    console.log('[addLesson] Step 2: Extracting request body fields');
     const {
       lessonTitle,
       title,
@@ -632,15 +643,24 @@ exports.addLesson = async (req, res) => {
 
     const actualLessonTitle = (lessonTitle || title || '').trim();
     if (!actualLessonTitle) {
+      console.log('[addLesson] Step 2 failed: lessonTitle is missing');
       return res.status(400).json({ success: false, message: 'lessonTitle is required' });
     }
 
+    console.log('[addLesson] Step 3: Finding course and module');
     const course = await findCourseByIdOrCustomId(courseId);
-    if (!course) return res.status(404).json({ success: false, message: 'Course not found' });
+    if (!course) {
+      console.log('[addLesson] Step 3 failed: Course not found:', courseId);
+      return res.status(404).json({ success: false, message: 'Course not found' });
+    }
 
     const moduleItem = course.modules.id(moduleId);
-    if (!moduleItem) return res.status(404).json({ success: false, message: 'Module not found' });
+    if (!moduleItem) {
+      console.log('[addLesson] Step 3 failed: Module not found:', moduleId);
+      return res.status(404).json({ success: false, message: 'Module not found' });
+    }
 
+    console.log('[addLesson] Step 4: Processing lesson type, links, and uploaded files');
     const actualLessonType = (lessonType || type || 'Recorded Video').trim();
     let actualMeetingUrl = (meetingUrl || '').trim();
     let finalVideoUrl = (videoUrl || '').trim();
@@ -745,10 +765,12 @@ exports.addLesson = async (req, res) => {
       status: (status || 'Published').trim(),
     };
 
+    console.log('[addLesson] Step 5: Pushing new lesson to module and saving course');
     moduleItem.lessons.push(newLesson);
     await course.save();
 
     const saved = moduleItem.lessons[moduleItem.lessons.length - 1];
+    console.log('[addLesson] Successfully added lesson with ID:', saved._id);
     return res.status(201).json({
       success: true,
       message: 'Lesson added successfully',
@@ -756,7 +778,13 @@ exports.addLesson = async (req, res) => {
       lesson: serializeLesson(saved, req),
     });
   } catch (error) {
-    console.error("🔥 FULL ERROR STACK:", error.stack || error);
+    console.error("🔥 FULL DETAILED ERROR STACK (addLesson):", {
+      message: error.message,
+      stack: error.stack,
+      name: error.name,
+      params: req.params,
+      body: req.body
+    });
     return res.status(500).json({ 
       success: false, 
       message: "Failed to add lesson", 
