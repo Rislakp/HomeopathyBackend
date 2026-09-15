@@ -32,6 +32,8 @@ router.get('/live-records/:id', recordingController.getRecordingById);
 // ── 4. PATCH /api/recordings/:id/status ──────────────────────────────────────
 // Updates the recording status/lifecycle state in real time ('recording', 'paused', 'stopped')
 router.patch('/recordings/:id/status', requireAdmin, recordingController.updateRecordingStatus);
+// PUT alias — some clients send PUT instead of PATCH for status updates
+router.put('/recordings/:id/status', requireAdmin, recordingController.updateRecordingStatus);
 
 // ── 5. POST /api/recordings/:id/upload ───────────────────────────────────────
 // Receives recorded video file from frontend FormData, uploads to Cloudinary, and updates record URL

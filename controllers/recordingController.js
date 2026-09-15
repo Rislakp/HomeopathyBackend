@@ -1,7 +1,7 @@
 const Recording = require('../models/Recording');
 const Course = require('../models/Course');
 const mongoose = require('mongoose');
-const { deleteCloudinaryByUrl } = require('../config/cloudinary');
+const { deleteCloudinaryByUrl, parseCloudinaryUrl } = require('../config/cloudinary');
 
 const findCourseByIdOrCustomId = async (id) => {
   if (!id) return null;
@@ -440,6 +440,18 @@ exports.uploadRecordingVideo = async (req, res) => {
       });
     }
 
+    // Validate that the Cloudinary URL points to a video resource (not image/raw)
+    if (videoUrl.includes('cloudinary.com')) {
+      const parsedInfo = parseCloudinaryUrl(videoUrl);
+      if (parsedInfo && parsedInfo.resourceType && parsedInfo.resourceType !== 'video') {
+        console.warn(`[uploadRecordingVideo] Cloudinary resource_type is '${parsedInfo.resourceType}', expected 'video'. URL: ${videoUrl}`);
+        return res.status(400).json({
+          success: false,
+          message: `Uploaded file has resource_type '${parsedInfo.resourceType}' but expected 'video'. Ensure the file is uploaded with resource_type: 'video'.`,
+        });
+      }
+    }
+
     // Extract Cloudinary image/video dimensions & specs if present
     const width = Number(req.file?.width || req.files?.[0]?.width || req.body.width) || 1920;
     const height = Number(req.file?.height || req.files?.[0]?.height || req.body.height) || 1080;
@@ -498,7 +510,10 @@ exports.uploadRecordingVideo = async (req, res) => {
       data: formatRecordingDocument(populatedRec),
     });
   } catch (error) {
-    console.error('Upload Recording Video Error:', error);
+    console.error('========== UPLOAD RECORDING VIDEO ERROR ==========');
+    console.error('MESSAGE:', error?.message);
+    console.error('STACK:', error?.stack);
+    console.error('==================================================');
     return res.status(500).json({
       success: false,
       message: 'Failed to upload recorded video',
@@ -552,7 +567,7 @@ module.exports = {
   createRecording: exports.createRecording,
   getRecordings: exports.getRecordings,
   getRecordingById: exports.getRecordingById,
-  updateRecording: exports.updateRecording,
+  updateRecordingStatus: exports.updateRecordingStatus,
   uploadRecordingVideo: exports.uploadRecordingVideo,
   deleteRecording: exports.deleteRecording,
   getLiveRecords: exports.getRecordings,

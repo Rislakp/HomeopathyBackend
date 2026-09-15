@@ -147,6 +147,7 @@ const processUploadsToCloudinary = async (req, res, next) => {
         if (mimetype.startsWith('video/') || fieldname.includes('video') || fieldname.includes('recording') || ALLOWED_VIDEO_FORMATS.includes(ext)) {
           folder = 'homeopathy-media/videos';
           resource_type = 'video';
+          console.log(`[processUploadsToCloudinary] Forced resource_type='video' for file: ${file.originalname} (mime=${mimetype}, ext=${ext}, field=${fieldname})`);
         } else if (mimetype === 'application/pdf' || ext === 'pdf') {
           folder = 'homeopathy-media/pdf-notes';
           resource_type = 'raw';
