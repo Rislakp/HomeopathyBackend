@@ -216,6 +216,11 @@ app.use((err, req, res, next) => {
 
 const PORT = process.env.PORT || 5000;
 
-app.listen(PORT, () => {
+const server = app.listen(PORT, () => {
   console.log(`🚀 Server running on port ${PORT}`);
 });
+
+// Configure 10-minute timeout for handling large video file uploads
+server.timeout = 600000;
+server.keepAliveTimeout = 65000;
+server.headersTimeout = 66000;

@@ -161,9 +161,13 @@ const processUploadsToCloudinary = async (req, res, next) => {
 
         const cleanBaseName = path.parse(file.originalname || 'file').name.replace(/[^a-zA-Z0-9_-]/g, '_');
         const uniqueSuffix = `${Date.now()}-${Math.round(Math.random() * 1e6)}`;
+        const isVideo = resource_type === 'video';
+
         const uploaded = await uploadBufferToCloudinary(file, folder, {
           resource_type,
           public_id: `${cleanBaseName}-${uniqueSuffix}`,
+          timeout: isVideo ? 600000 : 120000,
+          ...(isVideo ? { chunk_size: 6000000 } : {}),
         });
 
         file.secure_url = uploaded.secure_url;
@@ -204,13 +208,24 @@ const processUploadsToCloudinary = async (req, res, next) => {
 
           const cleanName = path.parse(file.originalname || 'file').name.replace(/[^a-zA-Z0-9_-]/g, '_');
           const uniqueSuffix = `${Date.now()}-${Math.round(Math.random() * 1e6)}`;
+          const isVideo = resource_type === 'video';
 
-          const uploaded = await cloudinary.uploader.upload(file.path, {
+          console.log(`[processUploadsToCloudinary Disk] Uploading file: "${file.originalname || file.path}", mimetype: "${mimetype}", size: ${file.size || 0} bytes, resource_type: "${resource_type}"`);
+
+          const uploadDiskOptions = {
             folder,
             resource_type,
             public_id: `${cleanName}-${uniqueSuffix}`,
             use_filename: false,
-          });
+            timeout: isVideo ? 600000 : 120000,
+            ...(isVideo ? { chunk_size: 6000000 } : {}),
+          };
+
+          const uploaded = isVideo
+            ? await cloudinary.uploader.upload_large(file.path, uploadDiskOptions)
+            : await cloudinary.uploader.upload(file.path, uploadDiskOptions);
+
+          console.log(`[processUploadsToCloudinary Disk SUCCESS] File: "${file.originalname || file.path}", public_id: "${uploaded.public_id}", resource_type: "${uploaded.resource_type}", bytes: ${uploaded.bytes || file.size}, url: "${uploaded.secure_url}"`);
 
           // Clean up local temp file
           fs.unlink(file.path, (err) => {
@@ -230,7 +245,7 @@ const processUploadsToCloudinary = async (req, res, next) => {
           file.format = uploaded.format || ext;
           continue;
         } catch (diskUploadErr) {
-          console.error('Failed to upload disk-landed file to Cloudinary:', diskUploadErr.message);
+          console.error(`[processUploadsToCloudinary Disk ERROR] File: "${file.originalname || file.path}", error:`, diskUploadErr.message || diskUploadErr);
           if (isProd) {
             return res.status(500).json({
               success: false,

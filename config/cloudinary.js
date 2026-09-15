@@ -46,7 +46,7 @@ const configureCloudinary = () => {
 configureCloudinary();
 
 /**
- * Upload a memory buffer to Cloudinary via upload_stream
+ * Upload a memory buffer to Cloudinary via upload_stream or upload_chunked_stream
  * @param {Object} file - Express/Multer file object containing .buffer
  * @param {string} folder - Target folder in Cloudinary
  * @param {Object} [options] - Additional Cloudinary upload options (e.g. resource_type)
@@ -56,40 +56,74 @@ const uploadBufferToCloudinary = (file, folder = 'homeopathy-media', options = {
     return Promise.reject(new Error('Cloudinary credentials are not configured in process.env.'));
   }
 
-  // Determine resource type from options or file mimetype
+  const fileName = file ? (file.originalname || file.filename || 'file') : 'file';
+  const fileMime = (file && file.mimetype ? file.mimetype : '').toLowerCase();
+  const fileSize = file && file.buffer ? file.buffer.length : (file && file.size ? file.size : 0);
+
+  // Determine resource type from options or file mimetype/extension
   let defaultResourceType = 'auto';
-  if (options.resource_type) {
+  const isVideoOrAudio = (options.resource_type === 'video') ||
+    fileMime.startsWith('video/') ||
+    fileMime.startsWith('audio/') ||
+    /\.(mp4|mov|avi|mkv|webm|flv|wmv|m4v|mp3|wav|m4a)$/i.test(fileName);
+
+  if (isVideoOrAudio) {
+    defaultResourceType = 'video';
+  } else if (options.resource_type) {
     defaultResourceType = options.resource_type;
-  } else if (file && file.mimetype) {
-    if (file.mimetype.startsWith('video/')) {
-      defaultResourceType = 'video';
-    } else if (file.mimetype.startsWith('audio/')) {
-      defaultResourceType = 'video'; // Cloudinary uses 'video' resource_type for audio
-    }
+  } else if (fileMime === 'application/pdf' || /\.pdf$/i.test(fileName)) {
+    defaultResourceType = 'raw';
+  } else if (fileMime.startsWith('image/')) {
+    defaultResourceType = 'image';
   }
+
+  const isVideo = defaultResourceType === 'video';
+
+  console.log(`[Cloudinary Video/Media Upload] Received file: "${fileName}", mimetype: "${fileMime || 'unknown'}", size: ${fileSize} bytes, resource_type: "${defaultResourceType}"`);
 
   const uploadOptions = {
     folder,
     resource_type: defaultResourceType,
     use_filename: true,
     unique_filename: true,
+    timeout: isVideo ? 600000 : 120000, // 10 minutes for videos, 2 minutes for other media
+    ...(isVideo ? { chunk_size: 6000000 } : {}), // 6MB chunk size for video chunked uploads
     ...options,
   };
 
   return new Promise((resolve, reject) => {
-    const stream = cloudinary.uploader.upload_stream(
+    // For videos or large files (>10MB), use upload_chunked_stream for reliable chunked transfer
+    const uploaderMethod = (isVideo || fileSize > 10 * 1024 * 1024)
+      ? cloudinary.uploader.upload_chunked_stream.bind(cloudinary.uploader)
+      : cloudinary.uploader.upload_stream.bind(cloudinary.uploader);
+
+    const stream = uploaderMethod(
       uploadOptions,
       (error, result) => {
         if (error) {
+          console.error(`[Cloudinary Upload ERROR] File: "${fileName}", mimetype: "${fileMime}", size: ${fileSize}, resource_type: "${defaultResourceType}", error:`, error.message || error);
           reject(error);
           return;
         }
+        console.log(`[Cloudinary Upload SUCCESS] File: "${fileName}", public_id: "${result.public_id}", resource_type: "${result.resource_type}", bytes: ${result.bytes || fileSize}, url: "${result.secure_url}"`);
         resolve(result);
       }
     );
 
+    if (stream && typeof stream.on === 'function') {
+      stream.on('error', (streamErr) => {
+        console.error(`[Cloudinary Stream ERROR] File: "${fileName}", error:`, streamErr.message || streamErr);
+        reject(streamErr);
+      });
+    }
+
     if (file && file.buffer) {
-      Readable.from(file.buffer).pipe(stream);
+      const readable = Readable.from(file.buffer);
+      readable.on('error', (readErr) => {
+        console.error(`[Cloudinary Buffer Readable ERROR] File: "${fileName}", error:`, readErr.message || readErr);
+        reject(readErr);
+      });
+      readable.pipe(stream);
     } else {
       reject(new Error('Upload buffer is missing for Cloudinary upload.'));
     }
