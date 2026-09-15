@@ -713,11 +713,14 @@ exports.addLesson = async (req, res) => {
             : (f.path && f.path.startsWith('http'))
               ? f.path
               : (f.secure_url || f.url || f.path || (f.filename ? `/uploads/${f.filename}` : ''));
-        const fileUrl = normalizeFileUrl(rawFileUrl);
+        // Prefer the secure Cloudinary URL if available; fallback to other URL fields
+        const fileUrl = f.secure_url || f.url || f.path || (f.filename ? `/uploads/${f.filename}` : '');
         const fileTitle = f.originalname || f.filename || 'Resource';
         const field = (f.fieldname || '').toLowerCase();
         const fileMimeType = (f.mimetype || (f.originalname ? mimeTypes.lookup(f.originalname) : '') || '').toLowerCase();
-        const fileObj = { title: fileTitle, url: fileUrl, public_id: f.public_id || '', secure_url: f.secure_url || fileUrl, resource_type: f.resource_type || (fileMimeType.startsWith('video/') ? 'video' : (fileMimeType === 'application/pdf' ? 'raw' : 'auto')) };
+        // Explicitly enforce correct resource_type for videos and PDFs
+        const explicitResourceType = f.resource_type || (fileMimeType.startsWith('video/') ? 'video' : (fileMimeType === 'application/pdf' ? 'raw' : 'auto'));
+        const fileObj = { title: fileTitle, url: fileUrl, public_id: f.public_id || '', secure_url: f.secure_url || fileUrl, resource_type: explicitResourceType };
 
         if (field === 'videourl' || field === 'video' || field === 'videofile') {
           finalVideoUrl = fileUrl;
