@@ -155,10 +155,11 @@ const seedInitialAdmin = async () => {
 
     if (!existingAdmin) {
       console.log('🌱 Seeding initial Admin account...');
+      const hashedPassword = await bcrypt.hash('WhiteCode@Admin2026', 10);
       await Admin.create({
         name: 'White Code Academy Admin',
         email: adminEmail,
-        password: 'WhiteCode@Admin2026', // Hashed in pre-save hook
+        password: hashedPassword, // Properly hashed inline
         role: 'ADMIN',
         isActive: true,
       });
