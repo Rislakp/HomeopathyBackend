@@ -65,6 +65,7 @@ const adminLogin = async (req, res) => {
     const admin = await Admin.findOne({ email: cleanEmail });
 
     if (!admin) {
+      console.warn('[adminLogin] Login failed: incorrect email');
       return res.status(401).json({
         success: false,
         message: 'Invalid email or password',
@@ -79,9 +80,23 @@ const adminLogin = async (req, res) => {
       });
     }
 
-    // 5. Compare password securely using bcrypt
-    const isMatch = await bcrypt.compare(password, admin.password);
+    // 5. Compare password using bcrypt, then migrate legacy plain-text passwords.
+    let isMatch = false;
+    try {
+      isMatch = await bcrypt.compare(password, admin.password);
+    } catch (error) {
+      console.warn('[adminLogin] Stored password is not a valid bcrypt hash; trying legacy password check');
+    }
+
+    if (!isMatch && password === admin.password) {
+      isMatch = true;
+      admin.password = await bcrypt.hash(password, 10);
+      await admin.save();
+      console.log('[adminLogin] Legacy plain-text password migrated to bcrypt');
+    }
+
     if (!isMatch) {
+      console.warn('[adminLogin] Login failed: incorrect password');
       return res.status(401).json({
         success: false,
         message: 'Invalid email or password',
