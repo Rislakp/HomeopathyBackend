@@ -54,6 +54,7 @@ const lessonSchema = new mongoose.Schema({
   },
   videoParts:   { type: [resourceSchema], default: [] },
   pdfNotes:     { type: [resourceSchema], default: [] },
+  assignments:  { type: [resourceSchema], default: [] },
   attachments:  { type: [resourceSchema], default: [] },
   status: {
     type: String,

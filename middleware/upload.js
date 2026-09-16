@@ -37,6 +37,65 @@ const ALLOWED_IMAGE_FORMATS = ['jpg', 'jpeg', 'png', 'webp', 'gif', 'svg'];
 const ALLOWED_DOC_FORMATS = ['pdf', 'doc', 'docx', 'ppt', 'pptx', 'xls', 'xlsx', 'txt', 'csv', 'zip', 'rar'];
 const ALL_ALLOWED_FORMATS = [...ALLOWED_VIDEO_FORMATS, ...ALLOWED_IMAGE_FORMATS, ...ALLOWED_DOC_FORMATS];
 
+/**
+ * Cleanly separates the base name and extension from a given filename or path.
+ * Prevents mangling of the extension dot into underscores (e.g. preventing 'video1_mp4').
+ * Handles Windows (\) and POSIX (/) path separators safely.
+ * Strips any pre-existing mangled extension suffix (e.g., '_mp4', '-mp4') from the base name.
+ *
+ * @param {string} originalName - Original filename or path
+ * @param {string} [fallbackExt=''] - Fallback extension if none found
+ * @returns {{ cleanBaseName: string, ext: string, fullName: string }}
+ */
+const extractCleanNameAndExt = (originalName, fallbackExt = '') => {
+  if (!originalName || typeof originalName !== 'string') {
+    const ext = (fallbackExt || '').toLowerCase().replace(/^\./, '');
+    return { cleanBaseName: 'file', ext, fullName: ext ? `file.${ext}` : 'file' };
+  }
+
+  // Handle both Windows (\) and POSIX (/) path separators safely
+  const basePart = originalName.split(/[/\\]/).pop() || 'file';
+
+  let rawName = basePart.trim();
+  let ext = '';
+  let baseNamePart = rawName;
+
+  const lastDotIndex = rawName.lastIndexOf('.');
+  if (lastDotIndex > 0 && lastDotIndex < rawName.length - 1) {
+    baseNamePart = rawName.substring(0, lastDotIndex);
+    ext = rawName.substring(lastDotIndex + 1).toLowerCase();
+  } else if (fallbackExt) {
+    ext = fallbackExt.toLowerCase().replace(/^\./, '');
+  }
+
+  // If the base name ends with '_mp4', '-mp4', etc., strip that mangled extension suffix
+  if (ext) {
+    const mangledPattern = new RegExp(`[_-]${ext}$`, 'i');
+    baseNamePart = baseNamePart.replace(mangledPattern, '');
+  }
+
+  // Check for any other known format stuck to baseName with underscore or hyphen (e.g. 'video1_mp4')
+  for (const fmt of ALL_ALLOWED_FORMATS) {
+    if (baseNamePart.toLowerCase().endsWith(`_${fmt}`) || baseNamePart.toLowerCase().endsWith(`-${fmt}`)) {
+      baseNamePart = baseNamePart.slice(0, -(fmt.length + 1));
+      if (!ext) ext = fmt;
+      break;
+    }
+  }
+
+  // Clean base name: preserve alphanumeric, dashes, and underscores
+  let cleanBaseName = baseNamePart
+    .replace(/\s+/g, '-')
+    .replace(/[^a-zA-Z0-9_-]/g, '_')
+    .replace(/_{2,}/g, '_')
+    .replace(/^_+|_+$/g, '');
+
+  if (!cleanBaseName) cleanBaseName = 'file';
+
+  const fullName = ext ? `${cleanBaseName}.${ext}` : cleanBaseName;
+  return { cleanBaseName, ext, fullName };
+};
+
 // Max file upload limit: 200MB to support large video streams and live recordings
 const MAX_UPLOAD_SIZE = parseInt(process.env.MAX_UPLOAD_SIZE_BYTES || '', 10) || 200 * 1024 * 1024;
 
@@ -162,28 +221,16 @@ const processUploadsToCloudinary = async (req, res, next) => {
           resource_type = 'raw';
         }
 
-        const parsed = path.parse(file.originalname || 'file');
-        let baseName = parsed.name || 'file';
-        let fileExt = (parsed.ext || '').toLowerCase().replace(/^\./, '');
-        if (!fileExt && (mimetype === 'application/pdf' || ext === 'pdf')) {
-          fileExt = 'pdf';
-        } else if (!fileExt && ext) {
-          fileExt = ext;
-        }
-
-        if (fileExt && baseName.toLowerCase().endsWith(`.${fileExt}`)) {
-          baseName = baseName.slice(0, -(fileExt.length + 1));
-        }
-
-        const cleanBaseName = baseName.replace(/[^a-zA-Z0-9_-]/g, '_') || 'file';
+        const { cleanBaseName, ext: fileExt } = extractCleanNameAndExt(file.originalname, ext);
         const uniqueSuffix = `${Date.now()}-${Math.round(Math.random() * 1e6)}`;
         const isVideo = resource_type === 'video';
 
-        // Cloudinary treats public_id for 'raw' files differently:
-        // For 'image' and 'video', Cloudinary manages extensions separately via format transforms.
-        // For 'raw' files (such as PDFs, docs, sheets, zips), the extension MUST be included in public_id
-        // so Cloudinary generates and resolves the delivery URL with the proper extension (.pdf),
-        // preventing 404 "Resource not found" errors when clients access or download the file.
+        // Cloudinary treats public_id differently based on resource_type:
+        // For 'image' and 'video', Cloudinary manages extensions separately via format transformations.
+        // If an extension or dot is included in public_id for a video, Cloudinary converts the dot to
+        // an underscore (e.g. 'video1_mp4'). Do NOT include extension or dot in public_id for video/image.
+        // For 'raw' files (PDFs, docs), Cloudinary requires the extension in public_id so the delivery URL
+        // includes .pdf, preventing 404 "Resource not found" errors during downloads.
         const publicId = (resource_type === 'raw' && fileExt)
           ? `${cleanBaseName}-${uniqueSuffix}.${fileExt}`
           : `${cleanBaseName}-${uniqueSuffix}`;
@@ -191,6 +238,8 @@ const processUploadsToCloudinary = async (req, res, next) => {
         const uploaded = await uploadBufferToCloudinary(file, folder, {
           resource_type,
           public_id: publicId,
+          use_filename: false,
+          unique_filename: false,
           timeout: isVideo ? 600000 : 120000,
           ...(isVideo ? { chunk_size: 6000000 } : {}),
         });
@@ -234,34 +283,28 @@ const processUploadsToCloudinary = async (req, res, next) => {
             resource_type = 'raw';
           }
 
-          const parsed = path.parse(file.originalname || file.path || 'file');
-          let baseName = parsed.name || 'file';
-          let fileExt = (parsed.ext || '').toLowerCase().replace(/^\./, '');
-          if (!fileExt && (mimetype === 'application/pdf' || ext === 'pdf')) {
-            fileExt = 'pdf';
-          } else if (!fileExt && ext) {
-            fileExt = ext;
-          }
-
-          if (fileExt && baseName.toLowerCase().endsWith(`.${fileExt}`)) {
-            baseName = baseName.slice(0, -(fileExt.length + 1));
-          }
-
-          const cleanName = baseName.replace(/[^a-zA-Z0-9_-]/g, '_') || 'file';
+          const { cleanBaseName, ext: fileExt } = extractCleanNameAndExt(file.originalname || file.path, ext);
           const uniqueSuffix = `${Date.now()}-${Math.round(Math.random() * 1e6)}`;
           const isVideo = resource_type === 'video';
 
+          // Cloudinary treats public_id differently based on resource_type:
+          // For 'image' and 'video', Cloudinary manages extensions separately via format transformations.
+          // If an extension or dot is included in public_id for a video, Cloudinary converts the dot to
+          // an underscore (e.g. 'video1_mp4'). Do NOT include extension or dot in public_id for video/image.
+          // For 'raw' files (PDFs, docs), Cloudinary requires the extension in public_id so the delivery URL
+          // includes .pdf, preventing 404 "Resource not found" errors during downloads.
           const publicId = (resource_type === 'raw' && fileExt)
-            ? `${cleanName}-${uniqueSuffix}.${fileExt}`
-            : `${cleanName}-${uniqueSuffix}`;
+            ? `${cleanBaseName}-${uniqueSuffix}.${fileExt}`
+            : `${cleanBaseName}-${uniqueSuffix}`;
 
-          console.log(`[processUploadsToCloudinary Disk] Uploading file: "${file.originalname || file.path}", mimetype: "${mimetype}", size: ${file.size || 0} bytes, resource_type: "${resource_type}"`);
+          console.log(`[processUploadsToCloudinary Disk] Uploading file: "${file.originalname || file.path}", mimetype: "${mimetype}", size: ${file.size || 0} bytes, resource_type: "${resource_type}", public_id: "${publicId}"`);
 
           const uploadDiskOptions = {
             folder,
             resource_type,
             public_id: publicId,
             use_filename: false,
+            unique_filename: false,
             timeout: isVideo ? 600000 : 120000,
             ...(isVideo ? { chunk_size: 6000000 } : {}),
           };
@@ -336,8 +379,10 @@ upload.ALL_ALLOWED_FORMATS = ALL_ALLOWED_FORMATS;
 upload.MAX_UPLOAD_SIZE = MAX_UPLOAD_SIZE;
 upload.handleUploadError = handleUploadError;
 upload.sanitizeFilename = sanitizeFilename;
+upload.extractCleanNameAndExt = extractCleanNameAndExt;
 
 module.exports = upload;
 module.exports.processUploadsToCloudinary = processUploadsToCloudinary;
 module.exports.handleUploadError = handleUploadError;
 module.exports.sanitizeFilename = sanitizeFilename;
+module.exports.extractCleanNameAndExt = extractCleanNameAndExt;

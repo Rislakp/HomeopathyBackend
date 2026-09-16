@@ -57,7 +57,7 @@ function formatCourseForStudent(courseDoc) {
           if (les.videoUrl) les.videoUrl = ensureAbsoluteUrl(les.videoUrl);
           if (les.meetingUrl) les.meetingUrl = ensureAbsoluteUrl(les.meetingUrl);
 
-          ['videoParts', 'pdfNotes', 'attachments'].forEach((resKey) => {
+          ['videoParts', 'pdfNotes', 'assignments', 'attachments'].forEach((resKey) => {
             if (Array.isArray(les[resKey])) {
               les[resKey] = les[resKey].map((resItem) => ({
                 ...resItem,

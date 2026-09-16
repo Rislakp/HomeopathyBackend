@@ -84,8 +84,8 @@ const uploadBufferToCloudinary = (file, folder = 'homeopathy-media', options = {
   const uploadOptions = {
     folder,
     resource_type: defaultResourceType,
-    use_filename: true,
-    unique_filename: true,
+    use_filename: options.public_id ? false : true,
+    unique_filename: options.public_id ? false : true,
     timeout: isVideo ? 600000 : 120000, // 10 minutes for videos, 2 minutes for other media
     ...(isVideo ? { chunk_size: 6000000 } : {}), // 6MB chunk size for video chunked uploads
     ...options,
