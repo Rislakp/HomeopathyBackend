@@ -159,9 +159,13 @@ const parseCloudinaryUrl = (url) => {
     if (!contentParts.length) return null;
 
     const last = contentParts[contentParts.length - 1];
-    const publicId = contentParts.length > 1
-      ? contentParts.slice(0, -1).concat(last.replace(/\.[^/.]+$/, '')).join('/')
-      : last.replace(/\.[^/.]+$/, '');
+    // For raw files in Cloudinary, the file extension is considered part of the public ID.
+    // For image and video assets, the extension is stripped because Cloudinary appends it as format.
+    const publicId = resourceType === 'raw'
+      ? contentParts.join('/')
+      : (contentParts.length > 1
+          ? contentParts.slice(0, -1).concat(last.replace(/\.[^/.]+$/, '')).join('/')
+          : last.replace(/\.[^/.]+$/, ''));
 
     return { publicId, resourceType };
   } catch (error) {
@@ -191,22 +195,34 @@ const deleteCloudinaryByUrl = async (url) => {
   const { publicId, resourceType } = parsed;
 
   try {
-    return await cloudinary.uploader.destroy(publicId, {
+    const res = await cloudinary.uploader.destroy(publicId, {
       resource_type: resourceType || 'image',
     });
-  } catch (err) {
-    // If destroy failed with specific resource type, retry with 'raw' or 'video'
+    if (res && res.result === 'ok') return res;
+  } catch (_) {}
+
+  // If resourceType is raw, retry with/without extension in case asset was stored alternately
+  if (resourceType === 'raw') {
     try {
-      return await cloudinary.uploader.destroy(publicId, { resource_type: 'video' });
-    } catch (_) {
-      try {
-        return await cloudinary.uploader.destroy(publicId, { resource_type: 'raw' });
-      } catch (finalErr) {
-        console.error(`Failed to delete Cloudinary asset ${publicId}:`, finalErr.message);
-        return null;
+      const altId = publicId.includes('.') ? publicId.replace(/\.[^/.]+$/, '') : publicId;
+      if (altId !== publicId) {
+        const altRes = await cloudinary.uploader.destroy(altId, { resource_type: 'raw' });
+        if (altRes && altRes.result === 'ok') return altRes;
       }
+    } catch (_) {}
+  }
+
+  // Retry with other resource types
+  for (const rType of ['video', 'raw', 'image']) {
+    if (rType !== resourceType) {
+      try {
+        const res = await cloudinary.uploader.destroy(publicId, { resource_type: rType });
+        if (res && res.result === 'ok') return res;
+      } catch (_) {}
     }
   }
+
+  return null;
 };
 
 module.exports = {

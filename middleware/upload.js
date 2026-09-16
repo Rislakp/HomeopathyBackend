@@ -151,21 +151,46 @@ const processUploadsToCloudinary = async (req, res, next) => {
         } else if (mimetype === 'application/pdf' || ext === 'pdf') {
           folder = 'homeopathy-media/pdf-notes';
           resource_type = 'raw';
-        } else if (mimetype.startsWith('image/')) {
+        } else if (ALLOWED_DOC_FORMATS.includes(ext)) {
+          folder = 'homeopathy-media/attachments';
+          resource_type = 'raw';
+        } else if (mimetype.startsWith('image/') || ALLOWED_IMAGE_FORMATS.includes(ext)) {
           folder = 'homeopathy-media/images';
           resource_type = 'image';
         } else {
           folder = 'homeopathy-media/attachments';
-          resource_type = 'auto';
+          resource_type = 'raw';
         }
 
-        const cleanBaseName = path.parse(file.originalname || 'file').name.replace(/[^a-zA-Z0-9_-]/g, '_');
+        const parsed = path.parse(file.originalname || 'file');
+        let baseName = parsed.name || 'file';
+        let fileExt = (parsed.ext || '').toLowerCase().replace(/^\./, '');
+        if (!fileExt && (mimetype === 'application/pdf' || ext === 'pdf')) {
+          fileExt = 'pdf';
+        } else if (!fileExt && ext) {
+          fileExt = ext;
+        }
+
+        if (fileExt && baseName.toLowerCase().endsWith(`.${fileExt}`)) {
+          baseName = baseName.slice(0, -(fileExt.length + 1));
+        }
+
+        const cleanBaseName = baseName.replace(/[^a-zA-Z0-9_-]/g, '_') || 'file';
         const uniqueSuffix = `${Date.now()}-${Math.round(Math.random() * 1e6)}`;
         const isVideo = resource_type === 'video';
 
+        // Cloudinary treats public_id for 'raw' files differently:
+        // For 'image' and 'video', Cloudinary manages extensions separately via format transforms.
+        // For 'raw' files (such as PDFs, docs, sheets, zips), the extension MUST be included in public_id
+        // so Cloudinary generates and resolves the delivery URL with the proper extension (.pdf),
+        // preventing 404 "Resource not found" errors when clients access or download the file.
+        const publicId = (resource_type === 'raw' && fileExt)
+          ? `${cleanBaseName}-${uniqueSuffix}.${fileExt}`
+          : `${cleanBaseName}-${uniqueSuffix}`;
+
         const uploaded = await uploadBufferToCloudinary(file, folder, {
           resource_type,
-          public_id: `${cleanBaseName}-${uniqueSuffix}`,
+          public_id: publicId,
           timeout: isVideo ? 600000 : 120000,
           ...(isVideo ? { chunk_size: 6000000 } : {}),
         });
@@ -178,7 +203,7 @@ const processUploadsToCloudinary = async (req, res, next) => {
         file.width = uploaded.width || file.width;
         file.height = uploaded.height || file.height;
         file.bytes = uploaded.bytes || file.size;
-        file.format = uploaded.format || ext;
+        file.format = uploaded.format || fileExt || ext;
         continue;
       }
 
@@ -198,24 +223,44 @@ const processUploadsToCloudinary = async (req, res, next) => {
           } else if (mimetype === 'application/pdf' || ext === 'pdf') {
             folder = 'homeopathy-media/pdf-notes';
             resource_type = 'raw';
-          } else if (mimetype.startsWith('image/')) {
+          } else if (ALLOWED_DOC_FORMATS.includes(ext)) {
+            folder = 'homeopathy-media/attachments';
+            resource_type = 'raw';
+          } else if (mimetype.startsWith('image/') || ALLOWED_IMAGE_FORMATS.includes(ext)) {
             folder = 'homeopathy-media/images';
             resource_type = 'image';
           } else {
             folder = 'homeopathy-media/attachments';
-            resource_type = 'auto';
+            resource_type = 'raw';
           }
 
-          const cleanName = path.parse(file.originalname || 'file').name.replace(/[^a-zA-Z0-9_-]/g, '_');
+          const parsed = path.parse(file.originalname || file.path || 'file');
+          let baseName = parsed.name || 'file';
+          let fileExt = (parsed.ext || '').toLowerCase().replace(/^\./, '');
+          if (!fileExt && (mimetype === 'application/pdf' || ext === 'pdf')) {
+            fileExt = 'pdf';
+          } else if (!fileExt && ext) {
+            fileExt = ext;
+          }
+
+          if (fileExt && baseName.toLowerCase().endsWith(`.${fileExt}`)) {
+            baseName = baseName.slice(0, -(fileExt.length + 1));
+          }
+
+          const cleanName = baseName.replace(/[^a-zA-Z0-9_-]/g, '_') || 'file';
           const uniqueSuffix = `${Date.now()}-${Math.round(Math.random() * 1e6)}`;
           const isVideo = resource_type === 'video';
+
+          const publicId = (resource_type === 'raw' && fileExt)
+            ? `${cleanName}-${uniqueSuffix}.${fileExt}`
+            : `${cleanName}-${uniqueSuffix}`;
 
           console.log(`[processUploadsToCloudinary Disk] Uploading file: "${file.originalname || file.path}", mimetype: "${mimetype}", size: ${file.size || 0} bytes, resource_type: "${resource_type}"`);
 
           const uploadDiskOptions = {
             folder,
             resource_type,
-            public_id: `${cleanName}-${uniqueSuffix}`,
+            public_id: publicId,
             use_filename: false,
             timeout: isVideo ? 600000 : 120000,
             ...(isVideo ? { chunk_size: 6000000 } : {}),
@@ -242,7 +287,7 @@ const processUploadsToCloudinary = async (req, res, next) => {
           file.width = uploaded.width || file.width;
           file.height = uploaded.height || file.height;
           file.bytes = uploaded.bytes || file.size;
-          file.format = uploaded.format || ext;
+          file.format = uploaded.format || fileExt || ext;
           continue;
         } catch (diskUploadErr) {
           console.error(`[processUploadsToCloudinary Disk ERROR] File: "${file.originalname || file.path}", error:`, diskUploadErr.message || diskUploadErr);

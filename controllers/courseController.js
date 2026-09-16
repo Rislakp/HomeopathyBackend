@@ -3,7 +3,10 @@ const Course = require('../models/Course');
 const mongoose = require('mongoose');
 const fs = require('fs');
 const path = require('path');
-const { deleteCloudinaryByUrl } = require('../config/cloudinary');
+const { deleteCloudinaryByUrl, getPublicIdFromUrl, parseCloudinaryUrl } = require('../config/cloudinary');
+
+const ALLOWED_VIDEO_FORMATS = ['mp4', 'mov', 'avi', 'mkv', 'webm', 'flv', 'wmv', 'm4v'];
+const ALLOWED_DOC_FORMATS = ['pdf', 'doc', 'docx', 'ppt', 'pptx', 'xls', 'xlsx', 'txt', 'csv', 'zip', 'rar'];
 
 // Version identifier for debugging
 console.log('✨ LESSON API VERSION: MIME-DEBUG-2026-09-15');
@@ -15,13 +18,19 @@ const processAttachments = (filesArray) => {
     const fileUrl = f.secure_url || f.url || '';
     const fileTitle = f.originalname || f.filename || 'Resource';
     const fileMimeType = (f.mimetype || (f.originalname ? mimeTypes.lookup(f.originalname) : '') || '').toLowerCase();
+    const ext = path.extname(f.originalname || f.filename || fileUrl || '').toLowerCase().replace('.', '');
+    const isVideo = fileMimeType.startsWith('video/') || ALLOWED_VIDEO_FORMATS.includes(ext) || fileUrl.includes('/video/upload/');
+    const isPdf = fileMimeType === 'application/pdf' || ext === 'pdf' || fileUrl.includes('/raw/upload/') || ALLOWED_DOC_FORMATS.includes(ext);
+    const explicitResourceType = f.resource_type || (isVideo ? 'video' : (isPdf ? 'raw' : 'auto'));
 
     return {
       title: fileTitle,
       url: fileUrl,
-      public_id: f.public_id || '',
-      secure_url: fileUrl,
-      resource_type: f.resource_type || (fileMimeType.startsWith('video/') ? 'video' : (fileMimeType === 'application/pdf' ? 'raw' : 'auto'))
+      public_id: f.public_id || (fileUrl.includes('cloudinary.com') ? (getPublicIdFromUrl(fileUrl) || '') : '') || '',
+      secure_url: f.secure_url || fileUrl,
+      resource_type: explicitResourceType,
+      mimetype: fileMimeType,
+      size: f.size || f.bytes || 0,
     };
   });
 };
@@ -46,7 +55,7 @@ const normalizeFileUrl = (value) => {
 
 /**
  * Normalise a single raw resource item (string or object) into the
- * { title, url } shape expected by resourceSchema.
+ * { title, url, secure_url, public_id, resource_type, mimetype, size } shape expected by resourceSchema.
  */
 const toResourceObj = (item) => {
   if (!item) return null;
@@ -64,7 +73,24 @@ const toResourceObj = (item) => {
     } catch (_) {
       title = trimmed;
     }
-    return { title, url };
+
+    let resourceType = '';
+    const lowerUrl = url.toLowerCase();
+    if (lowerUrl.includes('/video/upload/')) resourceType = 'video';
+    else if (lowerUrl.includes('/raw/upload/') || /\.pdf([?#]|$)/i.test(lowerUrl)) resourceType = 'raw';
+    else if (lowerUrl.includes('/image/upload/')) resourceType = 'image';
+
+    const publicId = url.includes('cloudinary.com') ? (getPublicIdFromUrl(url) || '') : '';
+
+    return {
+      title: title.trim(),
+      url: url.trim(),
+      secure_url: url.trim(),
+      public_id: publicId,
+      resource_type: resourceType,
+      mimetype: resourceType === 'raw' && /\.pdf([?#]|$)/i.test(lowerUrl) ? 'application/pdf' : '',
+      size: 0,
+    };
   }
   if (typeof item === 'object' && !Array.isArray(item)) {
     const cloudUrl = (item.secure_url && item.secure_url.startsWith('http'))
@@ -90,9 +116,32 @@ const toResourceObj = (item) => {
         title = 'Resource';
       }
     }
+
+    const secureUrl = (item.secure_url && item.secure_url.startsWith('http'))
+      ? item.secure_url
+      : (cloudUrl || url || '');
+
+    let resType = item.resource_type || '';
+    const lowerUrl = (secureUrl || url || '').toLowerCase();
+    if (!resType && lowerUrl) {
+      if (lowerUrl.includes('/video/upload/')) resType = 'video';
+      else if (lowerUrl.includes('/raw/upload/') || /\.pdf([?#]|$)/i.test(lowerUrl)) resType = 'raw';
+      else if (lowerUrl.includes('/image/upload/')) resType = 'image';
+    }
+
+    let publicId = (item.public_id || '').trim();
+    if (!publicId && lowerUrl.includes('cloudinary.com')) {
+      publicId = getPublicIdFromUrl(secureUrl || url) || '';
+    }
+
     return {
       title: (title || '').trim(),
       url: (url || '').trim(),
+      secure_url: (secureUrl || url || '').trim(),
+      public_id: publicId,
+      resource_type: (resType || '').trim(),
+      mimetype: (item.mimetype || (resType === 'raw' && /\.pdf([?#]|$)/i.test(lowerUrl) ? 'application/pdf' : '')).trim(),
+      size: typeof item.size === 'number' ? item.size : (Number(item.size) || 0),
     };
   }
   return null;
@@ -205,10 +254,15 @@ const toAbsoluteUrl = (urlStr, req) => {
 const serializeLesson = (lesson, req) => {
   const sanitizeResource = (items) => {
     const list = sanitizeFiles(items);
-    return list.map((item) => ({
-      ...item,
-      url: toAbsoluteUrl(item.url, req),
-    }));
+    return list.map((item) => {
+      const canonicalUrl = item.secure_url || item.url || '';
+      const absUrl = toAbsoluteUrl(canonicalUrl, req);
+      return {
+        ...item,
+        url: absUrl,
+        secure_url: absUrl,
+      };
+    });
   };
 
   return {
@@ -681,17 +735,17 @@ exports.addLesson = async (req, res) => {
       if (lowerType.includes('video') || lowerType === 'recorded video') {
         if (!finalVideoUrl) finalVideoUrl = singleLink;
         if (!finalVideoParts.some((p) => p.url === singleLink)) {
-          finalVideoParts.push({ title: actualLessonTitle || 'Video Part 1', url: singleLink });
+          finalVideoParts.push({ title: actualLessonTitle || 'Video Part 1', url: singleLink, secure_url: singleLink, resource_type: 'video' });
         }
       } else if (lowerType.includes('pdf')) {
         if (!finalPdfNotes.some((p) => p.url === singleLink)) {
-          finalPdfNotes.push({ title: actualLessonTitle || 'PDF Notes', url: singleLink });
+          finalPdfNotes.push({ title: actualLessonTitle || 'PDF Notes', url: singleLink, secure_url: singleLink, resource_type: 'raw' });
         }
       } else if (lowerType.includes('live') || lowerType === 'link') {
         if (!actualMeetingUrl) actualMeetingUrl = singleLink;
       } else {
         if (!finalAttachments.some((p) => p.url === singleLink)) {
-          finalAttachments.push({ title: actualLessonTitle || 'Attachment', url: singleLink });
+          finalAttachments.push({ title: actualLessonTitle || 'Attachment', url: singleLink, secure_url: singleLink, resource_type: 'raw' });
         }
       }
     }
@@ -713,14 +767,35 @@ exports.addLesson = async (req, res) => {
             : (f.path && f.path.startsWith('http'))
               ? f.path
               : (f.secure_url || f.url || f.path || (f.filename ? `/uploads/${f.filename}` : ''));
-        // Prefer the secure Cloudinary URL if available; fallback to other URL fields
-        const fileUrl = f.secure_url || f.url || f.path || (f.filename ? `/uploads/${f.filename}` : '');
+        const fileUrl = normalizeFileUrl(rawFileUrl);
         const fileTitle = f.originalname || f.filename || 'Resource';
         const field = (f.fieldname || '').toLowerCase();
         const fileMimeType = (f.mimetype || (f.originalname ? mimeTypes.lookup(f.originalname) : '') || '').toLowerCase();
-        // Explicitly enforce correct resource_type for videos and PDFs
-        const explicitResourceType = f.resource_type || (fileMimeType.startsWith('video/') ? 'video' : (fileMimeType === 'application/pdf' ? 'raw' : 'auto'));
-        const fileObj = { title: fileTitle, url: fileUrl, public_id: f.public_id || '', secure_url: f.secure_url || fileUrl, resource_type: explicitResourceType };
+        const fileExt = path.extname(f.originalname || f.filename || '').toLowerCase().replace('.', '');
+        
+        let explicitResourceType = f.resource_type;
+        if (!explicitResourceType) {
+          if (fileMimeType.startsWith('video/') || ALLOWED_VIDEO_FORMATS.includes(fileExt)) {
+            explicitResourceType = 'video';
+          } else if (fileMimeType === 'application/pdf' || fileExt === 'pdf' || ALLOWED_DOC_FORMATS.includes(fileExt)) {
+            explicitResourceType = 'raw';
+          } else {
+            explicitResourceType = 'auto';
+          }
+        }
+
+        const publicId = f.public_id || (fileUrl.includes('cloudinary.com') ? (getPublicIdFromUrl(fileUrl) || '') : '') || '';
+        const secureUrl = (f.secure_url && f.secure_url.startsWith('http')) ? f.secure_url : fileUrl;
+
+        const fileObj = {
+          title: fileTitle,
+          url: fileUrl,
+          public_id: publicId,
+          secure_url: secureUrl,
+          resource_type: explicitResourceType,
+          mimetype: fileMimeType,
+          size: f.bytes || f.size || 0,
+        };
 
         if (field === 'videourl' || field === 'video' || field === 'videofile') {
           finalVideoUrl = fileUrl;
@@ -735,18 +810,18 @@ exports.addLesson = async (req, res) => {
         } else if (field === 'attachments' || field === 'attachment' || field === 'assignments' || field === 'assignment' || field.startsWith('attachments')) {
           finalAttachments.push(fileObj);
         } else if (field === 'file' || field === 'lessonfile' || field === 'uploadfileorlink') {
-          if (fileMimeType.startsWith('video/')) {
+          if (fileMimeType.startsWith('video/') || ALLOWED_VIDEO_FORMATS.includes(fileExt)) {
             finalVideoUrl = fileUrl;
             if (!finalVideoParts.some((p) => p.url === fileUrl)) finalVideoParts.push(fileObj);
-          } else if (fileMimeType === 'application/pdf') {
+          } else if (fileMimeType === 'application/pdf' || fileExt === 'pdf') {
             finalPdfNotes.push(fileObj);
           } else {
             finalAttachments.push(fileObj);
           }
-        } else if (fileMimeType.startsWith('video/')) {
+        } else if (fileMimeType.startsWith('video/') || ALLOWED_VIDEO_FORMATS.includes(fileExt)) {
           finalVideoUrl = fileUrl;
           if (!finalVideoParts.some((p) => p.url === fileUrl)) finalVideoParts.push(fileObj);
-        } else if (fileMimeType === 'application/pdf') {
+        } else if (fileMimeType === 'application/pdf' || fileExt === 'pdf') {
           finalPdfNotes.push(fileObj);
         } else {
           finalAttachments.push(fileObj);
@@ -878,17 +953,17 @@ exports.updateLesson = async (req, res) => {
       if (lowerType.includes('video') || lowerType === 'recorded video') {
         targetLesson.videoUrl = singleLink;
         if (!targetLesson.videoParts.some((p) => p.url === singleLink)) {
-          targetLesson.videoParts.push({ title: targetLesson.lessonTitle || 'Video Part', url: singleLink });
+          targetLesson.videoParts.push({ title: targetLesson.lessonTitle || 'Video Part', url: singleLink, secure_url: singleLink, resource_type: 'video' });
         }
       } else if (lowerType.includes('pdf')) {
         if (!targetLesson.pdfNotes.some((p) => p.url === singleLink)) {
-          targetLesson.pdfNotes.push({ title: targetLesson.lessonTitle || 'PDF Notes', url: singleLink });
+          targetLesson.pdfNotes.push({ title: targetLesson.lessonTitle || 'PDF Notes', url: singleLink, secure_url: singleLink, resource_type: 'raw' });
         }
       } else if (lowerType.includes('live') || lowerType === 'link') {
         targetLesson.meetingUrl = singleLink;
       } else {
         if (!targetLesson.attachments.some((p) => p.url === singleLink)) {
-          targetLesson.attachments.push({ title: targetLesson.lessonTitle || 'Attachment', url: singleLink });
+          targetLesson.attachments.push({ title: targetLesson.lessonTitle || 'Attachment', url: singleLink, secure_url: singleLink, resource_type: 'raw' });
         }
       }
     }
@@ -914,7 +989,31 @@ exports.updateLesson = async (req, res) => {
         const fileTitle = f.originalname || f.filename || 'Resource';
         const field = (f.fieldname || '').toLowerCase();
         const fileMimeType = (f.mimetype || (f.originalname ? mimeTypes.lookup(f.originalname) : '') || '').toLowerCase();
-        const fileObj = { title: fileTitle, url: fileUrl, public_id: f.public_id || '', secure_url: f.secure_url || fileUrl, resource_type: f.resource_type || (fileMimeType.startsWith('video/') ? 'video' : (fileMimeType === 'application/pdf' ? 'raw' : 'auto')) };
+        const fileExt = path.extname(f.originalname || f.filename || '').toLowerCase().replace('.', '');
+        
+        let explicitResourceType = f.resource_type;
+        if (!explicitResourceType) {
+          if (fileMimeType.startsWith('video/') || ALLOWED_VIDEO_FORMATS.includes(fileExt)) {
+            explicitResourceType = 'video';
+          } else if (fileMimeType === 'application/pdf' || fileExt === 'pdf' || ALLOWED_DOC_FORMATS.includes(fileExt)) {
+            explicitResourceType = 'raw';
+          } else {
+            explicitResourceType = 'auto';
+          }
+        }
+
+        const publicId = f.public_id || (fileUrl.includes('cloudinary.com') ? (getPublicIdFromUrl(fileUrl) || '') : '') || '';
+        const secureUrl = (f.secure_url && f.secure_url.startsWith('http')) ? f.secure_url : fileUrl;
+
+        const fileObj = {
+          title: fileTitle,
+          url: fileUrl,
+          public_id: publicId,
+          secure_url: secureUrl,
+          resource_type: explicitResourceType,
+          mimetype: fileMimeType,
+          size: f.bytes || f.size || 0,
+        };
 
         if (field === 'videourl' || field === 'video' || field === 'videofile') {
           targetLesson.videoUrl = fileUrl;
@@ -929,18 +1028,18 @@ exports.updateLesson = async (req, res) => {
         } else if (field === 'attachments' || field === 'attachment' || field === 'assignments' || field === 'assignment' || field.startsWith('attachments')) {
           targetLesson.attachments.push(fileObj);
         } else if (field === 'file' || field === 'lessonfile' || field === 'uploadfileorlink') {
-          if (fileMimeType.startsWith('video/')) {
+          if (fileMimeType.startsWith('video/') || ALLOWED_VIDEO_FORMATS.includes(fileExt)) {
             targetLesson.videoUrl = fileUrl;
             if (!targetLesson.videoParts.some((p) => p.url === fileUrl)) targetLesson.videoParts.push(fileObj);
-          } else if (fileMimeType === 'application/pdf') {
+          } else if (fileMimeType === 'application/pdf' || fileExt === 'pdf') {
             targetLesson.pdfNotes.push(fileObj);
           } else {
             targetLesson.attachments.push(fileObj);
           }
-        } else if (fileMimeType.startsWith('video/')) {
+        } else if (fileMimeType.startsWith('video/') || ALLOWED_VIDEO_FORMATS.includes(fileExt)) {
           targetLesson.videoUrl = fileUrl;
           if (!targetLesson.videoParts.some((p) => p.url === fileUrl)) targetLesson.videoParts.push(fileObj);
-        } else if (fileMimeType === 'application/pdf') {
+        } else if (fileMimeType === 'application/pdf' || fileExt === 'pdf') {
           targetLesson.pdfNotes.push(fileObj);
         } else {
           targetLesson.attachments.push(fileObj);

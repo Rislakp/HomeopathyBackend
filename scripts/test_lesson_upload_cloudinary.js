@@ -23,7 +23,7 @@ async function runTests() {
 
   const parsedRaw = parseCloudinaryUrl(sampleRawUrl);
   assert.strictEqual(parsedRaw.resourceType, 'raw');
-  assert.strictEqual(parsedRaw.publicId, 'homeopathy-media/attachments/assignment_guidelines');
+  assert.strictEqual(parsedRaw.publicId, 'homeopathy-media/attachments/assignment_guidelines.docx');
   console.log('  ✅ Cloudinary URL parser accurately identified publicIds and resourceTypes');
 
   // Test 2: Course & Lesson Schema Validation with Cloudinary URLs
