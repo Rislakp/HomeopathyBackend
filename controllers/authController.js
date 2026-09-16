@@ -486,9 +486,27 @@ const adminLogin = async (req, res) => {
 
       if (admin) {
         // Compare incoming password with stored hash correctly
-        isMatch = await bcrypt.compare(password, admin.password);
+        try {
+          isMatch = await bcrypt.compare(password, admin.password);
+        } catch (error) {
+          console.warn('Admin password is not a valid bcrypt hash; trying legacy password check');
+        }
+
+        if (!isMatch && password === admin.password) {
+          admin.password = await bcrypt.hash(password, 10);
+          await admin.save();
+          isMatch = true;
+          console.log('Legacy admin password migrated to bcrypt');
+        }
+
         if (isMatch) {
           role = (admin.role || 'admin').toLowerCase().trim();
+          if (role !== 'admin' && role !== 'superadmin') {
+            return res.status(403).json({
+              success: false,
+              message: 'Access denied: Admin privileges required',
+            });
+          }
           userObj = {
             id: admin._id ? admin._id.toString() : admin.id,
             name: admin.name,

@@ -103,6 +103,20 @@ const adminLogin = async (req, res) => {
       });
     }
 
+    if (!admin.role || !['ADMIN', 'SUPERADMIN'].includes(admin.role.toString().trim().toUpperCase())) {
+      console.warn('[adminLogin] Login rejected: Admin record has an invalid role');
+      return res.status(403).json({
+        success: false,
+        message: 'Admin privileges required',
+      });
+    }
+
+    if (!admin.role || !admin.isActive) {
+      admin.role = admin.role || 'ADMIN';
+      admin.isActive = true;
+      await admin.save();
+    }
+
     // 6. Generate JWT payload: userId, id, adminId, email, role
     const adminRole = (admin.role || 'ADMIN').toString().trim();
     const token = jwt.sign(
