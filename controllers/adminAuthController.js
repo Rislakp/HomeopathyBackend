@@ -174,7 +174,7 @@ const adminLogin = async (req, res) => {
 };
 
 /**
- * Force the default super admin into a known, secure state during startup.
+ * Force the default admin into a known, secure state during startup.
  */
 const seedInitialAdmin = async () => {
   const adminEmail = 'admin@whitecodeacademy.com';
@@ -186,14 +186,14 @@ const seedInitialAdmin = async () => {
       $set: {
         name: 'White Code Academy Admin',
         password: hashedPassword,
-        role: 'SUPERADMIN',
+        role: 'ADMIN',
         isActive: true,
       },
     },
     { new: true, upsert: true, setDefaultsOnInsert: true }
   );
 
-  console.log(`✅ Default super admin ready: ${admin.email}`);
+  console.log(`✅ Default admin ready: ${admin.email}`);
 };
 
 const registerAdmin = async (req, res) => {

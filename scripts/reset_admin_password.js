@@ -14,7 +14,7 @@ async function resetAdminPassword() {
     const passwordHash = await bcrypt.hash(ADMIN_PASSWORD, 10);
     const admin = await Admin.findOneAndUpdate(
       { email: ADMIN_EMAIL },
-      { $set: { password: passwordHash, role: 'SUPERADMIN', isActive: true } },
+      { $set: { password: passwordHash, role: 'ADMIN', isActive: true } },
       { new: true }
     );
 
