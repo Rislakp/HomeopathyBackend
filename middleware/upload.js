@@ -164,6 +164,13 @@ const processUploadsToCloudinary = async (req, res, next) => {
     }
   }
 
+  console.log(`[processUploadsToCloudinary] req.file exists: ${Boolean(req.file)}, req.files count: ${files.length}`);
+  if (files.length > 0) {
+    files.forEach((f, idx) => {
+      console.log(`[processUploadsToCloudinary] File #${idx + 1}: originalname="${f.originalname || 'unknown'}", fieldname="${f.fieldname || 'unknown'}", mimetype="${f.mimetype || 'unknown'}", size=${f.size || (f.buffer ? f.buffer.length : 0)} bytes`);
+    });
+  }
+
   if (!files.length) {
     return next();
   }
@@ -235,25 +242,37 @@ const processUploadsToCloudinary = async (req, res, next) => {
           ? `${cleanBaseName}-${uniqueSuffix}.${fileExt}`
           : `${cleanBaseName}-${uniqueSuffix}`;
 
-        const uploaded = await uploadBufferToCloudinary(file, folder, {
-          resource_type,
-          public_id: publicId,
-          use_filename: false,
-          unique_filename: false,
-          timeout: isVideo ? 600000 : 120000,
-          ...(isVideo ? { chunk_size: 6000000 } : {}),
-        });
+        try {
+          const uploaded = await uploadBufferToCloudinary(file, folder, {
+            resource_type,
+            public_id: publicId,
+            use_filename: false,
+            unique_filename: false,
+            timeout: isVideo ? 600000 : 120000,
+            ...(isVideo ? { chunk_size: 6000000 } : {}),
+          });
 
-        file.secure_url = uploaded.secure_url;
-        file.url = uploaded.secure_url;
-        file.path = uploaded.secure_url;
-        file.public_id = uploaded.public_id;
-        file.resource_type = uploaded.resource_type;
-        file.width = uploaded.width || file.width;
-        file.height = uploaded.height || file.height;
-        file.bytes = uploaded.bytes || file.size;
-        file.format = uploaded.format || fileExt || ext;
-        continue;
+          file.secure_url = uploaded.secure_url;
+          file.url = uploaded.secure_url;
+          file.path = uploaded.secure_url;
+          file.public_id = uploaded.public_id;
+          file.resource_type = uploaded.resource_type;
+          file.width = uploaded.width || file.width;
+          file.height = uploaded.height || file.height;
+          file.bytes = uploaded.bytes || file.size;
+          file.format = uploaded.format || fileExt || ext;
+          continue;
+        } catch (uploadErr) {
+          if (isVideo) {
+            console.error(`[VIDEO UPLOAD] Cloudinary upload FAILED: ${uploadErr.message || uploadErr}`);
+          }
+          console.error(`[processUploadsToCloudinary Memory Buffer ERROR] File: "${file.originalname}", error:`, uploadErr.message || uploadErr);
+          return res.status(500).json({
+            success: false,
+            message: `Failed to upload ${isVideo ? 'video' : 'media'} file to Cloudinary storage.`,
+            error: uploadErr.message,
+          });
+        }
       }
 
       // ── Case 3: Disk storage — stream to Cloudinary & delete local copy ────
@@ -299,6 +318,14 @@ const processUploadsToCloudinary = async (req, res, next) => {
 
           console.log(`[processUploadsToCloudinary Disk] Uploading file: "${file.originalname || file.path}", mimetype: "${mimetype}", size: ${file.size || 0} bytes, resource_type: "${resource_type}", public_id: "${publicId}"`);
 
+          if (isVideo) {
+            console.log('[VIDEO UPLOAD] File received');
+            console.log(`[VIDEO UPLOAD] Filename: ${file.originalname || file.path || 'unknown'}`);
+            console.log(`[VIDEO UPLOAD] MIME: ${mimetype || 'video/mp4'}`);
+            console.log(`[VIDEO UPLOAD] Size: ${file.size || 0}`);
+            console.log('[VIDEO UPLOAD] Starting Cloudinary upload');
+          }
+
           const uploadDiskOptions = {
             folder,
             resource_type,
@@ -312,6 +339,12 @@ const processUploadsToCloudinary = async (req, res, next) => {
           const uploaded = isVideo
             ? await cloudinary.uploader.upload_large(file.path, uploadDiskOptions)
             : await cloudinary.uploader.upload(file.path, uploadDiskOptions);
+
+          if (isVideo) {
+            console.log('[VIDEO UPLOAD] Cloudinary upload successful');
+            console.log(`[VIDEO UPLOAD] Resource type: ${uploaded.resource_type}`);
+            console.log(`[VIDEO UPLOAD] Secure URL: ${uploaded.secure_url}`);
+          }
 
           console.log(`[processUploadsToCloudinary Disk SUCCESS] File: "${file.originalname || file.path}", public_id: "${uploaded.public_id}", resource_type: "${uploaded.resource_type}", bytes: ${uploaded.bytes || file.size}, url: "${uploaded.secure_url}"`);
 
@@ -333,14 +366,15 @@ const processUploadsToCloudinary = async (req, res, next) => {
           file.format = uploaded.format || fileExt || ext;
           continue;
         } catch (diskUploadErr) {
-          console.error(`[processUploadsToCloudinary Disk ERROR] File: "${file.originalname || file.path}", error:`, diskUploadErr.message || diskUploadErr);
-          if (isProd) {
-            return res.status(500).json({
-              success: false,
-              message: 'Failed to upload media file to Cloudinary storage in production.',
-              error: diskUploadErr.message,
-            });
+          if (isVideo) {
+            console.error(`[VIDEO UPLOAD] Cloudinary upload FAILED: ${diskUploadErr.message || diskUploadErr}`);
           }
+          console.error(`[processUploadsToCloudinary Disk ERROR] File: "${file.originalname || file.path}", error:`, diskUploadErr.message || diskUploadErr);
+          return res.status(500).json({
+            success: false,
+            message: `Failed to upload ${isVideo ? 'video' : 'media'} file to Cloudinary storage.`,
+            error: diskUploadErr.message,
+          });
         }
       }
 

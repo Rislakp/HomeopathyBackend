@@ -79,7 +79,15 @@ const uploadBufferToCloudinary = (file, folder = 'homeopathy-media', options = {
 
   const isVideo = defaultResourceType === 'video';
 
-  console.log(`[Cloudinary Video/Media Upload] Received file: "${fileName}", mimetype: "${fileMime || 'unknown'}", size: ${fileSize} bytes, resource_type: "${defaultResourceType}"`);
+  if (isVideo) {
+    console.log('[VIDEO UPLOAD] File received');
+    console.log(`[VIDEO UPLOAD] Filename: ${fileName}`);
+    console.log(`[VIDEO UPLOAD] MIME: ${fileMime || 'video/mp4'}`);
+    console.log(`[VIDEO UPLOAD] Size: ${fileSize}`);
+    console.log('[VIDEO UPLOAD] Starting Cloudinary upload');
+  } else {
+    console.log(`[Cloudinary Video/Media Upload] Received file: "${fileName}", mimetype: "${fileMime || 'unknown'}", size: ${fileSize} bytes, resource_type: "${defaultResourceType}"`);
+  }
 
   const uploadOptions = {
     folder,
@@ -101,9 +109,17 @@ const uploadBufferToCloudinary = (file, folder = 'homeopathy-media', options = {
       uploadOptions,
       (error, result) => {
         if (error) {
+          if (isVideo) {
+            console.error(`[VIDEO UPLOAD] Cloudinary upload FAILED: ${error.message || error}`);
+          }
           console.error(`[Cloudinary Upload ERROR] File: "${fileName}", mimetype: "${fileMime}", size: ${fileSize}, resource_type: "${defaultResourceType}", error:`, error.message || error);
           reject(error);
           return;
+        }
+        if (isVideo) {
+          console.log('[VIDEO UPLOAD] Cloudinary upload successful');
+          console.log(`[VIDEO UPLOAD] Resource type: ${result.resource_type}`);
+          console.log(`[VIDEO UPLOAD] Secure URL: ${result.secure_url}`);
         }
         console.log(`[Cloudinary Upload SUCCESS] File: "${fileName}", public_id: "${result.public_id}", resource_type: "${result.resource_type}", bytes: ${result.bytes || fileSize}, url: "${result.secure_url}"`);
         resolve(result);
@@ -112,6 +128,9 @@ const uploadBufferToCloudinary = (file, folder = 'homeopathy-media', options = {
 
     if (stream && typeof stream.on === 'function') {
       stream.on('error', (streamErr) => {
+        if (isVideo) {
+          console.error(`[VIDEO UPLOAD] Cloudinary upload FAILED: ${streamErr.message || streamErr}`);
+        }
         console.error(`[Cloudinary Stream ERROR] File: "${fileName}", error:`, streamErr.message || streamErr);
         reject(streamErr);
       });
@@ -120,6 +139,9 @@ const uploadBufferToCloudinary = (file, folder = 'homeopathy-media', options = {
     if (file && file.buffer) {
       const readable = Readable.from(file.buffer);
       readable.on('error', (readErr) => {
+        if (isVideo) {
+          console.error(`[VIDEO UPLOAD] Cloudinary upload FAILED: ${readErr.message || readErr}`);
+        }
         console.error(`[Cloudinary Buffer Readable ERROR] File: "${fileName}", error:`, readErr.message || readErr);
         reject(readErr);
       });

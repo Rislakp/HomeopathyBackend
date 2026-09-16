@@ -3,7 +3,8 @@ const Course = require('../models/Course');
 const mongoose = require('mongoose');
 const fs = require('fs');
 const path = require('path');
-const { deleteCloudinaryByUrl, getPublicIdFromUrl, parseCloudinaryUrl } = require('../config/cloudinary');
+const { deleteCloudinaryByUrl, getPublicIdFromUrl, parseCloudinaryUrl, uploadBufferToCloudinary, isCloudinaryConfigured } = require('../config/cloudinary');
+const { extractCleanNameAndExt } = require('../middleware/upload');
 
 const ALLOWED_VIDEO_FORMATS = ['mp4', 'mov', 'avi', 'mkv', 'webm', 'flv', 'wmv', 'm4v'];
 const ALLOWED_DOC_FORMATS = ['pdf', 'doc', 'docx', 'ppt', 'pptx', 'xls', 'xlsx', 'txt', 'csv', 'zip', 'rar'];
@@ -767,6 +768,51 @@ exports.addLesson = async (req, res) => {
       else filesList.push(...Object.values(req.files).flat());
     }
 
+    console.log(`[addLesson] req.file exists: ${Boolean(req.file)}, req.files count: ${filesList.length}`);
+    filesList.forEach((f, i) => {
+      console.log(`[addLesson] File #${i + 1}: originalname="${f.originalname || 'unknown'}", fieldname="${f.fieldname || 'unknown'}", mimetype="${f.mimetype || 'unknown'}", size=${f.size || (f.buffer ? f.buffer.length : 0)} bytes, secure_url="${f.secure_url || 'NONE'}"`);
+    });
+
+    // Safeguard: Ensure any video file has been uploaded to Cloudinary
+    for (const f of filesList) {
+      const fileMime = (f.mimetype || (f.originalname ? mimeTypes.lookup(f.originalname) : '') || '').toLowerCase();
+      const fileExt = path.extname(f.originalname || f.filename || '').toLowerCase().replace('.', '');
+      const isVideoFile = fileMime.startsWith('video/') || ALLOWED_VIDEO_FORMATS.includes(fileExt) || ((f.fieldname || '').toLowerCase().includes('video'));
+      if (isVideoFile && (!f.secure_url || !f.secure_url.startsWith('http')) && (f.buffer || f.path) && isCloudinaryConfigured()) {
+        console.log(`[addLesson] Video file found without Cloudinary URL, uploading now: "${f.originalname}"`);
+        console.log('[VIDEO UPLOAD] File received');
+        console.log(`[VIDEO UPLOAD] Filename: ${f.originalname || 'unknown'}`);
+        console.log(`[VIDEO UPLOAD] MIME: ${fileMime || 'video/mp4'}`);
+        console.log(`[VIDEO UPLOAD] Size: ${f.size || (f.buffer ? f.buffer.length : 0)}`);
+        console.log('[VIDEO UPLOAD] Starting Cloudinary upload');
+        try {
+          const { cleanBaseName } = extractCleanNameAndExt(f.originalname, fileExt);
+          const uniqueSuffix = `${Date.now()}-${Math.round(Math.random() * 1e6)}`;
+          const uploaded = await uploadBufferToCloudinary(f, 'homeopathy-media/videos', {
+            resource_type: 'video',
+            public_id: `${cleanBaseName}-${uniqueSuffix}`,
+            timeout: 600000,
+            chunk_size: 6000000,
+          });
+          console.log('[VIDEO UPLOAD] Cloudinary upload successful');
+          console.log(`[VIDEO UPLOAD] Resource type: ${uploaded.resource_type}`);
+          console.log(`[VIDEO UPLOAD] Secure URL: ${uploaded.secure_url}`);
+          f.secure_url = uploaded.secure_url;
+          f.url = uploaded.secure_url;
+          f.path = uploaded.secure_url;
+          f.public_id = uploaded.public_id;
+          f.resource_type = 'video';
+        } catch (uploadErr) {
+          console.error(`[VIDEO UPLOAD] Cloudinary upload FAILED: ${uploadErr.message || uploadErr}`);
+          return res.status(500).json({
+            success: false,
+            message: 'Failed to upload video to Cloudinary storage.',
+            error: uploadErr.message,
+          });
+        }
+      }
+    }
+
     filesList.forEach((f) => {
       if (f && (f.secure_url || f.url || f.path || f.filename)) {
         const rawFileUrl = (f.secure_url && f.secure_url.startsWith('http'))
@@ -844,9 +890,41 @@ exports.addLesson = async (req, res) => {
       }
     });
 
+    // Filter out fake / placeholder Cloudinary URLs (such as hardcoded wrong cloud names like doxb5l5vf)
+    finalVideoParts = finalVideoParts.filter((p) => {
+      if (!p || !p.url) return false;
+      if (p.url.includes('doxb5l5vf')) {
+        console.warn(`[addLesson] Rejecting fake placeholder video URL with invalid cloud name doxb5l5vf: "${p.url}"`);
+        return false;
+      }
+      return true;
+    });
+
+    if (finalVideoUrl && finalVideoUrl.includes('doxb5l5vf')) {
+      console.warn(`[addLesson] Rejecting fake placeholder finalVideoUrl with invalid cloud name doxb5l5vf: "${finalVideoUrl}"`);
+      finalVideoUrl = '';
+    }
+
+    const isRecordedVideoType = actualLessonType === 'Recorded Video' || actualLessonType === 'Video' || actualLessonType.toLowerCase() === 'video';
+    if (isRecordedVideoType) {
+      const hasUploadedVideo = filesList.some((f) => {
+        const m = (f.mimetype || (f.originalname ? mimeTypes.lookup(f.originalname) : '') || '').toLowerCase();
+        const ext = path.extname(f.originalname || f.filename || '').toLowerCase().replace('.', '');
+        return m.startsWith('video/') || ALLOWED_VIDEO_FORMATS.includes(ext) || ((f.fieldname || '').toLowerCase().includes('video'));
+      });
+      const rawVideoProvided = (videoUrl || uploadFileOrLink || fileOrLink || lessonFile || '').trim();
+      const isFakeOrRawFilename = rawVideoProvided && (!rawVideoProvided.startsWith('http://') && !rawVideoProvided.startsWith('https://') && !rawVideoProvided.startsWith('/uploads/'));
+      if (isFakeOrRawFilename && !hasUploadedVideo) {
+        return res.status(400).json({
+          success: false,
+          message: `Invalid video URL or file "${rawVideoProvided}". Please upload a video file or provide a valid streaming URL.`,
+        });
+      }
+    }
+
     // Auto-sync videoUrl with videoParts if single video was provided
     if (finalVideoUrl && finalVideoParts.length === 0) {
-      finalVideoParts.push({ title: actualLessonTitle || 'Video Part 1', url: finalVideoUrl });
+      finalVideoParts.push({ title: actualLessonTitle || 'Video Part 1', url: finalVideoUrl, secure_url: finalVideoUrl, resource_type: 'video' });
     } else if (!finalVideoUrl && finalVideoParts.length > 0) {
       finalVideoUrl = finalVideoParts[0].url;
     }
@@ -994,12 +1072,56 @@ exports.updateLesson = async (req, res) => {
       }
     }
 
-    // Map newly uploaded multipart files
     const filesList = [];
     if (req.file) filesList.push(req.file);
     if (req.files) {
       if (Array.isArray(req.files)) filesList.push(...req.files);
       else filesList.push(...Object.values(req.files).flat());
+    }
+
+    console.log(`[updateLesson] req.file exists: ${Boolean(req.file)}, req.files count: ${filesList.length}`);
+    filesList.forEach((f, i) => {
+      console.log(`[updateLesson] File #${i + 1}: originalname="${f.originalname || 'unknown'}", fieldname="${f.fieldname || 'unknown'}", mimetype="${f.mimetype || 'unknown'}", size=${f.size || (f.buffer ? f.buffer.length : 0)} bytes, secure_url="${f.secure_url || 'NONE'}"`);
+    });
+
+    // Safeguard: Ensure any video file has been uploaded to Cloudinary
+    for (const f of filesList) {
+      const fileMime = (f.mimetype || (f.originalname ? mimeTypes.lookup(f.originalname) : '') || '').toLowerCase();
+      const fileExt = path.extname(f.originalname || f.filename || '').toLowerCase().replace('.', '');
+      const isVideoFile = fileMime.startsWith('video/') || ALLOWED_VIDEO_FORMATS.includes(fileExt) || ((f.fieldname || '').toLowerCase().includes('video'));
+      if (isVideoFile && (!f.secure_url || !f.secure_url.startsWith('http')) && (f.buffer || f.path) && isCloudinaryConfigured()) {
+        console.log(`[updateLesson] Video file found without Cloudinary URL, uploading now: "${f.originalname}"`);
+        console.log('[VIDEO UPLOAD] File received');
+        console.log(`[VIDEO UPLOAD] Filename: ${f.originalname || 'unknown'}`);
+        console.log(`[VIDEO UPLOAD] MIME: ${fileMime || 'video/mp4'}`);
+        console.log(`[VIDEO UPLOAD] Size: ${f.size || (f.buffer ? f.buffer.length : 0)}`);
+        console.log('[VIDEO UPLOAD] Starting Cloudinary upload');
+        try {
+          const { cleanBaseName } = extractCleanNameAndExt(f.originalname, fileExt);
+          const uniqueSuffix = `${Date.now()}-${Math.round(Math.random() * 1e6)}`;
+          const uploaded = await uploadBufferToCloudinary(f, 'homeopathy-media/videos', {
+            resource_type: 'video',
+            public_id: `${cleanBaseName}-${uniqueSuffix}`,
+            timeout: 600000,
+            chunk_size: 6000000,
+          });
+          console.log('[VIDEO UPLOAD] Cloudinary upload successful');
+          console.log(`[VIDEO UPLOAD] Resource type: ${uploaded.resource_type}`);
+          console.log(`[VIDEO UPLOAD] Secure URL: ${uploaded.secure_url}`);
+          f.secure_url = uploaded.secure_url;
+          f.url = uploaded.secure_url;
+          f.path = uploaded.secure_url;
+          f.public_id = uploaded.public_id;
+          f.resource_type = 'video';
+        } catch (uploadErr) {
+          console.error(`[VIDEO UPLOAD] Cloudinary upload FAILED: ${uploadErr.message || uploadErr}`);
+          return res.status(500).json({
+            success: false,
+            message: 'Failed to upload video to Cloudinary storage.',
+            error: uploadErr.message,
+          });
+        }
+      }
     }
 
     filesList.forEach((f) => {
@@ -1079,8 +1201,25 @@ exports.updateLesson = async (req, res) => {
       }
     });
 
+    // Filter out fake / placeholder Cloudinary URLs (such as hardcoded wrong cloud names like doxb5l5vf)
+    if (targetLesson.videoParts && targetLesson.videoParts.length > 0) {
+      targetLesson.videoParts = targetLesson.videoParts.filter((p) => {
+        if (!p || !p.url) return false;
+        if (p.url.includes('doxb5l5vf')) {
+          console.warn(`[updateLesson] Rejecting fake placeholder video URL with invalid cloud name doxb5l5vf: "${p.url}"`);
+          return false;
+        }
+        return true;
+      });
+    }
+
+    if (targetLesson.videoUrl && targetLesson.videoUrl.includes('doxb5l5vf')) {
+      console.warn(`[updateLesson] Rejecting fake placeholder videoUrl: "${targetLesson.videoUrl}"`);
+      targetLesson.videoUrl = '';
+    }
+
     if (targetLesson.videoUrl && targetLesson.videoParts.length === 0) {
-      targetLesson.videoParts.push({ title: targetLesson.lessonTitle || 'Video Part 1', url: targetLesson.videoUrl });
+      targetLesson.videoParts.push({ title: targetLesson.lessonTitle || 'Video Part 1', url: targetLesson.videoUrl, secure_url: targetLesson.videoUrl, resource_type: 'video' });
     }
 
     await course.save();
