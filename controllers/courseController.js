@@ -153,6 +153,26 @@ const toResourceObj = (item) => {
  * Handles: undefined/null → [], array of strings, array of objects,
  * a single string (JSON-encoded array or bare filename), a single object.
  */
+
+/**
+ * De-duplicate an array of resource objects based on public_id, secure_url, url, or title
+ */
+const deduplicateResourceArray = (arr) => {
+  if (!Array.isArray(arr)) return [];
+  const seen = new Set();
+  return arr.filter((item) => {
+    if (!item) return false;
+    const urlKey = (item.secure_url || item.url || '').trim();
+    const idKey = (item.public_id || item.publicId || '').trim();
+    const titleKey = (item.title || item.name || '').trim();
+    const key = idKey ? ('id:' + idKey) : (urlKey ? ('url:' + urlKey) : (titleKey ? ('title:' + titleKey) : ''));
+    if (!key) return false;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+};
+
 const parseFileItems = (items) => {
   if (!items) return [];
 
@@ -929,6 +949,11 @@ exports.addLesson = async (req, res) => {
       finalVideoUrl = finalVideoParts[0].url;
     }
 
+    finalVideoParts = deduplicateResourceArray(finalVideoParts);
+    finalPdfNotes = deduplicateResourceArray(finalPdfNotes);
+    finalAssignments = deduplicateResourceArray(finalAssignments);
+    finalAttachments = deduplicateResourceArray(finalAttachments);
+
     const newLesson = {
       lessonTitle: actualLessonTitle,
       lessonType: actualLessonType,
@@ -1221,6 +1246,11 @@ exports.updateLesson = async (req, res) => {
     if (targetLesson.videoUrl && targetLesson.videoParts.length === 0) {
       targetLesson.videoParts.push({ title: targetLesson.lessonTitle || 'Video Part 1', url: targetLesson.videoUrl, secure_url: targetLesson.videoUrl, resource_type: 'video' });
     }
+
+    targetLesson.videoParts = deduplicateResourceArray(targetLesson.videoParts);
+    targetLesson.pdfNotes = deduplicateResourceArray(targetLesson.pdfNotes);
+    targetLesson.assignments = deduplicateResourceArray(targetLesson.assignments);
+    targetLesson.attachments = deduplicateResourceArray(targetLesson.attachments);
 
     await course.save();
 
