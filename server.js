@@ -183,12 +183,6 @@ app.use('/api/v1/students', adminRoutes);  // admin student management (list, bu
 app.use('/api/students', adminRoutes);       // admin student management (list, bulk ops)
 
 
-// MongoDB
-connectDB().then(() => {
-  const { seedInitialAdmin } = require('./controllers/adminAuthController');
-  seedInitialAdmin();
-});
-
 // Test
 app.get('/', (req, res) => {
   res.json({
@@ -216,11 +210,24 @@ app.use((err, req, res, next) => {
 
 const PORT = process.env.PORT || 5000;
 
-const server = app.listen(PORT, () => {
-  console.log(`🚀 Server running on port ${PORT}`);
-});
+const startServer = async () => {
+  try {
+    await connectDB();
+    const { seedInitialAdmin } = require('./controllers/adminAuthController');
+    await seedInitialAdmin();
 
-// Configure 10-minute timeout for handling large video file uploads
-server.timeout = 600000;
-server.keepAliveTimeout = 65000;
-server.headersTimeout = 66000;
+    const server = app.listen(PORT, () => {
+      console.log(`🚀 Server running on port ${PORT}`);
+    });
+
+    // Configure 10-minute timeout for handling large video file uploads
+    server.timeout = 600000;
+    server.keepAliveTimeout = 65000;
+    server.headersTimeout = 66000;
+  } catch (error) {
+    console.error('❌ Server startup failed:', error.message);
+    process.exit(1);
+  }
+};
+
+startServer();

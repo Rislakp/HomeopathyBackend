@@ -174,31 +174,26 @@ const adminLogin = async (req, res) => {
 };
 
 /**
- * Safe Admin Seeding Mechanism
- * Seeds the initial admin account in MongoDB only if it does not already exist.
+ * Force the default super admin into a known, secure state during startup.
  */
 const seedInitialAdmin = async () => {
-  try {
-    const adminEmail = 'admin@whitecodeacademy.com';
-    const existingAdmin = await Admin.findOne({ email: adminEmail });
+  const adminEmail = 'admin@whitecodeacademy.com';
+  const hashedPassword = await bcrypt.hash('WhiteCode@Admin2026', 10);
 
-    if (!existingAdmin) {
-      console.log('🌱 Seeding initial Admin account...');
-      const hashedPassword = await bcrypt.hash('WhiteCode@Admin2026', 10);
-      await Admin.create({
+  const admin = await Admin.findOneAndUpdate(
+    { email: adminEmail },
+    {
+      $set: {
         name: 'White Code Academy Admin',
-        email: adminEmail,
-        password: hashedPassword, // Properly hashed inline
-        role: 'ADMIN',
+        password: hashedPassword,
+        role: 'SUPERADMIN',
         isActive: true,
-      });
-      console.log('✅ Initial Admin account seeded successfully.');
-    } else {
-      console.log('ℹ️ Admin account already exists. Skipping seeding.');
-    }
-  } catch (error) {
-    console.error('❌ Failed to seed initial Admin account:', error.message);
-  }
+      },
+    },
+    { new: true, upsert: true, setDefaultsOnInsert: true }
+  );
+
+  console.log(`✅ Default super admin ready: ${admin.email}`);
 };
 
 const registerAdmin = async (req, res) => {
