@@ -17,19 +17,18 @@ const activitySchema = new mongoose.Schema(
     },
     type: {
       type: String,
-      required: [true, 'Activity type category is required'],
+      required: false,
+      default: 'general',
       trim: true,
       index: true,
     },
     adminId: {
-      type: mongoose.Schema.Types.ObjectId,
-      ref: 'User',
+      type: mongoose.Schema.Types.Mixed,
       required: false,
       default: null,
     },
     actor: {
-      type: mongoose.Schema.Types.ObjectId,
-      ref: 'User',
+      type: mongoose.Schema.Types.Mixed,
       required: false,
       default: null,
     },

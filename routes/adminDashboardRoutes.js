@@ -13,13 +13,21 @@ const protectAdmin = (req, res, next) => {
   });
 };
 
+const handleDashboardOrActivities = (req, res, next) => {
+  const url = (req.originalUrl || req.baseUrl || '').toLowerCase();
+  if (url.includes('activities')) {
+    return getRecentActivities(req, res, next);
+  }
+  return getDashboardStats(req, res, next);
+};
+
 /**
  * @route   GET /api/admin/dashboard-stats
  * @route   GET /api/v1/admin/dashboard-stats
  * @desc    Fetch aggregated metrics & growth trends for admin dashboard
  * @access  Private (Admin / Superadmin)
  */
-router.get('/', protectAdmin, getDashboardStats);
+router.get('/', protectAdmin, handleDashboardOrActivities);
 router.get('/dashboard-stats', protectAdmin, getDashboardStats);
 
 /**

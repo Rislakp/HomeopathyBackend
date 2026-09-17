@@ -12,17 +12,17 @@ const Activity = require('../models/Activity');
  * @param {string|mongoose.Types.ObjectId} [params.actor] - Actor ID (optional)
  * @returns {Promise<Object|null>} The saved Activity document or null on error
  */
-const logActivity = async ({ title, description, type, adminId = null, actor = null }) => {
+const logActivity = async ({ title, description, type = 'general', adminId = null, actor = null }) => {
   try {
-    if (!title || !description || !type) {
-      console.warn('[ActivityLogger] Warning: missing required fields (title, description, or type).');
+    if (!title || !description) {
+      console.warn('[ActivityLogger] Warning: missing required fields (title or description).');
       return null;
     }
 
     const activity = await Activity.create({
       title,
       description,
-      type,
+      type: type || 'general',
       adminId: adminId || actor || null,
       actor: actor || adminId || null,
       createdAt: new Date(),
