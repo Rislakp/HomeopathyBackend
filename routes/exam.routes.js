@@ -12,7 +12,7 @@ const {
   addQuestionToExam,
   updateQuestionInExam,
   deleteQuestionFromExam,
-} = require('../controllers/exam.controller');
+} = require('../controllers/examController');
 const { requireAdmin, requireRole } = require('../middleware/rbac');
 const { downloadAnswerKey } = require('../src/student/answerKey.controller');
 

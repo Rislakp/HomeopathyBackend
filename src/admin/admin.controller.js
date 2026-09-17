@@ -2,7 +2,7 @@ const mongoose = require('mongoose');
 const pdfParse = require('pdf-parse');
 const Tesseract = require('tesseract.js');
 const xlsx = require('xlsx');
-const Exam = require('../common/models/exam.model');
+const Exam = require('../../models/Exam');
 try { require('../../models/Course'); } catch (e) {}
 
 /**
@@ -113,11 +113,15 @@ function validateAndSanitizeQuestion(q, index = 0) {
   }
 
   // imageUrl (optional String)
-  if (q.imageUrl !== undefined && q.imageUrl !== null && q.imageUrl !== '') {
-    if (typeof q.imageUrl !== 'string') {
+  const rawImageUrl = (q.imageUrl !== undefined && q.imageUrl !== null && q.imageUrl !== '')
+    ? q.imageUrl
+    : (q.image_url || q.image || q.questionImage || q.imgUrl);
+
+  if (rawImageUrl !== undefined && rawImageUrl !== null && rawImageUrl !== '') {
+    if (typeof rawImageUrl !== 'string') {
       return { valid: false, error: `Question ${index + 1}: imageUrl must be a string.` };
     }
-    sanitizedQuestion.imageUrl = q.imageUrl.trim();
+    sanitizedQuestion.imageUrl = rawImageUrl.trim();
   }
 
   // tableData (optional JSON/Array structure)
@@ -779,12 +783,18 @@ async function deleteQuestionFromExam(req, res) {
 }
 
 const deleteExam = deleteGrandMockExam;
+const createExam = createGrandMockExam;
+const saveGrandMock = createGrandMockExam;
+const getExamById = getGrandMockById;
 
 module.exports = {
   extractMCQs,
   createGrandMockExam,
+  createExam,
+  saveGrandMock,
   getAllGrandMocks,
   getGrandMockById,
+  getExamById,
   updateGrandMockExam,
   deleteGrandMockExam,
   deleteExam,

@@ -1,11 +1,11 @@
 require('dotenv').config();
 const mongoose = require('mongoose');
 const assert = require('assert');
-const Exam = require('../models/exam.model');
+const Exam = require('../models/Exam');
 const Course = require('../models/Course');
 const TestResult = require('../src/common/models/testResult.model');
 
-const { getGrandMockById } = require('../controllers/exam.controller');
+const { getGrandMockById } = require('../controllers/examController');
 const { startExam, getStudentResults } = require('../src/student/student.controller');
 
 async function runTests() {

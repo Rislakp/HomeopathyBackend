@@ -4,7 +4,7 @@ const express = require('express');
 const cors = require('cors');
 const mongoose = require('mongoose');
 const connectDB = require('../config/db');
-const Exam = require('../models/exam.model');
+const Exam = require('../models/Exam');
 const TestResult = require('../src/common/models/testResult.model');
 
 const app = express();

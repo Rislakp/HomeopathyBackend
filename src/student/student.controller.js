@@ -1,5 +1,5 @@
 const mongoose = require('mongoose');
-const Exam = require('../common/models/exam.model');
+const Exam = require('../../models/Exam');
 const TestResult = require('../common/models/testResult.model');
 const Student = require('../../models/Student');
 const User = require('../../models/User');
