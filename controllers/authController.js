@@ -47,12 +47,21 @@ const buildUserResponse = (user, studentDoc = null) => {
     preferredCourse: user.preferredCourse || user.course || '',
     course: (studentDoc && studentDoc.course) || user.course || user.preferredCourse || '',
     dateOfBirth: user.dateOfBirth || '',
+    courses: [],
   };
 
   if (studentDoc) {
     response.status = studentDoc.status || 'Pending';
     response.accountStatus = studentDoc.accountStatus || 'Pending';
     response.isApproved = studentDoc.isApproved || false;
+    
+    // Add authorized course to the courses array
+    if (studentDoc.courseRef) {
+      response.courses.push({
+        id: studentDoc.courseRef.toString(),
+        title: studentDoc.course || user.course || user.preferredCourse || 'Assigned Course'
+      });
+    }
   } else {
     // Fallback to User document fields if Student document is not found
     response.status = user.status || 'Pending';
