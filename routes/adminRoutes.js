@@ -9,15 +9,16 @@ const {
   approveStudent,
   rejectStudent,
 } = require('../controllers/adminStudentController');
-const { getDashboardStats } = require('../controllers/adminDashboardController');
+const { getDashboardStats, getRecentActivities } = require('../controllers/adminDashboardController');
 const { updateUserRole } = require('../controllers/authController');
 const adminAuthMiddleware = require('../middleware/adminAuthMiddleware');
 
 // Protect all routes in this router with Admin authentication middleware
 router.use(adminAuthMiddleware);
 
-// ── Admin Dashboard Statistics ───────────────────────────────────────────────
+// ── Admin Dashboard Statistics & Activities ─────────────────────────────────
 router.get('/dashboard-stats', getDashboardStats);
+router.get('/activities', getRecentActivities);
 
 // ── Student list & details ──────────────────────────────────────────────────
 router.get('/students', getAdminStudents);

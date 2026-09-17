@@ -1,6 +1,6 @@
 const express = require('express');
 const router = express.Router();
-const { getDashboardStats } = require('../controllers/adminDashboardController');
+const { getDashboardStats, getRecentActivities } = require('../controllers/adminDashboardController');
 const adminAuthMiddleware = require('../middleware/adminAuthMiddleware');
 const { requireAdmin } = require('../middleware/rbac');
 
@@ -21,5 +21,13 @@ const protectAdmin = (req, res, next) => {
  */
 router.get('/', protectAdmin, getDashboardStats);
 router.get('/dashboard-stats', protectAdmin, getDashboardStats);
+
+/**
+ * @route   GET /api/admin/activities
+ * @route   GET /api/v1/admin/activities
+ * @desc    Fetch recent platform activities feed
+ * @access  Private (Admin / Superadmin)
+ */
+router.get('/activities', protectAdmin, getRecentActivities);
 
 module.exports = router;

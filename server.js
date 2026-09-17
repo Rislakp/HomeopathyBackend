@@ -179,6 +179,8 @@ app.use('/api/v1/admin/faculty', facultyRoutes);
 const adminDashboardRoutes = require('./routes/adminDashboardRoutes');
 app.use('/api/admin/dashboard-stats', adminDashboardRoutes);
 app.use('/api/v1/admin/dashboard-stats', adminDashboardRoutes);
+app.use('/api/admin/activities', adminDashboardRoutes);
+app.use('/api/v1/admin/activities', adminDashboardRoutes);
 
 const adminRoutes = require('./routes/adminRoutes');
 app.use('/api/admin/auth', require('./routes/adminAuthRoutes'));
