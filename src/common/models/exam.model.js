@@ -65,13 +65,15 @@ const examSchema = new mongoose.Schema({
     trim: true
   },
   courseId: {
-    type: mongoose.Schema.Types.ObjectId,
+    type: String,
     ref: 'Course',
+    trim: true,
     required: false,
     default: null
   },
   moduleId: {
-    type: mongoose.Schema.Types.ObjectId,
+    type: String,
+    trim: true,
     required: false,
     default: null
   },
