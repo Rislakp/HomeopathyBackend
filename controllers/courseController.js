@@ -187,8 +187,8 @@ const getResourceKey = (item) => {
 };
 
 /**
- * Ensures each resource item (by public_id or normalized URL) exists in AT MOST ONE category array.
- * Categories: videoParts, pdfNotes, assignments, attachments.
+ * Keeps resource categories independent. Explicit request categories can remove
+ * a resource from another category, but file metadata never chooses pdfNotes.
  */
 const sanitizeAndIsolateResourceArrays = ({
   videoParts = [],
@@ -209,35 +209,22 @@ const sanitizeAndIsolateResourceArrays = ({
     { name: 'pdfNotes', items: cleanPdfNotes },
   ];
 
-  const assignedCategoryKeyMap = new Map();
+  // Only an explicit request source may move a resource between categories.
+  // GET serialization must never infer a category from a URL, extension, or MIME type.
+  if (explicitCategoryMap && explicitCategoryMap.size > 0) {
+    for (const category of allCategories) {
+      const filteredItems = category.items.filter((item) => {
+        const key = getResourceKey(item);
+        const explicitCategory = key ? explicitCategoryMap.get(key) : undefined;
+        return !explicitCategory || explicitCategory === category.name;
+      });
 
-  // 1st pass: Assign explicit categories from explicitCategoryMap
-  for (const cat of allCategories) {
-    for (const item of cat.items) {
-      const key = getResourceKey(item);
-      if (!key) continue;
-      if (explicitCategoryMap && explicitCategoryMap.has(key)) {
-        assignedCategoryKeyMap.set(key, explicitCategoryMap.get(key));
-      }
+      if (category.name === 'videoParts') cleanVideoParts = filteredItems;
+      if (category.name === 'pdfNotes') cleanPdfNotes = filteredItems;
+      if (category.name === 'assignments') cleanAssignments = filteredItems;
+      if (category.name === 'attachments') cleanAttachments = filteredItems;
     }
   }
-
-  // 2nd pass: Assign default category for any unassigned key
-  for (const cat of allCategories) {
-    for (const item of cat.items) {
-      const key = getResourceKey(item);
-      if (!key) continue;
-      if (!assignedCategoryKeyMap.has(key)) {
-        assignedCategoryKeyMap.set(key, cat.name);
-      }
-    }
-  }
-
-  // Filter each array so it only contains items assigned to its category
-  cleanVideoParts = cleanVideoParts.filter((item) => assignedCategoryKeyMap.get(getResourceKey(item)) === 'videoParts');
-  cleanPdfNotes = cleanPdfNotes.filter((item) => assignedCategoryKeyMap.get(getResourceKey(item)) === 'pdfNotes');
-  cleanAssignments = cleanAssignments.filter((item) => assignedCategoryKeyMap.get(getResourceKey(item)) === 'assignments');
-  cleanAttachments = cleanAttachments.filter((item) => assignedCategoryKeyMap.get(getResourceKey(item)) === 'attachments');
 
   return {
     videoParts: cleanVideoParts,
@@ -1100,11 +1087,17 @@ exports.addLesson = async (req, res) => {
     finalAssignments = isolated.assignments;
     finalAttachments = isolated.attachments;
 
-    console.log('========== RESOURCE SAVE DEBUG ==========');
-    console.log('pdfNotes:', JSON.stringify(finalPdfNotes, null, 2));
-    console.log('attachments:', JSON.stringify(finalAttachments, null, 2));
-    console.log('assignments:', JSON.stringify(finalAssignments, null, 2));
-    console.log('==========================================');
+    console.log('========== LESSON RESOURCE SAVE ==========');
+    console.log(`pdfNotes count: ${finalPdfNotes.length}`);
+    console.log(`assignments count: ${finalAssignments.length}`);
+    console.log(`attachments count: ${finalAttachments.length}`);
+    console.log('PDF NOTES:');
+    console.log(JSON.stringify(finalPdfNotes, null, 2));
+    console.log('ASSIGNMENTS:');
+    console.log(JSON.stringify(finalAssignments, null, 2));
+    console.log('ATTACHMENTS:');
+    console.log(JSON.stringify(finalAttachments, null, 2));
+    console.log('===========================================');
 
     const newLesson = {
       lessonTitle: actualLessonTitle,
@@ -1455,11 +1448,17 @@ exports.updateLesson = async (req, res) => {
     targetLesson.assignments = isolated.assignments;
     targetLesson.attachments = isolated.attachments;
 
-    console.log('========== RESOURCE SAVE DEBUG ==========');
-    console.log('pdfNotes:', JSON.stringify(targetLesson.pdfNotes, null, 2));
-    console.log('attachments:', JSON.stringify(targetLesson.attachments, null, 2));
-    console.log('assignments:', JSON.stringify(targetLesson.assignments, null, 2));
-    console.log('==========================================');
+    console.log('========== LESSON RESOURCE SAVE ==========');
+    console.log(`pdfNotes count: ${targetLesson.pdfNotes.length}`);
+    console.log(`assignments count: ${targetLesson.assignments.length}`);
+    console.log(`attachments count: ${targetLesson.attachments.length}`);
+    console.log('PDF NOTES:');
+    console.log(JSON.stringify(targetLesson.pdfNotes, null, 2));
+    console.log('ASSIGNMENTS:');
+    console.log(JSON.stringify(targetLesson.assignments, null, 2));
+    console.log('ATTACHMENTS:');
+    console.log(JSON.stringify(targetLesson.attachments, null, 2));
+    console.log('===========================================');
 
     await course.save();
 
