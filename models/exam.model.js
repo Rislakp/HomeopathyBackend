@@ -64,6 +64,29 @@ const examSchema = new mongoose.Schema({
     default: 'grand_mock',
     trim: true
   },
+  courseId: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'Course',
+    required: false,
+    default: null
+  },
+  moduleId: {
+    type: mongoose.Schema.Types.ObjectId,
+    required: false,
+    default: null
+  },
+  courseName: {
+    type: String,
+    trim: true,
+    required: false,
+    default: null
+  },
+  moduleName: {
+    type: String,
+    trim: true,
+    required: false,
+    default: null
+  },
   marksPerQuestion: {
     type: Number,
     required: true

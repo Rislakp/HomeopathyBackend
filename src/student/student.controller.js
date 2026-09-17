@@ -3,6 +3,32 @@ const Exam = require('../common/models/exam.model');
 const TestResult = require('../common/models/testResult.model');
 const Student = require('../../models/Student');
 const User = require('../../models/User');
+try { require('../../models/Course'); } catch (e) {}
+
+/**
+ * Helper to resolve courseName and moduleName for an exam object (populated or plain).
+ */
+function resolveCourseAndModuleNames(exam) {
+  if (!exam) return { courseName: null, moduleName: null };
+  let courseName = exam.courseName || null;
+  let moduleName = exam.moduleName || null;
+
+  if (exam.courseId && typeof exam.courseId === 'object') {
+    if (!courseName) {
+      courseName = exam.courseId.courseTitle || exam.courseId.title || null;
+    }
+    if (!moduleName && exam.moduleId && Array.isArray(exam.courseId.modules)) {
+      const modObj = exam.courseId.modules.find(
+        (m) => m && m._id && m._id.toString() === exam.moduleId.toString()
+      );
+      if (modObj) {
+        moduleName = modObj.moduleName || null;
+      }
+    }
+  }
+
+  return { courseName, moduleName };
+}
 
 /**
  * GET /api/student/profile (or /api/student/me)
@@ -119,7 +145,8 @@ async function getAvailableExams(req, res) {
     }
 
     const filter = {};
-    const queryType = req.query.testType || req.query.type;
+    const reqQuery = req ? (req.query || {}) : {};
+    const queryType = reqQuery.testType || reqQuery.type;
     if (queryType && queryType.trim()) {
       filter.testType = normalizeTestType(queryType);
     }
@@ -127,6 +154,7 @@ async function getAvailableExams(req, res) {
     // 1. Fetch all exams matching filter (excluding questions for lightweight summary)
     const exams = await Exam.find(filter)
       .select('-questions')
+      .populate('courseId', 'courseTitle modules')
       .sort({ createdAt: -1 })
       .lean();
 
@@ -148,9 +176,12 @@ async function getAvailableExams(req, res) {
     const formattedExams = exams.map((exam) => {
       const examIdStr = exam._id.toString();
       const previousResult = resultMap.get(examIdStr);
+      const { courseName, moduleName } = resolveCourseAndModuleNames(exam);
 
       return {
         ...exam,
+        courseName,
+        moduleName,
         negativeMark: exam.negativeMark !== undefined && exam.negativeMark !== null
           ? exam.negativeMark
           : (exam.negativeMarkPenalty ?? 0),
@@ -195,7 +226,9 @@ async function startExam(req, res) {
       });
     }
 
-    const exam = await Exam.findById(id).lean();
+    const exam = await Exam.findById(id)
+      .populate('courseId', 'courseTitle modules')
+      .lean();
 
     if (!exam) {
       return res.status(404).json({
@@ -203,6 +236,8 @@ async function startExam(req, res) {
         message: 'Grand Mock Exam not found.'
       });
     }
+
+    const { courseName, moduleName } = resolveCourseAndModuleNames(exam);
 
     // Sanitize questions to prevent cheating - completely remove `correctOption`
     const sanitizedQuestions = (exam.questions || []).map((q) => {
@@ -214,6 +249,8 @@ async function startExam(req, res) {
       success: true,
       data: {
         ...exam,
+        courseName,
+        moduleName,
         negativeMark: exam.negativeMark !== undefined && exam.negativeMark !== null
           ? exam.negativeMark
           : (exam.negativeMarkPenalty ?? 0),
@@ -502,7 +539,8 @@ async function getStudentResults(req, res) {
       });
     }
 
-    const filterType = req.query.testType || req.query.type;
+    const reqQuery = req ? (req.query || {}) : {};
+    const filterType = reqQuery.testType || reqQuery.type;
     let matchingExamIds = null;
     if (filterType && filterType.trim()) {
       const targetType = normalizeTestType(filterType);
@@ -511,7 +549,14 @@ async function getStudentResults(req, res) {
     }
 
     let results = await TestResult.find({ studentId })
-      .populate('examId', 'title testType marksPerQuestion negativeMark negativeMarkPenalty durationMinutes totalQuestions questions')
+      .populate({
+        path: 'examId',
+        select: 'title testType courseId moduleId courseName moduleName marksPerQuestion negativeMark negativeMarkPenalty durationMinutes totalQuestions questions',
+        populate: {
+          path: 'courseId',
+          select: 'courseTitle modules'
+        }
+      })
       .sort({ createdAt: -1 })
       .lean();
 
@@ -549,9 +594,22 @@ async function getStudentResults(req, res) {
       });
 
       let examMetadata = exam;
-      if (exam && exam.questions) {
-        const { questions, ...restExam } = exam;
-        examMetadata = restExam;
+      if (exam) {
+        const { courseName: resolvedCourseName, moduleName: resolvedModuleName } = resolveCourseAndModuleNames(exam);
+        if (exam.questions) {
+          const { questions, ...restExam } = exam;
+          examMetadata = {
+            ...restExam,
+            courseName: resolvedCourseName,
+            moduleName: resolvedModuleName
+          };
+        } else {
+          examMetadata = {
+            ...exam,
+            courseName: resolvedCourseName,
+            moduleName: resolvedModuleName
+          };
+        }
       }
 
       return {
