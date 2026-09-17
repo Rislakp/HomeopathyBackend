@@ -1,12 +1,8 @@
-const http = require('http');
 const mongoose = require('mongoose');
 const jwt = require('jsonwebtoken');
 require('dotenv').config();
 
-const server = require('../server');
 const { getRecentActivities } = require('../controllers/adminDashboardController');
-
-const PORT = 5059;
 
 async function runTests() {
   console.log('====================================================');
