@@ -119,6 +119,9 @@ async function getStudentProfile(req, res) {
     const status = (studentDoc && studentDoc.status) || 'Active';
     const profileImage = (studentDoc && (studentDoc.profileImage || studentDoc.avatar)) || '';
 
+    const courseRef = (studentDoc && studentDoc.courseRef) || (userDoc && userDoc.courseRef) || req.user?.courseRef || null;
+    const courseId = (studentDoc && studentDoc.courseId) || (userDoc && userDoc.courseId) || req.user?.courseId || (courseRef ? courseRef.toString() : '');
+
     return res.status(200).json({
       success: true,
       message: 'Student profile fetched successfully',
@@ -130,6 +133,8 @@ async function getStudentProfile(req, res) {
         dateOfBirth,
         qualification,
         course,
+        courseId,
+        courseRef: courseRef ? courseRef.toString() : null,
         subscription,
         status,
         profileImage
@@ -163,8 +168,9 @@ function normalizeTestType(input) {
  */
 async function getAvailableExams(req, res) {
   try {
-    const studentId = req.user && req.user.id;
-    if (!studentId) {
+    const isStaff = ['admin', 'superadmin'].includes((req.user?.role || '').toLowerCase());
+    const studentId = req.user && (req.user.studentId || req.user.id);
+    if (!studentId && !isStaff) {
       return res.status(401).json({
         success: false,
         message: 'Unauthorized: Student ID not found in session/token.'
@@ -176,6 +182,40 @@ async function getAvailableExams(req, res) {
     const queryType = reqQuery.testType || reqQuery.type;
     if (queryType && queryType.trim()) {
       filter.testType = normalizeTestType(queryType);
+    }
+
+    if (!isStaff) {
+      const studentCourseRef = req.user?.courseRef;
+      const studentCourseId = req.user?.courseId;
+      const studentCourseTitle = req.user?.course;
+
+      if (!studentCourseRef && !studentCourseId && !studentCourseTitle) {
+        return res.status(404).json({
+          success: false,
+          message: 'Registered course could not be loaded or is not assigned to student profile.',
+          data: [],
+          count: 0
+        });
+      }
+
+      const courseOrFilter = [];
+      if (studentCourseRef && mongoose.Types.ObjectId.isValid(studentCourseRef)) {
+        courseOrFilter.push({ courseId: new mongoose.Types.ObjectId(studentCourseRef) });
+        courseOrFilter.push({ courseId: studentCourseRef.toString() });
+      }
+      if (studentCourseId) {
+        courseOrFilter.push({ courseId: studentCourseId });
+        if (mongoose.Types.ObjectId.isValid(studentCourseId)) {
+          courseOrFilter.push({ courseId: new mongoose.Types.ObjectId(studentCourseId) });
+        }
+      }
+      if (studentCourseTitle) {
+        courseOrFilter.push({ courseName: studentCourseTitle });
+      }
+
+      if (courseOrFilter.length > 0) {
+        filter.$or = courseOrFilter;
+      }
     }
 
     // 1. Fetch all exams matching filter (excluding questions for lightweight summary)

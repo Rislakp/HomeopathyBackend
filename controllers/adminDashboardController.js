@@ -248,7 +248,7 @@ function formatTimeAgo(date) {
  */
 exports.getRecentActivities = async (req, res) => {
   try {
-    const limit = parseInt(req && req.query && req.query.limit ? req.query.limit : 15, 10) || 15;
+    const limit = parseInt(req && req.query && req.query.limit ? req.query.limit : 10, 10) || 10;
     const activities = [];
 
     // 1. Query Activity collection directly for logged activities

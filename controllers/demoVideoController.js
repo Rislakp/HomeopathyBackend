@@ -71,10 +71,26 @@ exports.createDemoVideo = async (req, res) => {
 // @access  Public
 exports.getDemoVideos = async (req, res) => {
   try {
+    const isStaff = ['admin', 'superadmin'].includes((req.user?.role || '').toLowerCase());
     const { courseId } = req.query;
     const filter = {};
 
-    if (courseId) {
+    if (!isStaff && req.user) {
+      const studentCourseRef = req.user.courseRef;
+      const studentCourseId = req.user.courseId;
+
+      const courseOrFilter = [];
+      if (studentCourseRef && mongoose.Types.ObjectId.isValid(studentCourseRef)) {
+        courseOrFilter.push({ courseId: new mongoose.Types.ObjectId(studentCourseRef) });
+      }
+      if (studentCourseId && mongoose.Types.ObjectId.isValid(studentCourseId)) {
+        courseOrFilter.push({ courseId: new mongoose.Types.ObjectId(studentCourseId) });
+      }
+
+      if (courseOrFilter.length > 0) {
+        filter.$or = courseOrFilter;
+      }
+    } else if (courseId) {
       if (mongoose.Types.ObjectId.isValid(courseId)) {
         filter.courseId = courseId;
       } else {
