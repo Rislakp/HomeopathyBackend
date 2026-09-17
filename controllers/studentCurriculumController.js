@@ -201,8 +201,8 @@ const getMyCourseContent = async (req, res) => {
         });
       }
 
-      // Check specific courseRef assignment if present
-      if (student.courseRef && student.courseRef.toString() !== course._id.toString()) {
+      // Check specific courseRef assignment
+      if (!student.courseRef || student.courseRef.toString() !== course._id.toString()) {
         return res.status(403).json({
           success: false,
           message: 'You do not have access to this specific course',
@@ -382,6 +382,13 @@ const getMyProgress = async (req, res) => {
       return res.status(404).json({
         success: false,
         message: 'Course not found',
+      });
+    }
+
+    if (!student.courseRef || student.courseRef.toString() !== course._id.toString()) {
+      return res.status(403).json({
+        success: false,
+        message: 'You do not have access to this specific course',
       });
     }
 

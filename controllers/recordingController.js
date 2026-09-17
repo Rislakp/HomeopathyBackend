@@ -300,6 +300,25 @@ exports.getRecordings = async (req, res) => {
       filter.courseId = req.query.courseId;
     }
 
+    // Add student authorization filter
+    if (req.user && req.user.role === 'student') {
+      const Student = require('../models/Student');
+      const student = await Student.findOne({ userId: req.user.id }) || await Student.findById(req.user.id);
+      
+      if (!student) {
+        return res.status(403).json({ success: false, message: 'Student profile not found.' });
+      }
+      if (student.accountStatus !== 'Approved' && student.status !== 'Active') {
+        return res.status(403).json({ success: false, message: 'Account is not active or approved.' });
+      }
+      
+      if (student.courseRef) {
+        filter.courseId = student.courseRef;
+      } else {
+        filter.courseId = null;
+      }
+    }
+
     const recordings = await Recording.find(filter)
       .populate('courseId', 'courseId courseTitle thumbnail category modules')
       .sort({ createdAt: -1 });
@@ -336,6 +355,27 @@ exports.getRecordingById = async (req, res) => {
     const recording = await Recording.findById(id).populate('courseId', 'courseId courseTitle thumbnail category modules');
     if (!recording) {
       return res.status(404).json({ success: false, message: 'Recording document not found' });
+    }
+
+    // Add student authorization filter
+    if (req.user && req.user.role === 'student') {
+      const Student = require('../models/Student');
+      const student = await Student.findOne({ userId: req.user.id }) || await Student.findById(req.user.id);
+      
+      if (!student) {
+        return res.status(403).json({ success: false, message: 'Student profile not found.' });
+      }
+      if (student.accountStatus !== 'Approved' && student.status !== 'Active') {
+        return res.status(403).json({ success: false, message: 'Account is not active or approved.' });
+      }
+      
+      const recordingCourseId = recording.courseId && typeof recording.courseId === 'object' 
+        ? recording.courseId._id.toString() 
+        : (recording.courseId || '').toString();
+      
+      if (recordingCourseId && recordingCourseId !== (student.courseRef ? student.courseRef.toString() : '')) {
+        return res.status(403).json({ success: false, message: 'You are not authorized to access this live class.' });
+      }
     }
 
     return res.status(200).json({

@@ -390,7 +390,8 @@ async function createGrandMockExam(req, res) {
       negativeMarkPenalty,
       durationMinutes,
       totalQuestions,
-      questions
+      questions,
+      courseId
     } = req.body;
 
     const finalTestType = normalizeTestType(testType);
@@ -471,6 +472,7 @@ async function createGrandMockExam(req, res) {
       negativeMarkPenalty: parsedNegMark,
       durationMinutes: parsedDuration,
       totalQuestions: parsedTotalQuestions,
+      courseId: courseId || null,
       questions: questionValidation.questions
     });
 
@@ -501,6 +503,32 @@ async function getAllGrandMocks(req, res) {
     const queryType = reqQuery.testType || reqQuery.type;
     if (queryType && queryType.trim()) {
       filter.testType = normalizeTestType(queryType);
+    }
+    
+    // Add student authorization filter
+    if (req.user && req.user.role === 'student') {
+      const Student = require('../models/Student');
+      const student = await Student.findOne({ userId: req.user.id }) || await Student.findById(req.user.id);
+      
+      if (!student) {
+        return res.status(403).json({ success: false, message: 'Student profile not found.' });
+      }
+      if (student.accountStatus !== 'Approved' && student.status !== 'Active') {
+        return res.status(403).json({ success: false, message: 'Account is not active or approved.' });
+      }
+      
+      if (student.courseRef) {
+        filter.$or = [
+          { courseId: student.courseRef },
+          { courseId: null },
+          { courseId: { $exists: false } }
+        ];
+      } else {
+        filter.$or = [
+          { courseId: null },
+          { courseId: { $exists: false } }
+        ];
+      }
     }
 
     const exams = await Exam.find(filter)
@@ -580,6 +608,23 @@ async function getGrandMockById(req, res) {
 
     const { courseName, moduleName } = resolveCourseAndModuleNames(exam);
 
+    // Add student authorization filter
+    if (req.user && req.user.role === 'student') {
+      const Student = require('../models/Student');
+      const student = await Student.findOne({ userId: req.user.id }) || await Student.findById(req.user.id);
+      
+      if (!student) {
+        return res.status(403).json({ success: false, message: 'Student profile not found.' });
+      }
+      if (student.accountStatus !== 'Approved' && student.status !== 'Active') {
+        return res.status(403).json({ success: false, message: 'Account is not active or approved.' });
+      }
+      
+      if (exam.courseId && exam.courseId.toString() !== (student.courseRef ? student.courseRef.toString() : '')) {
+        return res.status(403).json({ success: false, message: 'You are not authorized to access this exam.' });
+      }
+    }
+
     const formattedExam = {
       ...exam,
       courseName,
@@ -645,6 +690,9 @@ async function updateGrandMockExam(req, res) {
     }
     if (req.body.moduleName !== undefined) {
       updates.moduleName = req.body.moduleName ? String(req.body.moduleName).trim() : null;
+    }
+    if (req.body.courseId !== undefined) {
+      updates.courseId = req.body.courseId || null;
     }
     if (req.body.marksPerQuestion !== undefined) {
       const parsedMarks = Number(req.body.marksPerQuestion);

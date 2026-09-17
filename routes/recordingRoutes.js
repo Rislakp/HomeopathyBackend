@@ -1,7 +1,8 @@
 const express = require('express');
 const router = express.Router();
 const recordingController = require('../controllers/recordingController');
-const { requireAdmin } = require('../middleware/rbac');
+const { requireAdmin, requireRole } = require('../middleware/rbac');
+const requireAuthUser = requireRole('student', 'admin', 'superadmin');
 const upload = require('../middleware/upload');
 const { handleUploadError, processUploadsToCloudinary } = upload;
 
@@ -21,13 +22,13 @@ router.post('/recordings', requireAdmin, recordingController.createRecording);
 
 // ── 2. GET /api/recordings ───────────────────────────────────────────────────
 // Fetches all recording documents to populate the Live Records dashboard view
-router.get('/recordings', recordingController.getRecordings);
-router.get('/live-records', recordingController.getRecordings);
+router.get('/recordings', requireAuthUser, recordingController.getRecordings);
+router.get('/live-records', requireAuthUser, recordingController.getRecordings);
 
 // ── 3. GET /api/recordings/:id ───────────────────────────────────────────────
 // Fetches a single recording document by ID
-router.get('/recordings/:id', recordingController.getRecordingById);
-router.get('/live-records/:id', recordingController.getRecordingById);
+router.get('/recordings/:id', requireAuthUser, recordingController.getRecordingById);
+router.get('/live-records/:id', requireAuthUser, recordingController.getRecordingById);
 
 // ── 4. PATCH /api/recordings/:id/status ──────────────────────────────────────
 // Updates the recording status/lifecycle state in real time ('recording', 'paused', 'stopped')
