@@ -38,8 +38,15 @@ const configureCloudinary = () => {
     });
   }
 
-  const cloudName = process.env.CLOUDINARY_CLOUD_NAME || 'configured_cloud';
-  console.log(`✅ Cloudinary configured successfully (Cloud Name: ${cloudName}).`);
+  const cloudName = process.env.CLOUDINARY_CLOUD_NAME;
+  const apiKey = process.env.CLOUDINARY_API_KEY;
+  const apiSecret = process.env.CLOUDINARY_API_SECRET;
+  const cloudinaryUrl = process.env.CLOUDINARY_URL;
+
+  console.log(`[CloudinaryConfig] Cloud Name: ${cloudName || (cloudinaryUrl ? 'Set via CLOUDINARY_URL' : 'MISSING')}`);
+  console.log(`[CloudinaryConfig] API Key: ${apiKey ? `***${apiKey.slice(-4)}` : (cloudinaryUrl ? 'Set via CLOUDINARY_URL' : 'MISSING')}`);
+  console.log(`[CloudinaryConfig] API Secret: ${apiSecret ? 'PRESENT' : (cloudinaryUrl ? 'Set via CLOUDINARY_URL' : 'MISSING')}`);
+  console.log(`✅ Cloudinary configured successfully (Cloud Name: ${cloudName || 'configured_cloud'}).`);
   return true;
 };
 

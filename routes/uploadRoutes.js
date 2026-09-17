@@ -23,11 +23,16 @@ router.get('/list', uploadController.getMediaAssets);
 // POST /api/upload - Multiple or single file upload to Cloudinary
 router.post('/', handleFileUpload, uploadController.uploadFiles);
 
+// POST /api/upload/question-image - Dedicated question image upload endpoint
+router.post('/question-image', handleFileUpload, uploadController.uploadQuestionImage);
+router.post('/upload-image', handleFileUpload, uploadController.uploadQuestionImage);
+router.post('/image', handleFileUpload, uploadController.uploadQuestionImage);
+
 // POST /api/upload/multiple - Explicit alias for array uploads
 router.post('/multiple', handleFileUpload, uploadController.uploadFiles);
 
 // POST /api/upload/single - Explicit alias for single upload
-router.post('/single', handleFileUpload, uploadController.uploadFiles);
+router.post('/single', handleFileUpload, uploadController.uploadQuestionImage);
 
 // DELETE /api/upload - Delete uploaded file from Cloudinary
 router.delete('/', uploadController.deleteFile);

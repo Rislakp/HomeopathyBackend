@@ -93,9 +93,23 @@ exports.uploadFiles = async (req, res) => {
       };
     });
 
+    const primary = uploadedFiles[0];
+
+    // Validate that Cloudinary produced a valid secure_url
+    if (!primary || !primary.secure_url) {
+      return res.status(500).json({
+        success: false,
+        message: 'Cloudinary upload completed without secure_url',
+      });
+    }
+
     return res.status(200).json({
       success: true,
       message: `${uploadedFiles.length} file(s) uploaded successfully`,
+      secure_url: primary.secure_url,
+      url: primary.secure_url,
+      public_id: primary.public_id,
+      resource_type: primary.resource_type,
       count: uploadedFiles.length,
       files: uploadedFiles,
       urls: uploadedFiles.map((f) => f.secure_url),
@@ -106,6 +120,64 @@ exports.uploadFiles = async (req, res) => {
     return res.status(500).json({
       success: false,
       message: 'Failed to upload file(s)',
+      error: error.message,
+    });
+  }
+};
+
+/**
+ * @desc    Dedicated question image upload handler for exam questions
+ * @route   POST /api/upload/question-image or /api/uploads/question-image
+ * @access  Public / Protected
+ */
+exports.uploadQuestionImage = async (req, res) => {
+  try {
+    const file = req.file || (req.files && (Array.isArray(req.files) ? req.files[0] : Object.values(req.files).flat()[0]));
+
+    if (!file) {
+      return res.status(400).json({
+        success: false,
+        message: 'No file provided for question image upload.',
+      });
+    }
+
+    const mimetype = (file.mimetype || '').toLowerCase();
+    const ext = (file.originalname || '').split('.').pop().toLowerCase();
+    const allowedMimeTypes = ['image/jpeg', 'image/jpg', 'image/png', 'image/webp', 'image/gif'];
+    const allowedExtensions = ['jpg', 'jpeg', 'png', 'webp', 'gif'];
+
+    if (!mimetype.startsWith('image/') && !allowedMimeTypes.includes(mimetype) && !allowedExtensions.includes(ext)) {
+      return res.status(400).json({
+        success: false,
+        message: `Unsupported file type: ${mimetype || ext}. Only image files (jpeg, png, webp, gif) are allowed.`,
+      });
+    }
+
+    const rawUrl = file.secure_url || file.url || file.path || '';
+    const secureUrl = toAbsoluteUrl(rawUrl, req);
+
+    if (!secureUrl) {
+      return res.status(500).json({
+        success: false,
+        message: 'Cloudinary upload completed without secure_url',
+      });
+    }
+
+    const publicId = file.public_id || file.filename || '';
+    const resourceType = file.resource_type || 'image';
+
+    return res.status(200).json({
+      success: true,
+      secure_url: secureUrl,
+      url: secureUrl,
+      public_id: publicId,
+      resource_type: resourceType,
+    });
+  } catch (error) {
+    console.error('Question image upload error:', error);
+    return res.status(500).json({
+      success: false,
+      message: 'Cloudinary image upload failed',
       error: error.message,
     });
   }
