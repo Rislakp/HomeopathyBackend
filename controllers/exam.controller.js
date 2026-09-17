@@ -391,7 +391,6 @@ async function createGrandMockExam(req, res) {
       durationMinutes,
       totalQuestions,
       questions,
-      courseId
     } = req.body;
 
     const finalTestType = normalizeTestType(testType);
