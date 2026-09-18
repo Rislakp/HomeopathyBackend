@@ -193,49 +193,62 @@ async function getAvailableExams(req, res) {
       studentDoc = await User.findById(studentId);
     }
 
-    if (!studentDoc) {
+    if (!studentDoc && !isStaff) {
       return res.status(404).json({ success: false, message: 'Student profile not found.' });
     }
 
-    // Determine course ID
-    const studentCourseId = studentDoc.courseId || studentDoc.course || studentDoc.preferredCourse || studentDoc.enrolledCourseId;
-    
-    if (!studentCourseId) {
-      // If no course is assigned, do not show any exams
-      return res.status(200).json({ success: true, count: 0, data: [] });
-    }
-
-    const filter = { courseId: studentCourseId };
+    const filter = {};
     const reqQuery = req ? (req.query || {}) : {};
     const queryType = reqQuery.testType || reqQuery.type;
     if (queryType && queryType.trim()) {
       filter.testType = normalizeTestType(queryType);
     }
 
-    if (!isStaff) {
-      const studentCourseRef = req.user?.courseRef;
-      const studentCourseId = req.user?.courseId;
-      const studentCourseTitle = req.user?.course;
+    let courseDoc = null;
+    if (!isStaff && studentDoc) {
+      const studentCourseRef = studentDoc.courseRef || req.user?.courseRef;
+      const studentCourseId = studentDoc.courseId || req.user?.courseId;
+      const studentCourseTitle = studentDoc.course || studentDoc.preferredCourse || req.user?.course;
 
-      if (!studentCourseRef && !studentCourseId && !studentCourseTitle) {
-        return res.status(404).json({
-          success: false,
-          message: 'Registered course could not be loaded or is not assigned to student profile.',
-          data: [],
-          count: 0
-        });
+      const CourseModel = mongoose.models.Course || require('../../models/Course');
+      if (studentCourseRef && mongoose.Types.ObjectId.isValid(studentCourseRef)) {
+        courseDoc = await CourseModel.findById(studentCourseRef).lean();
+      }
+      if (!courseDoc && studentCourseId) {
+        courseDoc = await CourseModel.findOne({
+          $or: [
+            ...(mongoose.Types.ObjectId.isValid(studentCourseId) ? [{ _id: studentCourseId }] : []),
+            { courseId: studentCourseId }
+          ]
+        }).lean();
+      }
+      if (!courseDoc && studentCourseTitle) {
+        courseDoc = await CourseModel.findOne({
+          $or: [{ courseTitle: studentCourseTitle }, { title: studentCourseTitle }]
+        }).lean();
       }
 
       const courseOrFilter = [];
-      if (studentCourseRef && mongoose.Types.ObjectId.isValid(studentCourseRef)) {
-        courseOrFilter.push({ courseId: new mongoose.Types.ObjectId(studentCourseRef) });
+      if (studentCourseRef) {
+        if (mongoose.Types.ObjectId.isValid(studentCourseRef)) {
+          courseOrFilter.push({ courseId: new mongoose.Types.ObjectId(studentCourseRef) });
+        }
         courseOrFilter.push({ courseId: studentCourseRef.toString() });
+      }
+      if (courseDoc) {
+        if (courseDoc._id) {
+          courseOrFilter.push({ courseId: courseDoc._id });
+          courseOrFilter.push({ courseId: courseDoc._id.toString() });
+        }
+        if (courseDoc.courseId) {
+          courseOrFilter.push({ courseId: courseDoc.courseId });
+        }
+        if (courseDoc.courseTitle) {
+          courseOrFilter.push({ courseName: courseDoc.courseTitle });
+        }
       }
       if (studentCourseId) {
         courseOrFilter.push({ courseId: studentCourseId });
-        if (mongoose.Types.ObjectId.isValid(studentCourseId)) {
-          courseOrFilter.push({ courseId: new mongoose.Types.ObjectId(studentCourseId) });
-        }
       }
       if (studentCourseTitle) {
         courseOrFilter.push({ courseName: studentCourseTitle });
@@ -243,10 +256,7 @@ async function getAvailableExams(req, res) {
 
       if (courseOrFilter.length > 0) {
         filter.$or = courseOrFilter;
-      }
-      
-      // Additional safety net if the filter evaluates to empty for the student
-      if (courseOrFilter.length === 0) {
+      } else {
         return res.status(200).json({ success: true, count: 0, data: [] });
       }
     }
