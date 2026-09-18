@@ -10,12 +10,14 @@ try { require('../../models/Course'); } catch (e) {}
  * Helper to resolve courseName and moduleName for an exam object (populated or plain).
  */
 async function resolveCourseAndModuleNames(exam) {
-  if (!exam) return { courseName: null, moduleName: null };
+  if (!exam) return { courseName: null, moduleName: null, canonicalCourseId: null };
   let courseName = exam.courseName || null;
   let moduleName = exam.moduleName || null;
+  let canonicalCourseId = null;
 
   if (exam.courseId) {
     if (typeof exam.courseId === 'object') {
+      canonicalCourseId = exam.courseId._id ? exam.courseId._id.toString() : null;
       if (!courseName) {
         courseName = exam.courseId.courseTitle || exam.courseId.title || null;
       }
@@ -27,18 +29,21 @@ async function resolveCourseAndModuleNames(exam) {
           moduleName = modObj.moduleName || null;
         }
       }
-    } else if (typeof exam.courseId === 'string' && (!courseName || !moduleName)) {
+    } else if (typeof exam.courseId === 'string') {
       try {
         const isObjId = mongoose.Types.ObjectId.isValid(exam.courseId);
         const CourseModel = mongoose.models.Course || require('../../models/Course');
         const foundCourse = await CourseModel.findOne({
           $or: [
             ...(isObjId ? [{ _id: exam.courseId }] : []),
-            { courseId: exam.courseId }
+            { courseId: exam.courseId },
+            { courseTitle: exam.courseId },
+            { title: exam.courseId }
           ]
         }).lean();
 
         if (foundCourse) {
+          canonicalCourseId = foundCourse._id.toString();
           if (!courseName) courseName = foundCourse.courseTitle || foundCourse.title || null;
           if (!moduleName && exam.moduleId && Array.isArray(foundCourse.modules)) {
             const modObj = foundCourse.modules.find(
@@ -55,7 +60,7 @@ async function resolveCourseAndModuleNames(exam) {
     }
   }
 
-  return { courseName, moduleName };
+  return { courseName, moduleName, canonicalCourseId };
 }
 
 /**
@@ -285,10 +290,11 @@ async function getAvailableExams(req, res) {
     const formattedExams = await Promise.all(exams.map(async (exam) => {
       const examIdStr = exam._id.toString();
       const previousResult = resultMap.get(examIdStr);
-      const { courseName, moduleName } = await resolveCourseAndModuleNames(exam);
+      const { courseName, moduleName, canonicalCourseId } = await resolveCourseAndModuleNames(exam);
 
       return {
         ...exam,
+        courseId: canonicalCourseId || exam.courseId,
         courseName,
         moduleName,
         negativeMark: exam.negativeMark !== undefined && exam.negativeMark !== null
@@ -352,7 +358,7 @@ async function startExam(req, res) {
       });
     }
 
-    const { courseName, moduleName } = await resolveCourseAndModuleNames(exam);
+    const { courseName, moduleName, canonicalCourseId } = await resolveCourseAndModuleNames(exam);
 
     // Sanitize questions to prevent cheating - completely remove `correctOption`
     const sanitizedQuestions = (exam.questions || []).map((q) => {
@@ -364,6 +370,7 @@ async function startExam(req, res) {
       success: true,
       data: {
         ...exam,
+        courseId: canonicalCourseId || exam.courseId,
         courseName,
         moduleName,
         negativeMark: exam.negativeMark !== undefined && exam.negativeMark !== null
