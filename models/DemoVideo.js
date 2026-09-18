@@ -14,15 +14,32 @@ const demoVideoSchema = new mongoose.Schema({
   videoUrl: {
     type: String,
     required: [true, 'Video URL is required'],
+    trim: true,
+  },
+  thumbnailUrl: {
+    type: String,
+    trim: true,
+    default: '',
+  },
+  thumbnail: {
+    type: String,
+    trim: true,
+    default: '',
   },
   duration: {
     type: String,
+    trim: true,
     default: '',
   },
   courseId: {
+    type: String,
+    required: [true, 'courseId is required'],
+    index: true,
+    trim: true,
+  },
+  courseRef: {
     type: mongoose.Schema.Types.ObjectId,
     ref: 'Course',
-    required: false,
     default: null,
   },
 }, {
@@ -30,3 +47,5 @@ const demoVideoSchema = new mongoose.Schema({
 });
 
 module.exports = mongoose.model('DemoVideo', demoVideoSchema);
+
+

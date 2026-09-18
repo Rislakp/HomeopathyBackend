@@ -6,16 +6,19 @@ const upload = require('../middleware/upload');
 const { handleUploadError, processUploadsToCloudinary } = upload;
 
 // ==========================================
-// DEMO VIDEOS CRUD
+// DEMO VIDEOS CRUD & COURSE-SPECIFIC ROUTES
 // ==========================================
 
-// GET /api/v1/demo-videos - Fetch all demo videos (Public)
+// GET /api/v1/demo-videos/course/:courseId - Fetch demo videos for a specific course
+router.get('/course/:courseId', demoVideoController.getCourseDemoVideos);
+
+// GET /api/v1/demo-videos - Fetch demo videos (supports ?courseId=CRS-000039 query param)
 router.get('/', demoVideoController.getDemoVideos);
 
 // GET /api/v1/demo-videos/:id - Fetch single demo video by ID (Public)
 router.get('/:id', demoVideoController.getDemoVideoById);
 
-// POST /api/v1/demo-videos - Create a new demo video (Admin Only)
+// POST /api/v1/demo-videos - Create a new demo video (Admin Only, courseId required)
 router.post('/', requireAdmin, upload.single('video'), handleUploadError, processUploadsToCloudinary, demoVideoController.createDemoVideo);
 
 // PUT /api/v1/demo-videos/:id - Update an existing demo video (Admin Only)

@@ -72,19 +72,12 @@ router.put('/:courseId/modules/:moduleId/lessons/:lessonId', requireAdmin, handl
 router.delete('/:courseId/modules/:moduleId/lessons/:lessonId', requireAdmin, courseController.deleteLesson);
 
 // ==========================================
-// LIVE RECORDINGS SUBDOCUMENT CRUD
+// COURSE DEMO VIDEOS
 // ==========================================
-const recordingController = require('../controllers/recordingController');
+const demoVideoController = require('../controllers/demoVideoController');
 
-// GET /api/courses/live-records
-router.get('/live-records', recordingController.getLiveRecords);
-
-// POST /api/courses/:courseId/modules/:moduleId/lessons/:lessonId/recordings
-router.post(
-  '/:courseId/modules/:moduleId/lessons/:lessonId/recordings',
-  requireAdmin,
-  handleUpload,
-  recordingController.uploadRecording
-);
+// GET /api/courses/:courseId/demo-videos (or /api/v1/courses/:courseId/demo-videos)
+router.get('/:courseId/demo-videos', demoVideoController.getCourseDemoVideos);
 
 module.exports = router;
+
