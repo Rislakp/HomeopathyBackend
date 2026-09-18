@@ -24,6 +24,8 @@ const generateToken = (user) => {
       userId: user._id.toString(),
       email: user.email,
       role: role,
+      courseId: user.courseId || '',
+      courseRef: user.courseRef ? user.courseRef.toString() : null,
     },
     secret,
     {
@@ -160,6 +162,13 @@ const registerStudent = async (req, res) => {
         courseQuery.push({ _id: finalCourse });
       }
       enrolledCourse = await Course.findOne({ $or: courseQuery }).select('_id courseId courseTitle');
+    }
+
+    if (!enrolledCourse) {
+      return res.status(400).json({
+        success: false,
+        message: 'Please select a valid course during registration.',
+      });
     }
 
     // -----------------------------

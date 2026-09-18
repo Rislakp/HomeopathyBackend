@@ -61,7 +61,7 @@ const studentSchema = new mongoose.Schema({
   courseRef: {
     type: mongoose.Schema.Types.ObjectId,
     ref: 'Course',
-    default: null,
+    required: [true, 'Please select a valid course during registration'],
   },
   subscription: {
     type: String,
