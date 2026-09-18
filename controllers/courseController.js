@@ -612,17 +612,27 @@ exports.updateCourse = async (req, res) => {
     }
 
     const effectiveBanner = uploadedBannerUrl || bannerVal;
-    if (effectiveBanner) {
+    
+    // Check if we are replacing an existing banner
+    const oldCourse = await Course.findOne(query);
+    if (!oldCourse) {
+      return res.status(404).json({ success: false, message: 'Course not found' });
+    }
+    const oldBanner = oldCourse.courseBanner || oldCourse.thumbnail || oldCourse.bannerUrl;
+
+    if (effectiveBanner && oldBanner && effectiveBanner !== oldBanner) {
+      updateData.thumbnail = effectiveBanner;
+      updateData.bannerUrl = effectiveBanner;
+      updateData.courseBanner = effectiveBanner;
+      // Delete old banner asynchronously to prevent blocking
+      deleteCloudinaryByUrl(oldBanner).catch(err => console.error('Failed to delete old course banner:', err));
+    } else if (effectiveBanner) {
       updateData.thumbnail = effectiveBanner;
       updateData.bannerUrl = effectiveBanner;
       updateData.courseBanner = effectiveBanner;
     }
 
     const updatedCourse = await Course.findOneAndUpdate(query, updateData, { new: true, runValidators: true });
-
-    if (!updatedCourse) {
-      return res.status(404).json({ success: false, message: 'Course not found' });
-    }
 
     const serialized = serializeCourse(updatedCourse, req);
 
@@ -649,6 +659,11 @@ exports.deleteCourse = async (req, res) => {
 
     if (!deletedCourse) {
       return res.status(404).json({ success: false, message: 'Course not found' });
+    }
+
+    const bannerUrl = deletedCourse.courseBanner || deletedCourse.thumbnail || deletedCourse.bannerUrl;
+    if (bannerUrl) {
+      deleteCloudinaryByUrl(bannerUrl).catch(err => console.error('Failed to delete course banner on delete:', err));
     }
 
     return res.status(200).json({ success: true, message: 'Course deleted successfully' });

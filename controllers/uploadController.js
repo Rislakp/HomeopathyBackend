@@ -354,7 +354,17 @@ exports.deleteFile = async (req, res) => {
     if (url) {
       await deleteCloudinaryByUrl(url);
     } else if (public_id) {
-      await cloudinary.uploader.destroy(public_id, { resource_type: 'auto' });
+      const rType = req.body.resource_type || 'image';
+      let resDelete = await cloudinary.uploader.destroy(public_id, { resource_type: rType });
+      if (resDelete.result !== 'ok' && !req.body.resource_type) {
+        // Fallback for public_id deletion without resource_type
+        for (const fallbackType of ['video', 'raw', 'image']) {
+          if (fallbackType !== rType) {
+            resDelete = await cloudinary.uploader.destroy(public_id, { resource_type: fallbackType });
+            if (resDelete.result === 'ok') break;
+          }
+        }
+      }
     }
 
     return res.status(200).json({

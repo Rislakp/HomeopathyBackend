@@ -188,9 +188,19 @@ const processUploadsToCloudinary = async (req, res, next) => {
       const isPdf = originalMimeType === 'application/pdf' || extension === '.pdf';
 
       if (isPdf) {
-        const header = file.buffer && Buffer.isBuffer(file.buffer)
-          ? file.buffer.subarray(0, 5).toString('ascii')
-          : '';
+        let header = '';
+        if (file.buffer && Buffer.isBuffer(file.buffer)) {
+          header = file.buffer.subarray(0, 5).toString('ascii');
+        } else if (file.path && fs.existsSync(file.path)) {
+          try {
+            const fd = fs.openSync(file.path, 'r');
+            const buffer = Buffer.alloc(5);
+            fs.readSync(fd, buffer, 0, 5, 0);
+            fs.closeSync(fd);
+            header = buffer.toString('ascii');
+          } catch (e) {}
+        }
+        
         console.log('========== PDF UPLOAD ==========');
         console.log(`filename: ${originalName}`);
         console.log(`mimetype: ${originalMimeType || 'unknown'}`);
@@ -198,14 +208,14 @@ const processUploadsToCloudinary = async (req, res, next) => {
         console.log(`first bytes: ${header}`);
         console.log('================================');
 
-        if (!file.buffer || !Buffer.isBuffer(file.buffer) || header !== '%PDF-') {
+        if (header !== '%PDF-') {
           return res.status(400).json({
             success: false,
             message: 'Invalid PDF file. The upload does not contain a valid PDF signature.',
           });
         }
         file.mimetype = 'application/pdf';
-        file.size = file.buffer.length;
+        if (file.buffer) file.size = file.buffer.length;
       }
 
       if (file.originalname) {
