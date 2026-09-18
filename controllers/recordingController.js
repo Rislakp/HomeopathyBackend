@@ -1,7 +1,10 @@
 const Recording = require('../models/Recording');
 const Course = require('../models/Course');
 const mongoose = require('mongoose');
-const { deleteCloudinaryByUrl, parseCloudinaryUrl } = require('../config/cloudinary');
+const {
+  deleteCloudinaryByUrl,
+  uploadBufferToCloudinary,
+} = require('../config/cloudinary');
 const { verifyStudentCourseAccess } = require('../utils/courseAccessHelper');
 
 const findCourseByIdOrCustomId = async (id) => {
@@ -475,51 +478,34 @@ exports.uploadRecordingVideo = async (req, res) => {
       return res.status(404).json({ success: false, message: 'Recording document not found' });
     }
 
-    // Extract Cloudinary URL from req.file or req.files or req.body
-    let rawVideoUrl = '';
-    if (req.file) {
-      rawVideoUrl = extractFileUrl(req.file);
-    } else if (req.files && Array.isArray(req.files) && req.files.length > 0) {
-      rawVideoUrl = extractFileUrl(req.files[0]);
-    } else if (req.body.recordedVideoUrl) {
-      rawVideoUrl = req.body.recordedVideoUrl;
-    } else if (req.body.recordingFileUrl) {
-      rawVideoUrl = req.body.recordingFileUrl;
-    } else if (req.body.videoUrl) {
-      rawVideoUrl = req.body.videoUrl;
-    }
-
-    const videoUrl = sanitizeVideoUrl(rawVideoUrl);
-
-    if (!videoUrl) {
+    const uploadedFile = req.file || (Array.isArray(req.files) ? req.files[0] : null);
+    if (!uploadedFile || !Buffer.isBuffer(uploadedFile.buffer) || uploadedFile.buffer.length === 0) {
       return res.status(400).json({
         success: false,
-        message: 'A valid public video file upload or Cloudinary secure_url is required',
+        message: 'A non-empty video file upload is required',
       });
     }
 
-    // Validate that the Cloudinary URL points to a video resource (not image/raw)
-    if (videoUrl.includes('cloudinary.com')) {
-      const parsedInfo = parseCloudinaryUrl(videoUrl);
-      if (parsedInfo && parsedInfo.resourceType && parsedInfo.resourceType !== 'video') {
-        console.warn(`[uploadRecordingVideo] Cloudinary resource_type is '${parsedInfo.resourceType}', expected 'video'. URL: ${videoUrl}`);
-        return res.status(400).json({
-          success: false,
-          message: `Uploaded file has resource_type '${parsedInfo.resourceType}' but expected 'video'. Ensure the file is uploaded with resource_type: 'video'.`,
-        });
-      }
+    const uploaded = await uploadBufferToCloudinary(
+      uploadedFile,
+      'live_records',
+      { resource_type: 'video' }
+    );
+    const secureUrl = sanitizeVideoUrl(uploaded.secure_url);
+    if (!secureUrl || !secureUrl.includes('res.cloudinary.com')) {
+      throw new Error('Cloudinary did not return a public secure URL.');
     }
 
     // Extract Cloudinary image/video dimensions & specs if present
-    const width = Number(req.file?.width || req.files?.[0]?.width || req.body.width) || 1920;
-    const height = Number(req.file?.height || req.files?.[0]?.height || req.body.height) || 1080;
-    const bytes = Number(req.file?.bytes || req.file?.size || req.files?.[0]?.bytes || req.files?.[0]?.size || req.body.bytes) || 0;
-    const format = (req.file?.format || req.files?.[0]?.format || req.body.format || 'mp4').toLowerCase();
+    const width = Number(uploaded.width || req.body.width) || 1920;
+    const height = Number(uploaded.height || req.body.height) || 1080;
+    const bytes = Number(uploaded.bytes || uploadedFile.buffer.length) || 0;
+    const format = (uploaded.format || req.body.format || 'mp4').toLowerCase();
 
     const metrics = calculateResolutionMetrics(width, height, bytes, format);
 
-    recording.recordedVideoUrl = videoUrl;
-    recording.recordingFileUrl = videoUrl;
+    recording.recordedVideoUrl = secureUrl;
+    recording.recordingFileUrl = secureUrl;
     recording.status = req.body.status || 'stopped';
     recording.width = metrics.width;
     recording.height = metrics.height;
@@ -543,12 +529,12 @@ exports.uploadRecordingVideo = async (req, res) => {
           if (moduleItem) {
             const lessonItem = moduleItem.lessons.id(recording.lessonId);
             if (lessonItem) {
-              if (!lessonItem.videoUrl) lessonItem.videoUrl = videoUrl;
-              const hasPart = lessonItem.videoParts.some((p) => p.url === videoUrl);
+              if (!lessonItem.videoUrl) lessonItem.videoUrl = secureUrl;
+              const hasPart = lessonItem.videoParts.some((p) => p.url === secureUrl);
               if (!hasPart) {
                 lessonItem.videoParts.push({
                   title: `${lessonItem.lessonTitle} - Recorded Video`,
-                  url: videoUrl,
+                  url: secureUrl,
                 });
               }
               await course.save();
@@ -564,7 +550,10 @@ exports.uploadRecordingVideo = async (req, res) => {
 
     return res.status(200).json({
       success: true,
-      message: 'Recorded video uploaded and attached successfully',
+      message: 'Recording uploaded successfully',
+      secureUrl,
+      recordedVideoUrl: secureUrl,
+      recordingFileUrl: secureUrl,
       data: formatRecordingDocument(populatedRec),
     });
   } catch (error) {

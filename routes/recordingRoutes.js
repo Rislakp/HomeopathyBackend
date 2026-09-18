@@ -4,15 +4,15 @@ const recordingController = require('../controllers/recordingController');
 const { requireAdmin, requireRole } = require('../middleware/rbac');
 const requireAuthUser = requireRole('student', 'admin', 'superadmin');
 const upload = require('../middleware/upload');
-const { handleUploadError, processUploadsToCloudinary } = upload;
+const { handleUploadError } = upload;
 
-// Helper wrapper for Cloudinary multipart video upload
+// Parse the multipart body into a memory buffer; the controller streams it to Cloudinary.
 const handleRecordingUpload = (req, res, next) => {
   upload.any()(req, res, (err) => {
     if (err) {
       return handleUploadError(err, req, res, next);
     }
-    return processUploadsToCloudinary(req, res, next);
+    return next();
   });
 };
 
