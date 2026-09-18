@@ -184,7 +184,7 @@ const registerStudent = async (req, res) => {
     }
 
     const resolvedCourseRef = enrolledCourse ? enrolledCourse._id : null;
-    const resolvedCourseId = enrolledCourse ? (enrolledCourse.courseId || enrolledCourse._id.toString()) : (finalCourse || '');
+    const resolvedCourseId = enrolledCourse ? (enrolledCourse.courseId || enrolledCourse._id.toString()) : '';
     const resolvedCourseTitle = enrolledCourse ? (enrolledCourse.courseTitle || finalCourse) : finalCourse;
 
     // -----------------------------

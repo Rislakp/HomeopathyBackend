@@ -5,6 +5,7 @@ const xlsx = require('xlsx');
 const sharp = require('sharp');
 const { GoogleGenAI } = require('@google/genai');
 const Exam = require('../models/Exam');
+const { verifyStudentCourseAccess } = require('../utils/courseAccessHelper');
 try { require('../models/Course'); } catch (e) {}
 
 /**
@@ -575,17 +576,18 @@ async function getAllGrandMocks(req, res) {
         return res.status(403).json({ success: false, message: 'Account is not active or approved.' });
       }
       
+      const courseOrFilter = [];
       if (student.courseRef) {
-        filter.$or = [
-          { courseId: student.courseRef },
-          { courseId: null },
-          { courseId: { $exists: false } }
-        ];
+        courseOrFilter.push({ courseId: student.courseRef });
+        courseOrFilter.push({ courseId: student.courseRef.toString() });
+      }
+      if (student.courseId) {
+        courseOrFilter.push({ courseId: student.courseId });
+      }
+      if (courseOrFilter.length > 0) {
+        filter.$or = courseOrFilter;
       } else {
-        filter.$or = [
-          { courseId: null },
-          { courseId: { $exists: false } }
-        ];
+        return res.status(200).json({ success: true, count: 0, data: [] });
       }
     }
 
@@ -675,7 +677,8 @@ async function getGrandMockById(req, res) {
         return res.status(403).json({ success: false, message: 'Account is not active or approved.' });
       }
       
-      if (exam.courseId && exam.courseId.toString() !== (student.courseRef ? student.courseRef.toString() : '')) {
+      const hasAccess = await verifyStudentCourseAccess(req.user, exam.courseId);
+      if (!hasAccess) {
         return res.status(403).json({ success: false, message: 'You are not authorized to access this exam.' });
       }
     }

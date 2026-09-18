@@ -2,6 +2,7 @@ const Recording = require('../models/Recording');
 const Course = require('../models/Course');
 const mongoose = require('mongoose');
 const { deleteCloudinaryByUrl, parseCloudinaryUrl } = require('../config/cloudinary');
+const { verifyStudentCourseAccess } = require('../utils/courseAccessHelper');
 
 const findCourseByIdOrCustomId = async (id) => {
   if (!id) return null;
@@ -309,8 +310,8 @@ exports.getRecordings = async (req, res) => {
       const studentCourseTitle = req.user.course;
 
       if (!studentCourseRef && !studentCourseId && !studentCourseTitle) {
-        return res.status(404).json({
-          success: false,
+        return res.status(200).json({
+          success: true,
           message: 'Registered course could not be loaded or is not assigned to student profile.',
           data: [],
           count: 0,
@@ -330,6 +331,8 @@ exports.getRecordings = async (req, res) => {
 
       if (courseOrFilter.length > 0) {
         filter.$or = courseOrFilter;
+      } else {
+        return res.status(200).json({ success: true, count: 0, data: [] });
       }
     }
 
@@ -387,7 +390,8 @@ exports.getRecordingById = async (req, res) => {
         ? recording.courseId._id.toString() 
         : (recording.courseId || '').toString();
       
-      if (recordingCourseId && recordingCourseId !== (student.courseRef ? student.courseRef.toString() : '')) {
+      const hasAccess = await verifyStudentCourseAccess(req.user, recordingCourseId);
+      if (!hasAccess) {
         return res.status(403).json({ success: false, message: 'You are not authorized to access this live class.' });
       }
     }

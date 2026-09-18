@@ -1,6 +1,7 @@
 const Course = require('../models/Course');
 const Student = require('../models/Student');
 const LessonProgress = require('../models/LessonProgress');
+const { verifyStudentCourseAccess } = require('../utils/courseAccessHelper');
 
 /**
  * Helper to find Student document from req.user
@@ -95,15 +96,8 @@ const getMyCourses = async (req, res) => {
 
       if (courseRef && require('mongoose').Types.ObjectId.isValid(courseRef)) {
         queryOr.push({ _id: courseRef });
-      }
-      if (courseId) {
+      } else if (courseId) {
         queryOr.push({ courseId: courseId });
-      }
-      if (student?.course) {
-        queryOr.push({ courseTitle: student.course });
-      }
-      if (student?.preferredCourse) {
-        queryOr.push({ courseTitle: student.preferredCourse });
       }
 
       if (queryOr.length > 0) {
@@ -224,8 +218,9 @@ const getMyCourseContent = async (req, res) => {
         });
       }
 
-      // Check specific courseRef assignment
-      if (!student.courseRef || student.courseRef.toString() !== course._id.toString()) {
+      // Check specific courseRef assignment using helper
+      const hasAccess = await verifyStudentCourseAccess(req.user, courseId);
+      if (!hasAccess) {
         return res.status(403).json({
           success: false,
           message: 'You do not have access to this specific course',
@@ -323,6 +318,14 @@ const updateLessonProgress = async (req, res) => {
       });
     }
 
+    const hasAccess = await verifyStudentCourseAccess(req.user, courseId);
+    if (!hasAccess) {
+      return res.status(403).json({
+        success: false,
+        message: 'You do not have access to this specific course',
+      });
+    }
+
     const studentIdToUse = student ? student._id : req.user.id;
 
     // Calculate percent
@@ -408,7 +411,8 @@ const getMyProgress = async (req, res) => {
       });
     }
 
-    if (!student.courseRef || student.courseRef.toString() !== course._id.toString()) {
+    const hasAccess = await verifyStudentCourseAccess(req.user, courseId);
+    if (!hasAccess) {
       return res.status(403).json({
         success: false,
         message: 'You do not have access to this specific course',

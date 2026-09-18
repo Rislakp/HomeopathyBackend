@@ -89,6 +89,8 @@ exports.getDemoVideos = async (req, res) => {
 
       if (courseOrFilter.length > 0) {
         filter.$or = courseOrFilter;
+      } else {
+        return res.status(200).json({ success: true, count: 0, data: [] });
       }
     } else if (courseId) {
       if (mongoose.Types.ObjectId.isValid(courseId)) {

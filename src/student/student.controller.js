@@ -3,6 +3,7 @@ const Exam = require('../../models/Exam');
 const TestResult = require('../common/models/testResult.model');
 const Student = require('../../models/Student');
 const User = require('../../models/User');
+const { verifyStudentCourseAccess } = require('../../utils/courseAccessHelper');
 try { require('../../models/Course'); } catch (e) {}
 
 /**
@@ -243,6 +244,11 @@ async function getAvailableExams(req, res) {
       if (courseOrFilter.length > 0) {
         filter.$or = courseOrFilter;
       }
+      
+      // Additional safety net if the filter evaluates to empty for the student
+      if (courseOrFilter.length === 0) {
+        return res.status(200).json({ success: true, count: 0, data: [] });
+      }
     }
 
     // 1. Fetch all exams matching filter (excluding questions for lightweight summary)
@@ -325,6 +331,14 @@ async function startExam(req, res) {
       return res.status(404).json({
         success: false,
         message: 'Grand Mock Exam not found.'
+      });
+    }
+
+    const hasAccess = await verifyStudentCourseAccess(req.user, exam.courseId);
+    if (!hasAccess) {
+      return res.status(403).json({
+        success: false,
+        message: 'You are not authorized to access this exam.'
       });
     }
 
@@ -467,6 +481,14 @@ async function submitExam(req, res) {
       return res.status(404).json({
         success: false,
         message: 'Exam not found.'
+      });
+    }
+
+    const hasAccess = await verifyStudentCourseAccess(req.user, exam.courseId);
+    if (!hasAccess) {
+      return res.status(403).json({
+        success: false,
+        message: 'You are not authorized to access this exam.'
       });
     }
 
@@ -647,6 +669,18 @@ async function getStudentResults(req, res) {
     if (matchingExamIds !== null) {
       results = results.filter(r => r.examId && matchingExamIds.includes(r.examId._id ? r.examId._id.toString() : r.examId.toString()));
     }
+    
+    // Also, strictly filter out results for exams belonging to courses the student doesn't have access to
+    const validResults = [];
+    for (const r of results) {
+      if (!r.examId) continue;
+      const courseId = r.examId.courseId;
+      const hasAccess = await verifyStudentCourseAccess(req.user, courseId);
+      if (hasAccess) {
+        validResults.push(r);
+      }
+    }
+    results = validResults;
 
     const formattedResults = await Promise.all(results.map(async (result) => {
       const exam = result.examId;
