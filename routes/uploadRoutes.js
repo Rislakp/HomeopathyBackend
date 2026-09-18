@@ -19,6 +19,7 @@ const handleFileUpload = (req, res, next) => {
 router.get('/', uploadController.getMediaAssets);
 router.get('/media', uploadController.getMediaAssets);
 router.get('/list', uploadController.getMediaAssets);
+router.get('/download', uploadController.downloadFile);
 
 // POST /api/upload - Multiple or single file upload to Cloudinary
 router.post('/', handleFileUpload, uploadController.uploadFiles);

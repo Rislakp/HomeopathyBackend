@@ -21,7 +21,7 @@ const processAttachments = (filesArray) => {
     const fileMimeType = (f.mimetype || (f.originalname ? mimeTypes.lookup(f.originalname) : '') || '').toLowerCase();
     const ext = path.extname(f.originalname || f.filename || fileUrl || '').toLowerCase().replace('.', '');
     const isVideo = fileMimeType.startsWith('video/') || ALLOWED_VIDEO_FORMATS.includes(ext) || fileUrl.includes('/video/upload/');
-    const isPdf = fileMimeType === 'application/pdf' || ext === 'pdf' || fileUrl.includes('/raw/upload/') || ALLOWED_DOC_FORMATS.includes(ext);
+    const isPdf = fileMimeType === 'application/pdf' || ext === 'pdf' || /\.pdf(?:[?#]|$)/i.test(fileUrl);
     const explicitResourceType = f.resource_type || (isVideo ? 'video' : (isPdf ? 'raw' : 'auto'));
 
     return {
@@ -30,8 +30,8 @@ const processAttachments = (filesArray) => {
       public_id: f.public_id || (fileUrl.includes('cloudinary.com') ? (getPublicIdFromUrl(fileUrl) || '') : '') || '',
       secure_url: f.secure_url || fileUrl,
       resource_type: explicitResourceType,
-      mimetype: fileMimeType,
-      size: f.size || f.bytes || 0,
+      mimetype: isPdf ? 'application/pdf' : fileMimeType,
+      size: Number(f.bytes || f.size || 0),
     };
   });
 };

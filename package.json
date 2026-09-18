@@ -9,7 +9,8 @@
     "seed": "node scripts/seed.js",
     "seed:faculty": "node scripts/seedFaculty.js",
     "admin:reset-password": "node scripts/reset_admin_password.js",
-    "test:cloudinary": "node test-cloudinary.js"
+    "test:cloudinary": "node test-cloudinary.js",
+    "diagnose:pdf": "node scripts/diagnose_pdf_assets.js"
   },
   "keywords": [
     "express",

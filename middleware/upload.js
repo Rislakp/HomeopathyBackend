@@ -181,6 +181,33 @@ const processUploadsToCloudinary = async (req, res, next) => {
     for (const file of files) {
       if (!file) continue;
 
+      const originalName = file.originalname || 'unknown';
+      const originalMimeType = (file.mimetype || '').toLowerCase();
+      const originalSize = Number(file.size || (file.buffer && file.buffer.length) || 0);
+      const extension = path.extname(originalName).toLowerCase();
+      const isPdf = originalMimeType === 'application/pdf' || extension === '.pdf';
+
+      if (isPdf) {
+        const header = file.buffer && Buffer.isBuffer(file.buffer)
+          ? file.buffer.subarray(0, 5).toString('ascii')
+          : '';
+        console.log('========== PDF UPLOAD ==========');
+        console.log(`filename: ${originalName}`);
+        console.log(`mimetype: ${originalMimeType || 'unknown'}`);
+        console.log(`size: ${originalSize}`);
+        console.log(`first bytes: ${header}`);
+        console.log('================================');
+
+        if (!file.buffer || !Buffer.isBuffer(file.buffer) || header !== '%PDF-') {
+          return res.status(400).json({
+            success: false,
+            message: 'Invalid PDF file. The upload does not contain a valid PDF signature.',
+          });
+        }
+        file.mimetype = 'application/pdf';
+        file.size = file.buffer.length;
+      }
+
       if (file.originalname) {
         file.originalname = sanitizeFilename(file.originalname);
       }
@@ -253,6 +280,10 @@ const processUploadsToCloudinary = async (req, res, next) => {
             ...(isVideo ? { chunk_size: 6000000 } : {}),
           });
 
+          if (!uploaded || !uploaded.secure_url || !uploaded.public_id || uploaded.resource_type !== resource_type || !(Number(uploaded.bytes) > 0)) {
+            throw new Error('Cloudinary returned an incomplete document upload response.');
+          }
+
           console.log(`[CloudinaryUpload] Cloudinary public_id: ${uploaded.public_id}`);
           console.log(`[CloudinaryUpload] Cloudinary secure_url: ${uploaded.secure_url}`);
           console.log(`[CloudinaryUpload] Cloudinary resource_type: ${uploaded.resource_type}`);
@@ -266,6 +297,10 @@ const processUploadsToCloudinary = async (req, res, next) => {
           file.height = uploaded.height || file.height;
           file.bytes = uploaded.bytes || file.size;
           file.format = uploaded.format || fileExt || ext;
+          if (resource_type === 'raw' && (file.mimetype === 'application/pdf' || fileExt === 'pdf')) {
+            file.mimetype = 'application/pdf';
+            file.size = Number(uploaded.bytes) || file.buffer.length;
+          }
           continue;
         } catch (uploadErr) {
           if (isVideo) {

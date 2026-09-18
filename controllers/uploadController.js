@@ -1,4 +1,5 @@
 const { deleteCloudinaryByUrl, cloudinary } = require('../config/cloudinary');
+const https = require('https');
 
 const getBaseUrl = (req) => {
   if (process.env.BASE_URL) {
@@ -74,7 +75,7 @@ exports.uploadFiles = async (req, res) => {
       if (file.mimetype) {
         if (file.mimetype.startsWith('video/')) resourceType = 'video';
         else if (file.mimetype.startsWith('audio/')) resourceType = 'audio';
-        else if (file.mimetype === 'application/pdf') resourceType = 'pdf';
+        else if (file.mimetype === 'application/pdf') resourceType = 'raw';
         else if (!file.mimetype.startsWith('image/')) resourceType = 'raw';
       }
 
@@ -86,9 +87,10 @@ exports.uploadFiles = async (req, res) => {
         public_id: publicId,
         secure_url: secureUrl,
         url: secureUrl,
+        title: originalName,
         original_name: originalName,
-        mimetype: file.mimetype || 'application/octet-stream',
-        size: file.size || 0,
+        mimetype: file.mimetype === 'application/pdf' ? 'application/pdf' : (file.mimetype || 'application/octet-stream'),
+        size: Number(file.bytes || file.size || 0),
         resource_type: resourceType,
       };
     });
@@ -252,12 +254,17 @@ exports.getMediaAssets = async (req, res) => {
       else if (bytes >= 1024) sizeFormatted = `${(bytes / 1024).toFixed(1)} KB`;
 
       return {
+        title: item.public_id ? item.public_id.split('/').pop() : 'Resource',
         public_id: item.public_id,
         secure_url: item.secure_url,
         url: item.secure_url || item.url,
         format: item.format || (item.public_id.includes('.') ? item.public_id.split('.').pop() : 'unknown'),
         resource_type: item.resource_type || 'image',
+        mimetype: item.resource_type === 'raw' && (item.format === 'pdf' || /\.pdf$/i.test(item.public_id || ''))
+          ? 'application/pdf'
+          : (item.resource_type === 'image' ? `image/${item.format || 'jpeg'}` : ''),
         bytes,
+        size: bytes,
         size_formatted: sizeFormatted,
         width: item.width || null,
         height: item.height || null,
@@ -284,6 +291,48 @@ exports.getMediaAssets = async (req, res) => {
       error: error.message,
     });
   }
+};
+
+/**
+ * Stream a Cloudinary document with download headers without transforming bytes.
+ * The preview URL remains the original Cloudinary secure_url.
+ */
+exports.downloadFile = (req, res) => {
+  const sourceUrl = String(req.query.url || '').trim();
+  if (!sourceUrl) {
+    return res.status(400).json({ success: false, message: 'A Cloudinary document URL is required.' });
+  }
+
+  let parsed;
+  try {
+    parsed = new URL(sourceUrl);
+  } catch (_) {
+    return res.status(400).json({ success: false, message: 'Invalid document URL.' });
+  }
+
+  if (parsed.protocol !== 'https:' || !parsed.hostname.endsWith('.cloudinary.com')) {
+    return res.status(400).json({ success: false, message: 'Only Cloudinary document URLs are supported.' });
+  }
+
+  const requestedName = String(req.query.filename || '').trim();
+  const urlName = decodeURIComponent(parsed.pathname.split('/').pop() || 'document.pdf');
+  const filename = (requestedName || urlName).replace(/[^a-zA-Z0-9._-]/g, '_');
+  res.setHeader('Content-Type', /\.pdf$/i.test(filename) ? 'application/pdf' : 'application/octet-stream');
+  res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+
+  const request = https.get(parsed, (upstream) => {
+    if (upstream.statusCode < 200 || upstream.statusCode >= 300) {
+      upstream.resume();
+      if (!res.headersSent) res.status(upstream.statusCode || 502);
+      return res.end();
+    }
+    if (upstream.headers['content-length']) res.setHeader('Content-Length', upstream.headers['content-length']);
+    upstream.pipe(res);
+  });
+  request.on('error', (error) => {
+    if (!res.headersSent) return res.status(502).json({ success: false, message: 'Failed to download document.', error: error.message });
+    res.destroy(error);
+  });
 };
 
 /**

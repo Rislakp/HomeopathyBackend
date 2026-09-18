@@ -123,6 +123,10 @@ const uploadBufferToCloudinary = (file, folder = 'homeopathy-media', options = {
           reject(error);
           return;
         }
+        if (!result || !result.secure_url || !result.public_id || !result.resource_type || !(Number(result.bytes) > 0)) {
+          reject(new Error('Cloudinary returned an incomplete upload response.'));
+          return;
+        }
         if (isVideo) {
           console.log('[VIDEO UPLOAD] Cloudinary upload successful');
           console.log(`[VIDEO UPLOAD] Resource type: ${result.resource_type}`);
