@@ -144,7 +144,34 @@ async function getAvailableExams(req, res) {
       });
     }
 
-    const filter = {};
+        // Fetch student to get courseId
+    const isObjectId = mongoose.Types.ObjectId.isValid(studentId);
+    let studentDoc = null;
+    if (isObjectId) {
+      studentDoc = await Student.findOne({
+        $or: [
+          { _id: new mongoose.Types.ObjectId(studentId) },
+          { userId: new mongoose.Types.ObjectId(studentId) }
+        ]
+      });
+    }
+    if (!studentDoc) {
+      studentDoc = await User.findById(studentId);
+    }
+
+    if (!studentDoc) {
+      return res.status(404).json({ success: false, message: 'Student profile not found.' });
+    }
+
+    // Determine course ID
+    const studentCourseId = studentDoc.courseId || studentDoc.course || studentDoc.preferredCourse || studentDoc.enrolledCourseId;
+    
+    if (!studentCourseId) {
+      // If no course is assigned, do not show any exams
+      return res.status(200).json({ success: true, count: 0, data: [] });
+    }
+
+    const filter = { courseId: studentCourseId };
     const reqQuery = req ? (req.query || {}) : {};
     const queryType = reqQuery.testType || reqQuery.type;
     if (queryType && queryType.trim()) {
