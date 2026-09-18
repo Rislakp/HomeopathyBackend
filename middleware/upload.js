@@ -207,24 +207,26 @@ const processUploadsToCloudinary = async (req, res, next) => {
         const fieldname = (file.fieldname || '').toLowerCase();
         const ext = path.extname(file.originalname || '').toLowerCase().replace('.', '');
 
-        let folder = 'homeopathy-media';
+        let folder = (req.body && req.body.folder && String(req.body.folder).trim())
+          ? String(req.body.folder).trim()
+          : 'homeopathy-media';
         let resource_type = 'auto';
 
         if (mimetype.startsWith('video/') || fieldname.includes('video') || fieldname.includes('recording') || ALLOWED_VIDEO_FORMATS.includes(ext)) {
-          folder = 'homeopathy-media/videos';
+          if (!req.body || !req.body.folder) folder = 'homeopathy-media/videos';
           resource_type = 'video';
           console.log(`[processUploadsToCloudinary] Forced resource_type='video' for file: ${file.originalname} (mime=${mimetype}, ext=${ext}, field=${fieldname})`);
         } else if (mimetype === 'application/pdf' || ext === 'pdf') {
-          folder = 'homeopathy-media/pdf-notes';
+          if (!req.body || !req.body.folder) folder = 'homeopathy-media/pdf-notes';
           resource_type = 'raw';
         } else if (ALLOWED_DOC_FORMATS.includes(ext)) {
-          folder = 'homeopathy-media/attachments';
+          if (!req.body || !req.body.folder) folder = 'homeopathy-media/attachments';
           resource_type = 'raw';
         } else if (mimetype.startsWith('image/') || ALLOWED_IMAGE_FORMATS.includes(ext)) {
-          folder = 'homeopathy-media/images';
+          if (!req.body || !req.body.folder) folder = 'grand_mock_questions';
           resource_type = 'image';
         } else {
-          folder = 'homeopathy-media/attachments';
+          if (!req.body || !req.body.folder) folder = 'homeopathy-media/attachments';
           resource_type = 'raw';
         }
 
@@ -232,15 +234,14 @@ const processUploadsToCloudinary = async (req, res, next) => {
         const uniqueSuffix = `${Date.now()}-${Math.round(Math.random() * 1e6)}`;
         const isVideo = resource_type === 'video';
 
-        // Cloudinary treats public_id differently based on resource_type:
-        // For 'image' and 'video', Cloudinary manages extensions separately via format transformations.
-        // If an extension or dot is included in public_id for a video, Cloudinary converts the dot to
-        // an underscore (e.g. 'video1_mp4'). Do NOT include extension or dot in public_id for video/image.
-        // For 'raw' files (PDFs, docs), Cloudinary requires the extension in public_id so the delivery URL
-        // includes .pdf, preventing 404 "Resource not found" errors during downloads.
         const publicId = (resource_type === 'raw' && fileExt)
           ? `${cleanBaseName}-${uniqueSuffix}.${fileExt}`
           : `${cleanBaseName}-${uniqueSuffix}`;
+
+        console.log(`[CloudinaryUpload] filename: ${file.originalname || 'unknown'}`);
+        console.log(`[CloudinaryUpload] folder: ${folder}`);
+        console.log(`[CloudinaryUpload] mimetype: ${mimetype || 'unknown'}`);
+        console.log(`[CloudinaryUpload] bytes: ${file.buffer ? file.buffer.length : file.size || 0}`);
 
         try {
           const uploaded = await uploadBufferToCloudinary(file, folder, {
@@ -251,6 +252,10 @@ const processUploadsToCloudinary = async (req, res, next) => {
             timeout: isVideo ? 600000 : 120000,
             ...(isVideo ? { chunk_size: 6000000 } : {}),
           });
+
+          console.log(`[CloudinaryUpload] Cloudinary public_id: ${uploaded.public_id}`);
+          console.log(`[CloudinaryUpload] Cloudinary secure_url: ${uploaded.secure_url}`);
+          console.log(`[CloudinaryUpload] Cloudinary resource_type: ${uploaded.resource_type}`);
 
           file.secure_url = uploaded.secure_url;
           file.url = uploaded.secure_url;

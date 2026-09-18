@@ -1,4 +1,4 @@
-const { normalizeTestType } = require('../controllers/exam.controller');
+const { normalizeTestType } = require('../controllers/examController');
 
 function testNormalization() {
   console.log('Testing normalizeTestType function across variations...');

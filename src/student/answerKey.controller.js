@@ -2,7 +2,7 @@ const path = require('path');
 const fs = require('fs');
 const mongoose = require('mongoose');
 const PDFDocument = require('pdfkit');
-const Exam = require('../common/models/exam.model');
+const Exam = require('../../models/Exam');
 const User = require('../../models/User');
 const Student = require('../../models/Student');
 

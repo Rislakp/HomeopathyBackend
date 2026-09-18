@@ -1,75 +1,74 @@
 require('dotenv').config();
 const mongoose = require('mongoose');
 const assert = require('assert');
-const Exam = require('../models/exam.model');
+const Exam = require('../models/Exam');
 const Course = require('../models/Course');
 const TestResult = require('../src/common/models/testResult.model');
 
-const { getGrandMockById } = require('../controllers/exam.controller');
+const { getGrandMockById } = require('../controllers/examController');
 const { startExam, getStudentResults } = require('../src/student/student.controller');
 
 async function runTests() {
-  console.log('🧪 Starting Course/Module Exam Persistence & ImageUrl Test Suite...\n');
+  console.log('🧪 Starting Course/Module Exam Persistence & Custom String ID Test Suite...\n');
 
   const mongoUri = process.env.MONGODB_URI || process.env.MONGO_URI || 'mongodb://localhost:27017/homeopathy';
   await mongoose.connect(mongoUri);
   console.log('✅ MongoDB Connected');
 
+  const testCourseIdString = `CRS-TEST-${Date.now()}`;
   let testCourse = null;
-  let createdExamId = null;
+  let examObjectId = null;
+  let examStringId = null;
   let testResultDoc = null;
 
   try {
-    // 1. Create a Test Course with a Module
+    // 1. Create a Test Course with a custom courseId ("CRS-TEST-xxxx")
     testCourse = await Course.create({
-      courseTitle: 'Advanced Organon & Philosophy',
+      courseId: testCourseIdString,
+      courseTitle: 'Homeopathic Pharmacy & Pharmacopoeia',
       instructor: 'Dr. Hahnemann',
-      price: 4999,
+      price: 2999,
       modules: [
         {
-          moduleName: 'Module 1: Miasms and Chronic Diseases',
+          moduleName: 'Module 1: Preparation of Potencies',
           lessons: []
         }
       ]
     });
 
     const testModule = testCourse.modules[0];
-    console.log(`✅ Test Course Created (_id: ${testCourse._id}, module _id: ${testModule._id})`);
+    console.log(`✅ Test Course Created (_id: ${testCourse._id}, courseId: "${testCourse.courseId}")`);
 
-    // 2. Create Exam with courseId, moduleId, and question containing imageUrl
+    // 2. Test saving Exam with custom string courseId ("CRS-TEST-xxxx") - MUST NOT throw BSON CastError!
     const mockQuestion = {
-      questionText: 'Identify the miasmatic state represented in the skin lesion diagram.',
-      imageUrl: 'https://example.com/assets/miasm_skin_diagram.png',
-      passage: 'A 35-year-old female presents with dry, scaly eruptions accompanied by intense itching at night.',
+      questionText: 'What scale is used for decimal potencies?',
+      imageUrl: 'https://example.com/assets/decimal_scale.png',
       options: {
-        A: 'Psora',
-        B: 'Sycosis',
-        C: 'Syphilis',
-        D: 'Tubercular'
+        A: 'Centesimal (C)',
+        B: 'Decimal (X or D)',
+        C: '50 Millesimal (LM)',
+        D: 'Korsakovian (K)'
       },
-      correctOption: 'A'
+      correctOption: 'B'
     };
 
-    const newExam = await Exam.create({
-      title: 'Miasmatics Deep Dive Unit Test',
+    const examWithCustomStringId = await Exam.create({
+      title: 'Pharmacopoeia Unit Test (String Course ID)',
       testType: 'course_test',
-      courseId: testCourse._id,
-      moduleId: testModule._id,
-      courseName: testCourse.courseTitle,
-      moduleName: testModule.moduleName,
+      courseId: testCourseIdString, // Custom String ID matching frontend dropdown
+      moduleId: testModule._id.toString(),
       marksPerQuestion: 2,
-      negativeMark: 0.5,
-      durationMinutes: 45,
+      negativeMark: 0,
+      durationMinutes: 30,
       totalQuestions: 1,
       questions: [mockQuestion]
     });
 
-    createdExamId = newExam._id;
-    console.log(`✅ Exam Created (_id: ${createdExamId})`);
-    assert.strictEqual(newExam.questions[0].imageUrl, 'https://example.com/assets/miasm_skin_diagram.png');
-    console.log('   -> Verified question imageUrl persisted in DB schema correctly.');
+    examStringId = examWithCustomStringId._id;
+    console.log(`✅ Exam saved with custom string courseId ("${testCourseIdString}") without BSON CastError! (_id: ${examStringId})`);
+    assert.strictEqual(examWithCustomStringId.courseId, testCourseIdString);
 
-    // 3. Test getGrandMockById controller output (Admin / General endpoint)
+    // 3. Test getGrandMockById controller output for exam with String courseId
     const mockRes1 = {
       status(code) {
         this.statusCode = code;
@@ -81,16 +80,32 @@ async function runTests() {
       }
     };
 
-    await getGrandMockById({ params: { id: createdExamId.toString() } }, mockRes1);
+    await getGrandMockById({ params: { id: examStringId.toString() } }, mockRes1);
     assert.strictEqual(mockRes1.statusCode, 200);
     assert.strictEqual(mockRes1.data.success, true);
     const examData1 = mockRes1.data.data;
-    assert.strictEqual(examData1.courseName, 'Advanced Organon & Philosophy');
-    assert.strictEqual(examData1.moduleName, 'Module 1: Miasms and Chronic Diseases');
-    assert.strictEqual(examData1.questions[0].imageUrl, 'https://example.com/assets/miasm_skin_diagram.png');
-    console.log('✅ getGrandMockById returned courseName, moduleName, and question imageUrl successfully.');
+    assert.strictEqual(examData1.courseId, testCourseIdString);
+    assert.strictEqual(examData1.courseName, 'Homeopathic Pharmacy & Pharmacopoeia');
+    assert.strictEqual(examData1.moduleName, 'Module 1: Preparation of Potencies');
+    console.log(`✅ getGrandMockById resolved courseName and moduleName for custom string courseId ("${testCourseIdString}").`);
 
-    // 4. Test startExam controller output (Student endpoint - anti-cheat sanitized)
+    // 4. Test saving Exam with MongoDB ObjectId string courseId
+    const examWithObjId = await Exam.create({
+      title: 'Pharmacopoeia Unit Test (ObjectId Course ID)',
+      testType: 'course_test',
+      courseId: testCourse._id.toString(),
+      moduleId: testModule._id.toString(),
+      marksPerQuestion: 2,
+      negativeMark: 0,
+      durationMinutes: 30,
+      totalQuestions: 1,
+      questions: [mockQuestion]
+    });
+
+    examObjectId = examWithObjId._id;
+    console.log(`✅ Exam saved with MongoDB ObjectId string courseId (_id: ${examObjectId})`);
+
+    // 5. Test startExam controller output (Student endpoint - anti-cheat sanitized)
     const mockRes2 = {
       status(code) {
         this.statusCode = code;
@@ -102,21 +117,21 @@ async function runTests() {
       }
     };
 
-    await startExam({ params: { id: createdExamId.toString() } }, mockRes2);
+    await startExam({ params: { id: examStringId.toString() } }, mockRes2);
     assert.strictEqual(mockRes2.statusCode, 200);
     assert.strictEqual(mockRes2.data.success, true);
     const examData2 = mockRes2.data.data;
-    assert.strictEqual(examData2.courseName, 'Advanced Organon & Philosophy');
-    assert.strictEqual(examData2.moduleName, 'Module 1: Miasms and Chronic Diseases');
-    assert.strictEqual(examData2.questions[0].imageUrl, 'https://example.com/assets/miasm_skin_diagram.png');
+    assert.strictEqual(examData2.courseName, 'Homeopathic Pharmacy & Pharmacopoeia');
+    assert.strictEqual(examData2.moduleName, 'Module 1: Preparation of Potencies');
+    assert.strictEqual(examData2.questions[0].imageUrl, 'https://example.com/assets/decimal_scale.png');
     assert.strictEqual(examData2.questions[0].correctOption, undefined, 'correctOption must be anti-cheat sanitized');
-    console.log('✅ startExam returned populated courseName, moduleName, and question imageUrl (without correctOption).');
+    console.log('✅ startExam returned populated courseName & moduleName for custom string courseId.');
 
-    // 5. Create TestResult and test getStudentResults controller output (View Test History)
+    // 6. Test getStudentResults controller output (View Test History)
     const dummyStudentId = new mongoose.Types.ObjectId();
     testResultDoc = await TestResult.create({
       studentId: dummyStudentId,
-      examId: createdExamId,
+      examId: examStringId,
       score: 2,
       totalMarks: 2,
       totalQuestions: 1,
@@ -126,9 +141,9 @@ async function runTests() {
       accuracyPercentage: 100,
       answers: [
         {
-          questionId: newExam.questions[0]._id,
-          selectedOption: 'A',
-          correctOption: 'A',
+          questionId: examWithCustomStringId.questions[0]._id,
+          selectedOption: 'B',
+          correctOption: 'B',
           isCorrect: true
         }
       ]
@@ -150,18 +165,19 @@ async function runTests() {
     assert.strictEqual(mockRes3.data.success, true);
     const historyItem = mockRes3.data.data[0];
     assert(historyItem.examId, 'Result must contain populated examId object');
-    assert.strictEqual(historyItem.examId.courseName, 'Advanced Organon & Philosophy');
-    assert.strictEqual(historyItem.examId.moduleName, 'Module 1: Miasms and Chronic Diseases');
+    assert.strictEqual(historyItem.examId.courseName, 'Homeopathic Pharmacy & Pharmacopoeia');
+    assert.strictEqual(historyItem.examId.moduleName, 'Module 1: Preparation of Potencies');
     console.log('✅ getStudentResults returned courseName and moduleName on populated examId in test history.');
 
-    console.log('\n🎉 ALL PERSISTENCE AND POPULATION TESTS PASSED SUCCESSFULLY!\n');
+    console.log('\n🎉 ALL CUSTOM STRING COURSE ID & PERSISTENCE TESTS PASSED SUCCESSFULLY!\n');
   } catch (err) {
     console.error('❌ Test failed with error:', err);
     process.exitCode = 1;
   } finally {
     // Clean up created test documents
     console.log('🧹 Cleaning up test documents...');
-    if (createdExamId) await Exam.findByIdAndDelete(createdExamId);
+    if (examStringId) await Exam.findByIdAndDelete(examStringId);
+    if (examObjectId) await Exam.findByIdAndDelete(examObjectId);
     if (testCourse) await Course.findByIdAndDelete(testCourse._id);
     if (testResultDoc) await TestResult.findByIdAndDelete(testResultDoc._id);
     console.log('✅ Test documents cleaned up.');

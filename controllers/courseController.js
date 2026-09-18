@@ -173,6 +173,67 @@ const deduplicateResourceArray = (arr) => {
   });
 };
 
+/**
+ * Helper to compute identity key for a resource.
+ * Identity is based on public_id or secure_url/url (never filename alone).
+ */
+const getResourceKey = (item) => {
+  if (!item) return '';
+  const pubId = (item.public_id || item.publicId || '').trim();
+  if (pubId) return `pub:${pubId}`;
+  const url = (item.secure_url || item.url || '').trim();
+  if (url) return `url:${url.toLowerCase()}`;
+  return '';
+};
+
+/**
+ * Keeps resource categories independent. Explicit request categories can remove
+ * a resource from another category, but file metadata never chooses pdfNotes.
+ */
+const sanitizeAndIsolateResourceArrays = ({
+  videoParts = [],
+  pdfNotes = [],
+  assignments = [],
+  attachments = [],
+  explicitCategoryMap = new Map(),
+}) => {
+  let cleanVideoParts = deduplicateResourceArray(videoParts);
+  let cleanPdfNotes = deduplicateResourceArray(pdfNotes);
+  let cleanAssignments = deduplicateResourceArray(assignments);
+  let cleanAttachments = deduplicateResourceArray(attachments);
+
+  const allCategories = [
+    { name: 'assignments', items: cleanAssignments },
+    { name: 'attachments', items: cleanAttachments },
+    { name: 'videoParts', items: cleanVideoParts },
+    { name: 'pdfNotes', items: cleanPdfNotes },
+  ];
+
+  // Only an explicit request source may move a resource between categories.
+  // GET serialization must never infer a category from a URL, extension, or MIME type.
+  if (explicitCategoryMap && explicitCategoryMap.size > 0) {
+    for (const category of allCategories) {
+      const filteredItems = category.items.filter((item) => {
+        const key = getResourceKey(item);
+        const explicitCategory = key ? explicitCategoryMap.get(key) : undefined;
+        return !explicitCategory || explicitCategory === category.name;
+      });
+
+      if (category.name === 'videoParts') cleanVideoParts = filteredItems;
+      if (category.name === 'pdfNotes') cleanPdfNotes = filteredItems;
+      if (category.name === 'assignments') cleanAssignments = filteredItems;
+      if (category.name === 'attachments') cleanAttachments = filteredItems;
+    }
+  }
+
+  return {
+    videoParts: cleanVideoParts,
+    pdfNotes: cleanPdfNotes,
+    assignments: cleanAssignments,
+    attachments: cleanAttachments,
+  };
+};
+
 const parseFileItems = (items) => {
   if (!items) return [];
 
@@ -286,6 +347,18 @@ const serializeLesson = (lesson, req) => {
     });
   };
 
+  const rawVideoParts = sanitizeResource(lesson.videoParts);
+  const rawPdfNotes = sanitizeResource(lesson.pdfNotes);
+  const rawAssignments = sanitizeResource(lesson.assignments);
+  const rawAttachments = sanitizeResource(lesson.attachments);
+
+  const isolated = sanitizeAndIsolateResourceArrays({
+    videoParts: rawVideoParts,
+    pdfNotes: rawPdfNotes,
+    assignments: rawAssignments,
+    attachments: rawAttachments,
+  });
+
   return {
     _id: lesson._id,
     lessonTitle: lesson.lessonTitle || '',
@@ -293,10 +366,10 @@ const serializeLesson = (lesson, req) => {
     durationOrPages: lesson.durationOrPages || '',
     description: lesson.description || '',
     videoUrl: toAbsoluteUrl(lesson.videoUrl || '', req),
-    videoParts:  sanitizeResource(lesson.videoParts),
-    pdfNotes:    sanitizeResource(lesson.pdfNotes),
-    assignments: sanitizeResource(lesson.assignments),
-    attachments: sanitizeResource(lesson.attachments),
+    videoParts: isolated.videoParts,
+    pdfNotes: isolated.pdfNotes,
+    assignments: isolated.assignments,
+    attachments: isolated.attachments,
     meetingUrl: lesson.meetingUrl || '',
     status: lesson.status || 'Published',
     createdAt: lesson.createdAt,
@@ -754,29 +827,63 @@ exports.addLesson = async (req, res) => {
     let finalAssignments = parseFileItems(assignments !== undefined ? assignments : assignmentFiles);
     let finalAttachments = parseFileItems(attachments);
 
+    const explicitCategoryMap = new Map();
+    const registerExplicitCategory = (item, catName) => {
+      if (!item || !catName) return;
+      const key = getResourceKey(item);
+      if (key) explicitCategoryMap.set(key, catName);
+    };
+
+    if (pdfNotes !== undefined || pdfFiles !== undefined) {
+      finalPdfNotes.forEach((item) => registerExplicitCategory(item, 'pdfNotes'));
+    }
+    if (assignments !== undefined || assignmentFiles !== undefined) {
+      finalAssignments.forEach((item) => registerExplicitCategory(item, 'assignments'));
+    }
+    if (attachments !== undefined) {
+      finalAttachments.forEach((item) => registerExplicitCategory(item, 'attachments'));
+    }
+    if (videoParts !== undefined) {
+      finalVideoParts.forEach((item) => registerExplicitCategory(item, 'videoParts'));
+    }
+
     // Map legacy single link/file fields if provided
     const singleLink = (uploadFileOrLink || fileOrLink || lessonFile || '').trim();
     if (singleLink) {
+      const explicitUploadType = (req.body.uploadType || req.body.upload_type || req.body.category || req.body.resourceCategory || '').toString().toLowerCase().trim();
       const lowerType = actualLessonType.toLowerCase();
-      if (lowerType.includes('video') || lowerType === 'recorded video') {
+
+      if (explicitUploadType === 'pdf_note' || explicitUploadType === 'pdfnotes' || explicitUploadType === 'pdf_notes' || explicitUploadType === 'pdf') {
+        const item = { title: actualLessonTitle || 'PDF Notes', url: singleLink, secure_url: singleLink, resource_type: 'raw' };
+        if (!finalPdfNotes.some((p) => p.url === singleLink)) finalPdfNotes.push(item);
+        registerExplicitCategory(item, 'pdfNotes');
+      } else if (explicitUploadType === 'assignment' || explicitUploadType === 'assignments') {
+        const item = { title: actualLessonTitle || 'Assignment', url: singleLink, secure_url: singleLink, resource_type: 'raw' };
+        if (!finalAssignments.some((p) => p.url === singleLink)) finalAssignments.push(item);
+        registerExplicitCategory(item, 'assignments');
+      } else if (explicitUploadType === 'attachment' || explicitUploadType === 'attachments') {
+        const item = { title: actualLessonTitle || 'Attachment', url: singleLink, secure_url: singleLink, resource_type: 'raw' };
+        if (!finalAttachments.some((p) => p.url === singleLink)) finalAttachments.push(item);
+        registerExplicitCategory(item, 'attachments');
+      } else if (lowerType.includes('video') || lowerType === 'recorded video') {
         if (!finalVideoUrl) finalVideoUrl = singleLink;
-        if (!finalVideoParts.some((p) => p.url === singleLink)) {
-          finalVideoParts.push({ title: actualLessonTitle || 'Video Part 1', url: singleLink, secure_url: singleLink, resource_type: 'video' });
-        }
+        const item = { title: actualLessonTitle || 'Video Part 1', url: singleLink, secure_url: singleLink, resource_type: 'video' };
+        if (!finalVideoParts.some((p) => p.url === singleLink)) finalVideoParts.push(item);
+        registerExplicitCategory(item, 'videoParts');
       } else if (lowerType.includes('assign')) {
-        if (!finalAssignments.some((p) => p.url === singleLink)) {
-          finalAssignments.push({ title: actualLessonTitle || 'Assignment', url: singleLink, secure_url: singleLink, resource_type: 'raw' });
-        }
+        const item = { title: actualLessonTitle || 'Assignment', url: singleLink, secure_url: singleLink, resource_type: 'raw' };
+        if (!finalAssignments.some((p) => p.url === singleLink)) finalAssignments.push(item);
+        registerExplicitCategory(item, 'assignments');
       } else if (lowerType.includes('pdf')) {
-        if (!finalPdfNotes.some((p) => p.url === singleLink)) {
-          finalPdfNotes.push({ title: actualLessonTitle || 'PDF Notes', url: singleLink, secure_url: singleLink, resource_type: 'raw' });
-        }
+        const item = { title: actualLessonTitle || 'PDF Notes', url: singleLink, secure_url: singleLink, resource_type: 'raw' };
+        if (!finalPdfNotes.some((p) => p.url === singleLink)) finalPdfNotes.push(item);
+        registerExplicitCategory(item, 'pdfNotes');
       } else if (lowerType.includes('live') || lowerType === 'link') {
         if (!actualMeetingUrl) actualMeetingUrl = singleLink;
       } else {
-        if (!finalAttachments.some((p) => p.url === singleLink)) {
-          finalAttachments.push({ title: actualLessonTitle || 'Attachment', url: singleLink, secure_url: singleLink, resource_type: 'raw' });
-        }
+        const item = { title: actualLessonTitle || 'Attachment', url: singleLink, secure_url: singleLink, resource_type: 'raw' };
+        if (!finalAttachments.some((p) => p.url === singleLink)) finalAttachments.push(item);
+        registerExplicitCategory(item, 'attachments');
       }
     }
 
@@ -847,7 +954,8 @@ exports.addLesson = async (req, res) => {
         const field = (f.fieldname || '').toLowerCase();
         const fileMimeType = (f.mimetype || (f.originalname ? mimeTypes.lookup(f.originalname) : '') || '').toLowerCase();
         const fileExt = path.extname(f.originalname || f.filename || '').toLowerCase().replace('.', '');
-        
+        const explicitFileCat = (f.uploadType || f.category || f.upload_type || req.body.uploadType || req.body.upload_type || req.body.category || req.body.resourceCategory || '').toString().toLowerCase().trim();
+
         let explicitResourceType = f.resource_type;
         if (!explicitResourceType) {
           if (fileMimeType.startsWith('video/') || ALLOWED_VIDEO_FORMATS.includes(fileExt)) {
@@ -872,40 +980,58 @@ exports.addLesson = async (req, res) => {
           size: f.bytes || f.size || 0,
         };
 
-        if (field === 'videourl' || field === 'video' || field === 'videofile') {
+        if (explicitFileCat === 'pdf_note' || explicitFileCat === 'pdfnotes' || explicitFileCat === 'pdf_notes' || field === 'pdfnotes' || field === 'pdfnote' || field === 'pdf_note' || field === 'pdf_notes' || field.startsWith('pdfnotes')) {
+          finalPdfNotes.push(fileObj);
+          registerExplicitCategory(fileObj, 'pdfNotes');
+        } else if (explicitFileCat === 'assignment' || explicitFileCat === 'assignments' || field === 'assignments' || field === 'assignment' || field === 'assignmentfiles' || field === 'assignmentfile' || field.startsWith('assignment')) {
+          finalAssignments.push(fileObj);
+          registerExplicitCategory(fileObj, 'assignments');
+        } else if (explicitFileCat === 'attachment' || explicitFileCat === 'attachments' || field === 'attachments' || field === 'attachment' || field.startsWith('attachment')) {
+          finalAttachments.push(fileObj);
+          registerExplicitCategory(fileObj, 'attachments');
+        } else if (field === 'videourl' || field === 'video' || field === 'videofile') {
           finalVideoUrl = fileUrl;
           if (!finalVideoParts.some((p) => p.url === fileUrl)) {
             finalVideoParts.push(fileObj);
           }
+          registerExplicitCategory(fileObj, 'videoParts');
         } else if (field === 'videoparts' || field === 'videopart' || field.startsWith('videoparts') || field === 'videos') {
           finalVideoParts.push(fileObj);
           if (!finalVideoUrl) finalVideoUrl = fileUrl;
-        } else if (field === 'pdfnotes' || field === 'pdf' || field === 'pdffile' || field === 'pdffiles' || field.startsWith('pdfnotes') || field === 'pdfs') {
-          finalPdfNotes.push(fileObj);
-        } else if (field === 'assignments' || field === 'assignment' || field === 'assignmentfiles' || field === 'assignmentfile' || field.startsWith('assignment')) {
-          finalAssignments.push(fileObj);
-        } else if (field === 'attachments' || field === 'attachment' || field.startsWith('attachment')) {
-          finalAttachments.push(fileObj);
-        } else if (field === 'file' || field === 'lessonfile' || field === 'uploadfileorlink') {
+          registerExplicitCategory(fileObj, 'videoParts');
+        } else if (field === 'pdf' || field === 'pdffile' || field === 'pdffiles' || field === 'pdfs') {
+          if (explicitFileCat === 'assignment' || actualLessonType.toLowerCase().includes('assign')) {
+            finalAssignments.push(fileObj);
+            registerExplicitCategory(fileObj, 'assignments');
+          } else if (explicitFileCat === 'attachment') {
+            finalAttachments.push(fileObj);
+            registerExplicitCategory(fileObj, 'attachments');
+          } else {
+            finalPdfNotes.push(fileObj);
+            registerExplicitCategory(fileObj, 'pdfNotes');
+          }
+        } else if (field === 'file' || field === 'lessonfile' || field === 'uploadfileorlink' || field === 'files') {
           if (actualLessonType.toLowerCase().includes('assign')) {
             finalAssignments.push(fileObj);
+            registerExplicitCategory(fileObj, 'assignments');
           } else if (fileMimeType.startsWith('video/') || ALLOWED_VIDEO_FORMATS.includes(fileExt)) {
             finalVideoUrl = fileUrl;
             if (!finalVideoParts.some((p) => p.url === fileUrl)) finalVideoParts.push(fileObj);
-          } else if (fileMimeType === 'application/pdf' || fileExt === 'pdf') {
-            finalPdfNotes.push(fileObj);
+            registerExplicitCategory(fileObj, 'videoParts');
           } else {
             finalAttachments.push(fileObj);
+            registerExplicitCategory(fileObj, 'attachments');
           }
         } else if (actualLessonType.toLowerCase().includes('assign')) {
           finalAssignments.push(fileObj);
+          registerExplicitCategory(fileObj, 'assignments');
         } else if (fileMimeType.startsWith('video/') || ALLOWED_VIDEO_FORMATS.includes(fileExt)) {
           finalVideoUrl = fileUrl;
           if (!finalVideoParts.some((p) => p.url === fileUrl)) finalVideoParts.push(fileObj);
-        } else if (fileMimeType === 'application/pdf' || fileExt === 'pdf') {
-          finalPdfNotes.push(fileObj);
+          registerExplicitCategory(fileObj, 'videoParts');
         } else {
           finalAttachments.push(fileObj);
+          registerExplicitCategory(fileObj, 'attachments');
         }
       }
     });
@@ -949,10 +1075,29 @@ exports.addLesson = async (req, res) => {
       finalVideoUrl = finalVideoParts[0].url;
     }
 
-    finalVideoParts = deduplicateResourceArray(finalVideoParts);
-    finalPdfNotes = deduplicateResourceArray(finalPdfNotes);
-    finalAssignments = deduplicateResourceArray(finalAssignments);
-    finalAttachments = deduplicateResourceArray(finalAttachments);
+    const isolated = sanitizeAndIsolateResourceArrays({
+      videoParts: finalVideoParts,
+      pdfNotes: finalPdfNotes,
+      assignments: finalAssignments,
+      attachments: finalAttachments,
+      explicitCategoryMap,
+    });
+    finalVideoParts = isolated.videoParts;
+    finalPdfNotes = isolated.pdfNotes;
+    finalAssignments = isolated.assignments;
+    finalAttachments = isolated.attachments;
+
+    console.log('========== LESSON RESOURCE SAVE ==========');
+    console.log(`pdfNotes count: ${finalPdfNotes.length}`);
+    console.log(`assignments count: ${finalAssignments.length}`);
+    console.log(`attachments count: ${finalAttachments.length}`);
+    console.log('PDF NOTES:');
+    console.log(JSON.stringify(finalPdfNotes, null, 2));
+    console.log('ASSIGNMENTS:');
+    console.log(JSON.stringify(finalAssignments, null, 2));
+    console.log('ATTACHMENTS:');
+    console.log(JSON.stringify(finalAttachments, null, 2));
+    console.log('===========================================');
 
     const newLesson = {
       lessonTitle: actualLessonTitle,
@@ -1058,42 +1203,67 @@ exports.updateLesson = async (req, res) => {
     if (videoUrl !== undefined) targetLesson.videoUrl = videoUrl.trim();
 
     // Array fields — replace when provided in body
+    const explicitCategoryMap = new Map();
+    const registerExplicitCategory = (item, catName) => {
+      if (!item || !catName) return;
+      const key = getResourceKey(item);
+      if (key) explicitCategoryMap.set(key, catName);
+    };
+
     if (videoParts !== undefined) {
       targetLesson.videoParts = parseFileItems(videoParts);
+      targetLesson.videoParts.forEach((item) => registerExplicitCategory(item, 'videoParts'));
     }
     if (pdfNotes !== undefined || pdfFiles !== undefined) {
       targetLesson.pdfNotes = parseFileItems(pdfNotes !== undefined ? pdfNotes : pdfFiles);
+      targetLesson.pdfNotes.forEach((item) => registerExplicitCategory(item, 'pdfNotes'));
     }
     if (assignments !== undefined || assignmentFiles !== undefined) {
       targetLesson.assignments = parseFileItems(assignments !== undefined ? assignments : assignmentFiles);
+      targetLesson.assignments.forEach((item) => registerExplicitCategory(item, 'assignments'));
     }
     if (attachments !== undefined) {
       targetLesson.attachments = parseFileItems(attachments);
+      targetLesson.attachments.forEach((item) => registerExplicitCategory(item, 'attachments'));
     }
 
     // Map single link if provided
     const singleLink = (uploadFileOrLink || fileOrLink || lessonFile || '').trim();
     if (singleLink) {
+      const explicitUploadType = (req.body.uploadType || req.body.upload_type || req.body.category || req.body.resourceCategory || '').toString().toLowerCase().trim();
       const lowerType = (targetLesson.lessonType || '').toLowerCase();
-      if (lowerType.includes('video') || lowerType === 'recorded video') {
+
+      if (explicitUploadType === 'pdf_note' || explicitUploadType === 'pdfnotes' || explicitUploadType === 'pdf_notes' || explicitUploadType === 'pdf') {
+        const item = { title: targetLesson.lessonTitle || 'PDF Notes', url: singleLink, secure_url: singleLink, resource_type: 'raw' };
+        if (!targetLesson.pdfNotes.some((p) => p.url === singleLink)) targetLesson.pdfNotes.push(item);
+        registerExplicitCategory(item, 'pdfNotes');
+      } else if (explicitUploadType === 'assignment' || explicitUploadType === 'assignments') {
+        const item = { title: targetLesson.lessonTitle || 'Assignment', url: singleLink, secure_url: singleLink, resource_type: 'raw' };
+        if (!targetLesson.assignments.some((p) => p.url === singleLink)) targetLesson.assignments.push(item);
+        registerExplicitCategory(item, 'assignments');
+      } else if (explicitUploadType === 'attachment' || explicitUploadType === 'attachments') {
+        const item = { title: targetLesson.lessonTitle || 'Attachment', url: singleLink, secure_url: singleLink, resource_type: 'raw' };
+        if (!targetLesson.attachments.some((p) => p.url === singleLink)) targetLesson.attachments.push(item);
+        registerExplicitCategory(item, 'attachments');
+      } else if (lowerType.includes('video') || lowerType === 'recorded video') {
         targetLesson.videoUrl = singleLink;
-        if (!targetLesson.videoParts.some((p) => p.url === singleLink)) {
-          targetLesson.videoParts.push({ title: targetLesson.lessonTitle || 'Video Part', url: singleLink, secure_url: singleLink, resource_type: 'video' });
-        }
+        const item = { title: targetLesson.lessonTitle || 'Video Part', url: singleLink, secure_url: singleLink, resource_type: 'video' };
+        if (!targetLesson.videoParts.some((p) => p.url === singleLink)) targetLesson.videoParts.push(item);
+        registerExplicitCategory(item, 'videoParts');
       } else if (lowerType.includes('assign')) {
-        if (!targetLesson.assignments.some((p) => p.url === singleLink)) {
-          targetLesson.assignments.push({ title: targetLesson.lessonTitle || 'Assignment', url: singleLink, secure_url: singleLink, resource_type: 'raw' });
-        }
+        const item = { title: targetLesson.lessonTitle || 'Assignment', url: singleLink, secure_url: singleLink, resource_type: 'raw' };
+        if (!targetLesson.assignments.some((p) => p.url === singleLink)) targetLesson.assignments.push(item);
+        registerExplicitCategory(item, 'assignments');
       } else if (lowerType.includes('pdf')) {
-        if (!targetLesson.pdfNotes.some((p) => p.url === singleLink)) {
-          targetLesson.pdfNotes.push({ title: targetLesson.lessonTitle || 'PDF Notes', url: singleLink, secure_url: singleLink, resource_type: 'raw' });
-        }
+        const item = { title: targetLesson.lessonTitle || 'PDF Notes', url: singleLink, secure_url: singleLink, resource_type: 'raw' };
+        if (!targetLesson.pdfNotes.some((p) => p.url === singleLink)) targetLesson.pdfNotes.push(item);
+        registerExplicitCategory(item, 'pdfNotes');
       } else if (lowerType.includes('live') || lowerType === 'link') {
         targetLesson.meetingUrl = singleLink;
       } else {
-        if (!targetLesson.attachments.some((p) => p.url === singleLink)) {
-          targetLesson.attachments.push({ title: targetLesson.lessonTitle || 'Attachment', url: singleLink, secure_url: singleLink, resource_type: 'raw' });
-        }
+        const item = { title: targetLesson.lessonTitle || 'Attachment', url: singleLink, secure_url: singleLink, resource_type: 'raw' };
+        if (!targetLesson.attachments.some((p) => p.url === singleLink)) targetLesson.attachments.push(item);
+        registerExplicitCategory(item, 'attachments');
       }
     }
 
@@ -1163,7 +1333,8 @@ exports.updateLesson = async (req, res) => {
         const field = (f.fieldname || '').toLowerCase();
         const fileMimeType = (f.mimetype || (f.originalname ? mimeTypes.lookup(f.originalname) : '') || '').toLowerCase();
         const fileExt = path.extname(f.originalname || f.filename || '').toLowerCase().replace('.', '');
-        
+        const explicitFileCat = (f.uploadType || f.category || f.upload_type || req.body.uploadType || req.body.upload_type || req.body.category || req.body.resourceCategory || '').toString().toLowerCase().trim();
+
         let explicitResourceType = f.resource_type;
         if (!explicitResourceType) {
           if (fileMimeType.startsWith('video/') || ALLOWED_VIDEO_FORMATS.includes(fileExt)) {
@@ -1188,40 +1359,58 @@ exports.updateLesson = async (req, res) => {
           size: f.bytes || f.size || 0,
         };
 
-        if (field === 'videourl' || field === 'video' || field === 'videofile') {
+        if (explicitFileCat === 'pdf_note' || explicitFileCat === 'pdfnotes' || explicitFileCat === 'pdf_notes' || field === 'pdfnotes' || field === 'pdfnote' || field === 'pdf_note' || field === 'pdf_notes' || field.startsWith('pdfnotes')) {
+          targetLesson.pdfNotes.push(fileObj);
+          registerExplicitCategory(fileObj, 'pdfNotes');
+        } else if (explicitFileCat === 'assignment' || explicitFileCat === 'assignments' || field === 'assignments' || field === 'assignment' || field === 'assignmentfiles' || field === 'assignmentfile' || field.startsWith('assignment')) {
+          targetLesson.assignments.push(fileObj);
+          registerExplicitCategory(fileObj, 'assignments');
+        } else if (explicitFileCat === 'attachment' || explicitFileCat === 'attachments' || field === 'attachments' || field === 'attachment' || field.startsWith('attachment')) {
+          targetLesson.attachments.push(fileObj);
+          registerExplicitCategory(fileObj, 'attachments');
+        } else if (field === 'videourl' || field === 'video' || field === 'videofile') {
           targetLesson.videoUrl = fileUrl;
           if (!targetLesson.videoParts.some((p) => p.url === fileUrl)) {
             targetLesson.videoParts.push(fileObj);
           }
+          registerExplicitCategory(fileObj, 'videoParts');
         } else if (field === 'videoparts' || field === 'videopart' || field.startsWith('videoparts') || field === 'videos') {
           targetLesson.videoParts.push(fileObj);
           if (!targetLesson.videoUrl) targetLesson.videoUrl = fileUrl;
-        } else if (field === 'pdfnotes' || field === 'pdf' || field === 'pdffile' || field === 'pdffiles' || field.startsWith('pdfnotes') || field === 'pdfs') {
-          targetLesson.pdfNotes.push(fileObj);
-        } else if (field === 'assignments' || field === 'assignment' || field === 'assignmentfiles' || field === 'assignmentfile' || field.startsWith('assignment')) {
-          targetLesson.assignments.push(fileObj);
-        } else if (field === 'attachments' || field === 'attachment' || field.startsWith('attachment')) {
-          targetLesson.attachments.push(fileObj);
-        } else if (field === 'file' || field === 'lessonfile' || field === 'uploadfileorlink') {
+          registerExplicitCategory(fileObj, 'videoParts');
+        } else if (field === 'pdf' || field === 'pdffile' || field === 'pdffiles' || field === 'pdfs') {
+          if (explicitFileCat === 'assignment' || (targetLesson.lessonType || '').toLowerCase().includes('assign')) {
+            targetLesson.assignments.push(fileObj);
+            registerExplicitCategory(fileObj, 'assignments');
+          } else if (explicitFileCat === 'attachment') {
+            targetLesson.attachments.push(fileObj);
+            registerExplicitCategory(fileObj, 'attachments');
+          } else {
+            targetLesson.pdfNotes.push(fileObj);
+            registerExplicitCategory(fileObj, 'pdfNotes');
+          }
+        } else if (field === 'file' || field === 'lessonfile' || field === 'uploadfileorlink' || field === 'files') {
           if ((targetLesson.lessonType || '').toLowerCase().includes('assign')) {
             targetLesson.assignments.push(fileObj);
+            registerExplicitCategory(fileObj, 'assignments');
           } else if (fileMimeType.startsWith('video/') || ALLOWED_VIDEO_FORMATS.includes(fileExt)) {
             targetLesson.videoUrl = fileUrl;
             if (!targetLesson.videoParts.some((p) => p.url === fileUrl)) targetLesson.videoParts.push(fileObj);
-          } else if (fileMimeType === 'application/pdf' || fileExt === 'pdf') {
-            targetLesson.pdfNotes.push(fileObj);
+            registerExplicitCategory(fileObj, 'videoParts');
           } else {
             targetLesson.attachments.push(fileObj);
+            registerExplicitCategory(fileObj, 'attachments');
           }
         } else if ((targetLesson.lessonType || '').toLowerCase().includes('assign')) {
           targetLesson.assignments.push(fileObj);
+          registerExplicitCategory(fileObj, 'assignments');
         } else if (fileMimeType.startsWith('video/') || ALLOWED_VIDEO_FORMATS.includes(fileExt)) {
           targetLesson.videoUrl = fileUrl;
           if (!targetLesson.videoParts.some((p) => p.url === fileUrl)) targetLesson.videoParts.push(fileObj);
-        } else if (fileMimeType === 'application/pdf' || fileExt === 'pdf') {
-          targetLesson.pdfNotes.push(fileObj);
+          registerExplicitCategory(fileObj, 'videoParts');
         } else {
           targetLesson.attachments.push(fileObj);
+          registerExplicitCategory(fileObj, 'attachments');
         }
       }
     });
@@ -1247,10 +1436,29 @@ exports.updateLesson = async (req, res) => {
       targetLesson.videoParts.push({ title: targetLesson.lessonTitle || 'Video Part 1', url: targetLesson.videoUrl, secure_url: targetLesson.videoUrl, resource_type: 'video' });
     }
 
-    targetLesson.videoParts = deduplicateResourceArray(targetLesson.videoParts);
-    targetLesson.pdfNotes = deduplicateResourceArray(targetLesson.pdfNotes);
-    targetLesson.assignments = deduplicateResourceArray(targetLesson.assignments);
-    targetLesson.attachments = deduplicateResourceArray(targetLesson.attachments);
+    const isolated = sanitizeAndIsolateResourceArrays({
+      videoParts: targetLesson.videoParts,
+      pdfNotes: targetLesson.pdfNotes,
+      assignments: targetLesson.assignments,
+      attachments: targetLesson.attachments,
+      explicitCategoryMap,
+    });
+    targetLesson.videoParts = isolated.videoParts;
+    targetLesson.pdfNotes = isolated.pdfNotes;
+    targetLesson.assignments = isolated.assignments;
+    targetLesson.attachments = isolated.attachments;
+
+    console.log('========== LESSON RESOURCE SAVE ==========');
+    console.log(`pdfNotes count: ${targetLesson.pdfNotes.length}`);
+    console.log(`assignments count: ${targetLesson.assignments.length}`);
+    console.log(`attachments count: ${targetLesson.attachments.length}`);
+    console.log('PDF NOTES:');
+    console.log(JSON.stringify(targetLesson.pdfNotes, null, 2));
+    console.log('ASSIGNMENTS:');
+    console.log(JSON.stringify(targetLesson.assignments, null, 2));
+    console.log('ATTACHMENTS:');
+    console.log(JSON.stringify(targetLesson.attachments, null, 2));
+    console.log('===========================================');
 
     await course.save();
 

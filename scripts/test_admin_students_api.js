@@ -9,7 +9,7 @@ const Admin = require('../models/admin.model');
 const User = require('../models/User');
 const Student = require('../models/Student');
 const Course = require('../models/Course');
-const Exam = require('../models/exam.model');
+const Exam = require('../models/Exam');
 const TestResult = require('../src/common/models/testResult.model');
 
 // Express App for test

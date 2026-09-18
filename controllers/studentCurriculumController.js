@@ -7,21 +7,22 @@ const LessonProgress = require('../models/LessonProgress');
  */
 async function resolveStudent(reqUser) {
   if (!reqUser) return null;
+  const isObjId = (id) => id && require('mongoose').Types.ObjectId.isValid(id);
+
   // 1. Try finding by studentId if present in token
-  if (reqUser.studentId) {
+  if (isObjId(reqUser.studentId)) {
     const student = await Student.findById(reqUser.studentId);
     if (student) return student;
   }
   // 2. Try finding by userId FK
-  if (reqUser.id || reqUser.userId) {
-    const userId = reqUser.id || reqUser.userId;
+  const userId = reqUser.id || reqUser.userId;
+  if (userId && isObjId(userId)) {
     let student = await Student.findOne({ userId });
     if (student) return student;
-    // 3. Try finding directly by _id (if token ID was Student._id)
     student = await Student.findById(userId);
     if (student) return student;
   }
-  // 4. Try finding by email
+  // 3. Try finding by email
   if (reqUser.email) {
     const student = await Student.findOne({ email: reqUser.email.toLowerCase() });
     if (student) return student;
@@ -84,17 +85,39 @@ const getMyCourses = async (req, res) => {
     const isStaff = ['admin', 'superadmin'].includes((req.user?.role || '').toLowerCase());
     const student = isStaff ? null : await resolveStudent(req.user);
 
-    let courses;
+    let courses = [];
     if (isStaff) {
       courses = await Course.find({ status: 'Published' }).sort({ createdAt: -1 });
-    } else if (student) {
-      if (student.courseRef) {
-        courses = await Course.find({ _id: student.courseRef, status: 'Published' });
-      } else {
-        courses = await Course.find({ status: 'Published' }).sort({ createdAt: -1 });
-      }
     } else {
-      courses = await Course.find({ status: 'Published' }).sort({ createdAt: -1 });
+      const courseRef = student?.courseRef || req.user?.courseRef;
+      const courseId = student?.courseId || req.user?.courseId;
+      const queryOr = [];
+
+      if (courseRef && require('mongoose').Types.ObjectId.isValid(courseRef)) {
+        queryOr.push({ _id: courseRef });
+      }
+      if (courseId) {
+        queryOr.push({ courseId: courseId });
+      }
+      if (student?.course) {
+        queryOr.push({ courseTitle: student.course });
+      }
+      if (student?.preferredCourse) {
+        queryOr.push({ courseTitle: student.preferredCourse });
+      }
+
+      if (queryOr.length > 0) {
+        courses = await Course.find({ $or: queryOr, status: 'Published' });
+      }
+    }
+
+    if (!isStaff && (!courses || courses.length === 0)) {
+      return res.status(404).json({
+        success: false,
+        message: 'Registered course could not be loaded or is not assigned to student profile.',
+        data: [],
+        count: 0,
+      });
     }
 
     const formatted = courses.map((c) => {

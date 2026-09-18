@@ -144,6 +144,7 @@ app.use('/api/upload', require('./routes/uploadRoutes'));
 app.use('/api/v1/upload', require('./routes/uploadRoutes'));
 app.use('/api/media', require('./routes/uploadRoutes'));
 app.use('/api/uploads', require('./routes/uploadRoutes'));
+app.use('/api/upload-image', require('./routes/uploadRoutes'));
 
 app.use('/api/courses', require('./routes/courseRoutes'));
 app.use('/api/admin/courses', require('./routes/adminCourseRoutes'));
@@ -175,6 +176,12 @@ app.use(adminExamRoutes);
 const facultyRoutes = require('./routes/facultyRoutes');
 app.use('/api/admin/faculty', facultyRoutes);
 app.use('/api/v1/admin/faculty', facultyRoutes);
+const adminDashboardRoutes = require('./routes/adminDashboardRoutes');
+app.use('/api/admin/dashboard-stats', adminDashboardRoutes);
+app.use('/api/v1/admin/dashboard-stats', adminDashboardRoutes);
+app.use('/api/admin/activities', adminDashboardRoutes);
+app.use('/api/v1/admin/activities', adminDashboardRoutes);
+
 const adminRoutes = require('./routes/adminRoutes');
 app.use('/api/admin/auth', require('./routes/adminAuthRoutes'));
 app.use('/api/v1/admin', adminRoutes);

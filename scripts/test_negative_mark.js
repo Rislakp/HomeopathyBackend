@@ -1,8 +1,8 @@
 require('dotenv').config();
 const mongoose = require('mongoose');
 const connectDB = require('../config/db');
-const Exam = require('../models/exam.model');
-const examController = require('../controllers/exam.controller');
+const Exam = require('../models/Exam');
+const examController = require('../controllers/examController');
 const adminController = require('../src/admin/admin.controller');
 const studentController = require('../src/student/student.controller');
 const TestResult = require('../src/common/models/testResult.model');

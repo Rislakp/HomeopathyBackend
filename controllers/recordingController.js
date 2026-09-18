@@ -293,29 +293,43 @@ exports.createRecording = async (req, res) => {
 exports.getRecordings = async (req, res) => {
   try {
     const filter = {};
-    if (req.query.status) {
-      filter.status = req.query.status;
+    const query = req ? (req.query || {}) : {};
+    if (query.status) {
+      filter.status = query.status;
     }
-    if (req.query.courseId && mongoose.Types.ObjectId.isValid(req.query.courseId)) {
-      filter.courseId = req.query.courseId;
+    if (query.courseId && mongoose.Types.ObjectId.isValid(query.courseId)) {
+      filter.courseId = query.courseId;
     }
 
     // Add student authorization filter
-    if (req.user && req.user.role === 'student') {
-      const Student = require('../models/Student');
-      const student = await Student.findOne({ userId: req.user.id }) || await Student.findById(req.user.id);
-      
-      if (!student) {
-        return res.status(403).json({ success: false, message: 'Student profile not found.' });
+    const isStaff = ['admin', 'superadmin'].includes((req.user?.role || '').toLowerCase());
+    if (req.user && !isStaff) {
+      const studentCourseRef = req.user.courseRef;
+      const studentCourseId = req.user.courseId;
+      const studentCourseTitle = req.user.course;
+
+      if (!studentCourseRef && !studentCourseId && !studentCourseTitle) {
+        return res.status(404).json({
+          success: false,
+          message: 'Registered course could not be loaded or is not assigned to student profile.',
+          data: [],
+          count: 0,
+        });
       }
-      if (student.accountStatus !== 'Approved' && student.status !== 'Active') {
-        return res.status(403).json({ success: false, message: 'Account is not active or approved.' });
+
+      const courseOrFilter = [];
+      if (studentCourseRef && mongoose.Types.ObjectId.isValid(studentCourseRef)) {
+        courseOrFilter.push({ courseId: new mongoose.Types.ObjectId(studentCourseRef) });
       }
-      
-      if (student.courseRef) {
-        filter.courseId = student.courseRef;
-      } else {
-        filter.courseId = null;
+      if (studentCourseId) {
+        courseOrFilter.push({ courseId: studentCourseId });
+      }
+      if (studentCourseTitle) {
+        courseOrFilter.push({ courseName: studentCourseTitle });
+      }
+
+      if (courseOrFilter.length > 0) {
+        filter.$or = courseOrFilter;
       }
     }
 

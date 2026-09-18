@@ -132,13 +132,34 @@ const requireAuth = async (req, res, next) => {
       });
     }
 
+    let studentDoc = null;
+    if (Student) {
+      if (foundUser.constructor && foundUser.constructor.modelName === 'Student') {
+        studentDoc = foundUser;
+      } else {
+        studentDoc = await Student.findOne({
+          $or: [
+            { userId: foundUser._id },
+            { email: foundUser.email ? foundUser.email.toLowerCase() : '' },
+          ],
+        });
+      }
+    }
+
+    const courseRef = studentDoc?.courseRef || foundUser.courseRef || null;
+    const courseId = studentDoc?.courseId || foundUser.courseId || (courseRef ? courseRef.toString() : '');
+    const courseTitle = studentDoc?.course || foundUser.course || foundUser.preferredCourse || '';
+
     req.user = {
       id: foundUser._id.toString(),
       userId: foundUser._id.toString(),
-      studentId: decoded.studentId || null, // Explicitly preserve the Student model ID from token
+      studentId: studentDoc ? studentDoc._id.toString() : (decoded.studentId || null),
       email: foundUser.email,
       name: foundUser.name,
       role: normalizedRole,
+      courseId: courseId,
+      courseRef: courseRef ? courseRef.toString() : null,
+      course: courseTitle,
     };
 
     // ── DEBUG: Print what was resolved from the DB and what req.user looks like ──

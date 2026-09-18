@@ -36,6 +36,10 @@ const generateToken = (user) => {
  * Helper to build sanitized user JSON response object
  */
 const buildUserResponse = (user, studentDoc = null) => {
+  const courseRef = (studentDoc && studentDoc.courseRef) || user.courseRef || null;
+  const courseId = (studentDoc && studentDoc.courseId) || user.courseId || (courseRef ? courseRef.toString() : '');
+  const courseTitle = (studentDoc && studentDoc.course) || user.course || user.preferredCourse || '';
+
   const response = {
     id: user._id ? user._id.toString() : user.id,
     name: user.name,
@@ -45,23 +49,25 @@ const buildUserResponse = (user, studentDoc = null) => {
     contactNumber: user.contactNumber || user.phone || '',
     qualification: user.qualification || '',
     preferredCourse: user.preferredCourse || user.course || '',
-    course: (studentDoc && studentDoc.course) || user.course || user.preferredCourse || '',
+    course: courseTitle,
+    courseId: courseId,
+    courseRef: courseRef ? courseRef.toString() : null,
     dateOfBirth: user.dateOfBirth || '',
     courses: [],
   };
+
+  if (courseRef || courseId) {
+    response.courses.push({
+      id: courseRef ? courseRef.toString() : courseId,
+      courseId: courseId,
+      title: courseTitle || 'Assigned Course',
+    });
+  }
 
   if (studentDoc) {
     response.status = studentDoc.status || 'Pending';
     response.accountStatus = studentDoc.accountStatus || 'Pending';
     response.isApproved = studentDoc.isApproved || false;
-    
-    // Add authorized course to the courses array
-    if (studentDoc.courseRef) {
-      response.courses.push({
-        id: studentDoc.courseRef.toString(),
-        title: studentDoc.course || user.course || user.preferredCourse || 'Assigned Course'
-      });
-    }
   } else {
     // Fallback to User document fields if Student document is not found
     response.status = user.status || 'Pending';
@@ -177,6 +183,10 @@ const registerStudent = async (req, res) => {
       });
     }
 
+    const resolvedCourseRef = enrolledCourse ? enrolledCourse._id : null;
+    const resolvedCourseId = enrolledCourse ? (enrolledCourse.courseId || enrolledCourse._id.toString()) : (finalCourse || '');
+    const resolvedCourseTitle = enrolledCourse ? (enrolledCourse.courseTitle || finalCourse) : finalCourse;
+
     // -----------------------------
     // CREATE USER (Role strictly set to "student")
     // -----------------------------
@@ -190,7 +200,9 @@ const registerStudent = async (req, res) => {
       phone: finalPhone,
       qualification: finalQualification,
       preferredCourse: finalCourse,
-      course: finalCourse,
+      course: resolvedCourseTitle,
+      courseId: resolvedCourseId,
+      courseRef: resolvedCourseRef,
     });
 
     // -----------------------------
@@ -208,8 +220,9 @@ const registerStudent = async (req, res) => {
           phone: finalPhone,
           qualification: finalQualification,
           preferredCourse: finalCourse,
-          course: finalCourse,
-          courseRef: enrolledCourse ? enrolledCourse._id : null,
+          course: resolvedCourseTitle,
+          courseId: resolvedCourseId,
+          courseRef: resolvedCourseRef,
           // course & subscription now have safe defaults in the schema
         });
       } catch (studentErr) {

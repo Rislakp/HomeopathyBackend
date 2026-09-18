@@ -3,7 +3,7 @@ const dotenv = require('dotenv');
 dotenv.config();
 
 const connectDB = require('../config/db');
-const Exam = require('../models/exam.model');
+const Exam = require('../models/Exam');
 const {
   validateAndSanitizeQuestion,
   validateAndSanitizeQuestions,
@@ -13,7 +13,7 @@ const {
   addQuestionToExam,
   updateQuestionInExam,
   deleteQuestionFromExam
-} = require('../controllers/exam.controller');
+} = require('../controllers/examController');
 
 // Mock Express req and res objects
 function createMockRes() {
