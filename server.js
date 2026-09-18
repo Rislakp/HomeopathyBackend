@@ -147,8 +147,10 @@ app.use('/api/uploads', require('./routes/uploadRoutes'));
 app.use('/api/upload-image', require('./routes/uploadRoutes'));
 
 app.use('/api/courses', require('./routes/courseRoutes'));
+app.use('/api/v1/courses', require('./routes/courseRoutes'));
 app.use('/api/admin/courses', require('./routes/adminCourseRoutes'));
 app.use('/api/v1/demo-videos', require('./routes/demoVideoRoutes'));
+app.use('/api/demo-videos', require('./routes/demoVideoRoutes'));
 app.use('/api/subscriptions', require('./routes/subscriptionPlanRoutes'));
 app.use('/api/v1/subscriptions', require('./routes/subscriptionPlanRoutes'));
 app.use('/api', require('./routes/recordingRoutes'));
