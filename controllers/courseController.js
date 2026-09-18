@@ -561,6 +561,9 @@ exports.createCourse = async (req, res) => {
       course: serialized,
     });
   } catch (error) {
+    if (uploadedBannerUrl) {
+      deleteCloudinaryByUrl(uploadedBannerUrl).catch(err => console.error('Failed to cleanup banner on create failure:', err));
+    }
     console.error('Create Course Error:', error);
     return res.status(500).json({
       success: false,
@@ -643,6 +646,9 @@ exports.updateCourse = async (req, res) => {
       course: serialized,
     });
   } catch (error) {
+    if (uploadedBannerUrl) {
+      deleteCloudinaryByUrl(uploadedBannerUrl).catch(err => console.error('Failed to cleanup banner on update failure:', err));
+    }
     console.error('Update Course Error:', error);
     return res.status(500).json({
       success: false,
@@ -1178,6 +1184,17 @@ exports.addLesson = async (req, res) => {
       lesson: serializeLesson(saved, req),
     });
   } catch (error) {
+    // Cleanup uploaded files on failure
+    const filesList = [];
+    if (req.file) filesList.push(req.file);
+    if (req.files) {
+      if (Array.isArray(req.files)) filesList.push(...req.files);
+      else filesList.push(...Object.values(req.files).flat());
+    }
+    filesList.forEach(f => {
+      if (f.secure_url) deleteCloudinaryByUrl(f.secure_url).catch(err => console.error('Cleanup failed:', err));
+    });
+
     console.error("🔥 FULL DETAILED ERROR STACK (addLesson):", {
       message: error.message,
       stack: error.stack,
@@ -1521,6 +1538,17 @@ exports.updateLesson = async (req, res) => {
       lesson: serializeLesson(targetLesson, req),
     });
   } catch (error) {
+    // Cleanup uploaded files on failure
+    const filesList = [];
+    if (req.file) filesList.push(req.file);
+    if (req.files) {
+      if (Array.isArray(req.files)) filesList.push(...req.files);
+      else filesList.push(...Object.values(req.files).flat());
+    }
+    filesList.forEach(f => {
+      if (f.secure_url) deleteCloudinaryByUrl(f.secure_url).catch(err => console.error('Cleanup failed:', err));
+    });
+
     console.error("🔥 FULL ERROR STACK (updateLesson):", error.stack || error);
     return res.status(500).json({ 
       success: false, 
