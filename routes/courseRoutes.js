@@ -2,6 +2,18 @@ const express = require('express');
 const router = express.Router();
 const courseController = require('../controllers/courseController');
 const { requireAdmin } = require('../middleware/rbac');
+const upload = require('../middleware/upload');
+const { handleUploadError, processUploadsToCloudinary } = upload;
+
+// Helper wrapper for optional file uploads with error handling
+const handleUpload = (req, res, next) => {
+  upload.any()(req, res, (err) => {
+    if (err) {
+      return handleUploadError(err, req, res, next);
+    }
+    return processUploadsToCloudinary(req, res, next);
+  });
+};
 
 // ==========================================
 // COURSES ROOT CRUD
@@ -10,14 +22,14 @@ const { requireAdmin } = require('../middleware/rbac');
 // GET /api/courses - Fetch all courses
 router.get('/', courseController.getCourses);
 
-// POST /api/courses - Create a new course
-router.post('/', requireAdmin, courseController.createCourse);
+// POST /api/courses - Create a new course (supports multipart banner image upload)
+router.post('/', requireAdmin, handleUpload, courseController.createCourse);
 
 // GET /api/courses/:id - Fetch single course with complete modules & lessons tree
 router.get('/:id', courseController.getCourseById);
 
-// PUT /api/courses/:id - Update course metadata
-router.put('/:id', requireAdmin, courseController.updateCourse);
+// PUT /api/courses/:id - Update course metadata (supports multipart banner image upload)
+router.put('/:id', requireAdmin, handleUpload, courseController.updateCourse);
 
 // DELETE /api/courses/:id - Delete course
 router.delete('/:id', requireAdmin, courseController.deleteCourse);
@@ -43,21 +55,6 @@ router.delete('/:courseId/modules/:moduleId', requireAdmin, courseController.del
 // ==========================================
 // NESTED LESSONS SUBDOCUMENT CRUD
 // ==========================================
-
-const upload = require('../middleware/upload');
-const { handleUploadError, processUploadsToCloudinary } = upload;
-
-// Helper wrapper for optional file uploads with error handling
-const handleUpload = (req, res, next) => {
-  upload.any()(req, res, (err) => {
-    if (err) {
-      return handleUploadError(err, req, res, next);
-    }
-
-    return processUploadsToCloudinary(req, res, next);
-  });
-};
-
 
 // GET /api/courses/:courseId/modules/:moduleId/lessons - Get all lessons for a module
 router.get('/:courseId/modules/:moduleId/lessons', courseController.getLessonsByModule);

@@ -507,8 +507,26 @@ exports.createCourse = async (req, res) => {
     } = req.body;
 
     const actualShortDescription = shortDescription || description || courseDescription || '';
+
+    // Extract banner URL from uploaded file if present (multipart image upload from Flutter admin)
+    let uploadedBannerUrl = '';
+    const uploadedFiles = [];
+    if (req.file) uploadedFiles.push(req.file);
+    if (req.files) {
+      if (Array.isArray(req.files)) uploadedFiles.push(...req.files);
+      else uploadedFiles.push(...Object.values(req.files).flat());
+    }
+    for (const f of uploadedFiles) {
+      const mime = (f.mimetype || '').toLowerCase();
+      if (mime.startsWith('image/') && f.secure_url && f.secure_url.startsWith('http')) {
+        uploadedBannerUrl = f.secure_url;
+        console.log(`[IMAGE UPLOAD] Course banner image received: filename="${f.originalname}", MIME="${mime}", size=${f.size || 0}, secure_url="${uploadedBannerUrl}"`);
+        break;
+      }
+    }
+
     const actualThumbnail =
-      thumbnail || banner || bannerUrl || thumbnailUrl || image || imageUrl || courseBanner || '';
+      uploadedBannerUrl || thumbnail || banner || bannerUrl || thumbnailUrl || image || imageUrl || courseBanner || '';
 
     if (!courseTitle && !title) {
       return res.status(400).json({ success: false, message: 'courseTitle is required' });
@@ -575,10 +593,29 @@ exports.updateCourse = async (req, res) => {
     }
 
     const bannerVal = updateData.thumbnail || updateData.banner || updateData.bannerUrl || updateData.thumbnailUrl || updateData.image || updateData.imageUrl || updateData.courseBanner;
-    if (bannerVal) {
-      updateData.thumbnail = bannerVal;
-      updateData.bannerUrl = bannerVal;
-      updateData.courseBanner = bannerVal;
+
+    // Extract banner URL from uploaded file if present (multipart image upload from Flutter admin)
+    let uploadedBannerUrl = '';
+    const uploadedFiles = [];
+    if (req.file) uploadedFiles.push(req.file);
+    if (req.files) {
+      if (Array.isArray(req.files)) uploadedFiles.push(...req.files);
+      else uploadedFiles.push(...Object.values(req.files).flat());
+    }
+    for (const f of uploadedFiles) {
+      const mime = (f.mimetype || '').toLowerCase();
+      if (mime.startsWith('image/') && f.secure_url && f.secure_url.startsWith('http')) {
+        uploadedBannerUrl = f.secure_url;
+        console.log(`[IMAGE UPLOAD] Course banner update image received: filename="${f.originalname}", MIME="${mime}", size=${f.size || 0}, secure_url="${uploadedBannerUrl}"`);
+        break;
+      }
+    }
+
+    const effectiveBanner = uploadedBannerUrl || bannerVal;
+    if (effectiveBanner) {
+      updateData.thumbnail = effectiveBanner;
+      updateData.bannerUrl = effectiveBanner;
+      updateData.courseBanner = effectiveBanner;
     }
 
     const updatedCourse = await Course.findOneAndUpdate(query, updateData, { new: true, runValidators: true });
