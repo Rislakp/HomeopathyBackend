@@ -146,6 +146,7 @@ app.use('/api/media', require('./routes/uploadRoutes'));
 app.use('/api/uploads', require('./routes/uploadRoutes'));
 app.use('/api/upload-image', require('./routes/uploadRoutes'));
 
+app.use('/courses', require('./routes/studentCurriculumRoutes'));
 app.use('/api/courses', require('./routes/courseRoutes'));
 app.use('/api/v1/courses', require('./routes/courseRoutes'));
 app.use('/api/admin/courses', require('./routes/adminCourseRoutes'));
