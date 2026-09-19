@@ -425,7 +425,18 @@ async function createGrandMockExam(req, res) {
       questions,
     } = req.body;
 
-    const finalTestType = normalizeTestType(testType);
+    const sanitizedCourseId = (courseId !== undefined && courseId !== null && String(courseId).trim() !== '')
+      ? String(courseId).trim()
+      : null;
+
+    let finalTestType;
+    if (testType && typeof testType === 'string' && testType.trim()) {
+      finalTestType = normalizeTestType(testType);
+    } else if (sanitizedCourseId) {
+      finalTestType = 'course_test';
+    } else {
+      finalTestType = 'grand_mock';
+    }
 
     // Validate required fields
     if (!title || marksPerQuestion === undefined || durationMinutes === undefined || totalQuestions === undefined || !questions) {
@@ -480,10 +491,6 @@ async function createGrandMockExam(req, res) {
         message: questionValidation.error
       });
     }
-
-    const sanitizedCourseId = (courseId !== undefined && courseId !== null && String(courseId).trim() !== '')
-      ? String(courseId).trim()
-      : null;
 
     const sanitizedModuleId = (moduleId !== undefined && moduleId !== null && String(moduleId).trim() !== '')
       ? String(moduleId).trim()
@@ -553,7 +560,8 @@ async function createGrandMockExam(req, res) {
 /**
  * GET /api/exams/grand-mock or /api/exams
  * Fetches exams excluding the questions array for summary list.
- * Optionally filters by ?testType=grand_mock or ?testType=course_test (handles query parameter variations gracefully).
+ * Supports /api/exams (returns all exams including course tests for admin test history),
+ * and /api/exams/grand-mock (returns grand mocks only).
  */
 async function getAllGrandMocks(req, res) {
   try {
@@ -563,6 +571,7 @@ async function getAllGrandMocks(req, res) {
     const reqUrl = (req?.originalUrl || req?.baseUrl || req?.path || '').toLowerCase();
     const isGrandMockEndpoint = reqUrl.includes('grand-mock');
     const isExplicitCourseTest = queryType && normalizeTestType(queryType) === 'course_test';
+    const isExplicitGrandMock = queryType && normalizeTestType(queryType) === 'grand_mock';
 
     // Verify student account status if caller is an authenticated student
     if (req.user && req.user.role === 'student') {
@@ -590,8 +599,21 @@ async function getAllGrandMocks(req, res) {
       }
     }
 
-    if (isExplicitCourseTest && !isGrandMockEndpoint) {
+    if (isGrandMockEndpoint || isExplicitGrandMock) {
+      // Specifically Grand Mock query
+      filter.testType = { $ne: 'course_test' };
+      filter.$or = [
+        { testType: 'grand_mock' },
+        { testType: { $regex: /^(grand[-_ ]?mock|mock)$/i } },
+        { testType: { $exists: false } },
+        { testType: null },
+        { testType: '' }
+      ];
+    } else if (isExplicitCourseTest) {
       filter.testType = 'course_test';
+      if (reqQuery.courseId && String(reqQuery.courseId).trim()) {
+        filter.courseId = String(reqQuery.courseId).trim();
+      }
       // For explicit course tests, apply student course filtering if student
       if (req.user && req.user.role === 'student') {
         const Student = require('../models/Student');
@@ -619,24 +641,53 @@ async function getAllGrandMocks(req, res) {
             courseOrFilter.push({ courseId: student.courseId });
           }
           if (courseOrFilter.length > 0) {
-            filter.$or = courseOrFilter;
+            if (!filter.courseId) {
+              filter.$or = courseOrFilter;
+            }
           } else {
             return res.status(200).json({ success: true, count: 0, data: [] });
           }
         }
       }
     } else {
-      // Grand Mock Query:
-      // Grand mocks do NOT require or filter by courseId!
-      // Match 'grand_mock', regex variations, or legacy documents without testType, excluding 'course_test'
-      filter.testType = { $ne: 'course_test' };
-      filter.$or = [
-        { testType: 'grand_mock' },
-        { testType: { $regex: /^(grand[-_ ]?mock|mock)$/i } },
-        { testType: { $exists: false } },
-        { testType: null },
-        { testType: '' }
-      ];
+      // General endpoint (e.g. GET /api/exams - Admin test history listing):
+      // Returns ALL tests including course tests and grand mocks!
+      if (reqQuery.courseId && String(reqQuery.courseId).trim()) {
+        filter.courseId = String(reqQuery.courseId).trim();
+      }
+      if (req.user && req.user.role === 'student') {
+        const Student = require('../models/Student');
+        const studentId = req.user.studentId || req.user.id || req.user._id;
+        let student = null;
+        if (studentId && mongoose.Types.ObjectId.isValid(studentId)) {
+          student = await Student.findOne({
+            $or: [
+              { _id: new mongoose.Types.ObjectId(studentId) },
+              { userId: new mongoose.Types.ObjectId(studentId) }
+            ]
+          });
+        }
+        if (!student && req.user.email) {
+          student = await Student.findOne({ email: req.user.email.toLowerCase() });
+        }
+
+        const courseOrFilter = [];
+        if (student?.courseRef) {
+          courseOrFilter.push({ courseId: student.courseRef });
+          courseOrFilter.push({ courseId: student.courseRef.toString() });
+        }
+        if (student?.courseId) {
+          courseOrFilter.push({ courseId: student.courseId });
+        }
+        filter.$or = [
+          ...courseOrFilter,
+          { testType: 'grand_mock' },
+          { testType: { $regex: /^(grand[-_ ]?mock|mock)$/i } },
+          { testType: { $exists: false } },
+          { courseId: null }
+        ];
+      }
+      // For Admins / Staff: no testType restriction, so all tests are returned!
     }
 
     const exams = await Exam.find(filter)

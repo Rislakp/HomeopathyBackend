@@ -269,7 +269,18 @@ async function createGrandMockExam(req, res) {
       questions
     } = req.body;
 
-    const finalTestType = normalizeTestType(testType);
+    const sanitizedCourseId = (courseId !== undefined && courseId !== null && String(courseId).trim() !== '')
+      ? String(courseId).trim()
+      : null;
+
+    let finalTestType;
+    if (testType && typeof testType === 'string' && testType.trim()) {
+      finalTestType = normalizeTestType(testType);
+    } else if (sanitizedCourseId) {
+      finalTestType = 'course_test';
+    } else {
+      finalTestType = 'grand_mock';
+    }
 
     if (!title || marksPerQuestion === undefined || durationMinutes === undefined || totalQuestions === undefined || !questions) {
       return res.status(400).json({
@@ -402,12 +413,9 @@ async function getAllGrandMocks(req, res) {
     const reqQuery = req ? (req.query || {}) : {};
     const queryType = reqQuery.testType || reqQuery.type;
     const reqUrl = (req?.originalUrl || req?.baseUrl || req?.path || '').toLowerCase();
-    const isGrandMockEndpoint = reqUrl.includes('grand-mock');
-    const isExplicitCourseTest = queryType && normalizeTestType(queryType) === 'course_test';
+    const isExplicitGrandMock = queryType && normalizeTestType(queryType) === 'grand_mock';
 
-    if (isExplicitCourseTest && !isGrandMockEndpoint) {
-      filter.testType = 'course_test';
-    } else {
+    if (isGrandMockEndpoint || isExplicitGrandMock) {
       // Grand mock query without requiring courseId
       filter.testType = { $ne: 'course_test' };
       filter.$or = [
@@ -417,6 +425,17 @@ async function getAllGrandMocks(req, res) {
         { testType: null },
         { testType: '' }
       ];
+    } else if (isExplicitCourseTest) {
+      filter.testType = 'course_test';
+      if (reqQuery.courseId && String(reqQuery.courseId).trim()) {
+        filter.courseId = String(reqQuery.courseId).trim();
+      }
+    } else {
+      // General endpoint (e.g. GET /api/exams - Admin test history listing):
+      // Returns all tests including course tests and grand mocks!
+      if (reqQuery.courseId && String(reqQuery.courseId).trim()) {
+        filter.courseId = String(reqQuery.courseId).trim();
+      }
     }
 
     const exams = await Exam.find(filter)
