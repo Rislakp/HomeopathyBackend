@@ -202,6 +202,10 @@ async function getAvailableExams(req, res) {
       return res.status(404).json({ success: false, message: 'Student profile not found.' });
     }
 
+    const filter = {};
+    const reqQuery = req ? (req.query || {}) : {};
+    const queryType = reqQuery.testType || reqQuery.type;
+
     const isExplicitGrandMock = queryType && normalizeTestType(queryType) === 'grand_mock';
     const isExplicitCourseTest = queryType && normalizeTestType(queryType) === 'course_test';
 
@@ -701,7 +705,19 @@ async function getStudentResults(req, res) {
     let matchingExamIds = null;
     if (filterType && filterType.trim()) {
       const targetType = normalizeTestType(filterType);
-      const matchingExams = await Exam.find({ testType: targetType }).select('_id').lean();
+      const query = targetType === 'grand_mock'
+        ? {
+            testType: { $ne: 'course_test' },
+            $or: [
+              { testType: 'grand_mock' },
+              { testType: { $regex: /^(grand[-_ ]?mock|mock)$/i } },
+              { testType: { $exists: false } },
+              { testType: null },
+              { testType: '' }
+            ]
+          }
+        : { testType: 'course_test' };
+      const matchingExams = await Exam.find(query).select('_id').lean();
       matchingExamIds = matchingExams.map(e => e._id.toString());
     }
 
@@ -714,13 +730,19 @@ async function getStudentResults(req, res) {
       results = results.filter(r => r.examId && matchingExamIds.includes(r.examId._id ? r.examId._id.toString() : r.examId.toString()));
     }
     
-    // Also, strictly filter out results for exams belonging to courses the student doesn't have access to
+    // For course tests, strictly filter out results for courses the student no longer has access to.
+    // Grand mock tests are global and bypass course verification.
     const validResults = [];
     for (const r of results) {
       if (!r.examId) continue;
-      const courseId = r.examId.courseId;
-      const hasAccess = await verifyStudentCourseAccess(req.user, courseId);
-      if (hasAccess) {
+      const exam = r.examId;
+      if (exam.courseId && normalizeTestType(exam.testType) === 'course_test') {
+        const hasAccess = await verifyStudentCourseAccess(req.user, exam.courseId);
+        if (hasAccess) {
+          validResults.push(r);
+        }
+      } else {
+        // Grand mock results are global
         validResults.push(r);
       }
     }
