@@ -6,7 +6,11 @@
   "scripts": {
     "start": "node server.js",
     "dev": "nodemon server.js",
-    "seed": "node scripts/seed.js"
+    "seed": "node scripts/seed.js",
+    "seed:faculty": "node scripts/seedFaculty.js",
+    "admin:reset-password": "node scripts/reset_admin_password.js",
+    "test:cloudinary": "node test-cloudinary.js",
+    "diagnose:pdf": "node scripts/diagnose_pdf_assets.js"
   },
   "keywords": [
     "express",
@@ -17,11 +21,22 @@
   "author": "",
   "license": "ISC",
   "dependencies": {
+    "@google/genai": "^2.21.0",
     "bcryptjs": "^3.0.3",
+    "cloudinary": "^2.11.0",
     "cors": "^2.8.6",
     "dotenv": "^16.6.1",
     "express": "^4.19.2",
-    "mongoose": "^8.2.1"
+    "jsonwebtoken": "^9.0.3",
+    "mime-types": "^2.1.35",
+    "mongoose": "^8.2.1",
+    "multer": "^2.2.0",
+    "multer-storage-cloudinary": "^4.0.0",
+    "pdf-parse": "^1.1.1",
+    "pdfkit": "^0.20.1",
+    "sharp": "^0.35.4",
+    "tesseract.js": "^7.0.0",
+    "xlsx": "^0.18.5"
   },
   "devDependencies": {
     "nodemon": "^3.1.0"
