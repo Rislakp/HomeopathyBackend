@@ -560,35 +560,83 @@ async function getAllGrandMocks(req, res) {
     const filter = {};
     const reqQuery = req ? (req.query || {}) : {};
     const queryType = reqQuery.testType || reqQuery.type;
-    if (queryType && queryType.trim()) {
-      filter.testType = normalizeTestType(queryType);
-    }
-    
-    // Add student authorization filter
+    const reqUrl = (req?.originalUrl || req?.baseUrl || req?.path || '').toLowerCase();
+    const isGrandMockEndpoint = reqUrl.includes('grand-mock');
+    const isExplicitCourseTest = queryType && normalizeTestType(queryType) === 'course_test';
+
+    // Verify student account status if caller is an authenticated student
     if (req.user && req.user.role === 'student') {
       const Student = require('../models/Student');
-      const student = await Student.findOne({ userId: req.user.id }) || await Student.findById(req.user.id);
-      
+      const studentId = req.user.studentId || req.user.id || req.user._id;
+      let student = null;
+      if (studentId && mongoose.Types.ObjectId.isValid(studentId)) {
+        student = await Student.findOne({
+          $or: [
+            { _id: new mongoose.Types.ObjectId(studentId) },
+            { userId: new mongoose.Types.ObjectId(studentId) }
+          ]
+        });
+      }
+      if (!student && req.user.email) {
+        student = await Student.findOne({ email: req.user.email.toLowerCase() });
+      }
+
       if (!student) {
         return res.status(403).json({ success: false, message: 'Student profile not found.' });
       }
-      if (student.accountStatus !== 'Approved' && student.status !== 'Active') {
+      if (student.accountStatus && !['Approved', 'Active', 'approved', 'active'].includes(student.accountStatus) &&
+          student.status && !['Approved', 'Active', 'approved', 'active'].includes(student.status)) {
         return res.status(403).json({ success: false, message: 'Account is not active or approved.' });
       }
-      
-      const courseOrFilter = [];
-      if (student.courseRef) {
-        courseOrFilter.push({ courseId: student.courseRef });
-        courseOrFilter.push({ courseId: student.courseRef.toString() });
+    }
+
+    if (isExplicitCourseTest && !isGrandMockEndpoint) {
+      filter.testType = 'course_test';
+      // For explicit course tests, apply student course filtering if student
+      if (req.user && req.user.role === 'student') {
+        const Student = require('../models/Student');
+        const studentId = req.user.studentId || req.user.id || req.user._id;
+        let student = null;
+        if (studentId && mongoose.Types.ObjectId.isValid(studentId)) {
+          student = await Student.findOne({
+            $or: [
+              { _id: new mongoose.Types.ObjectId(studentId) },
+              { userId: new mongoose.Types.ObjectId(studentId) }
+            ]
+          });
+        }
+        if (!student && req.user.email) {
+          student = await Student.findOne({ email: req.user.email.toLowerCase() });
+        }
+
+        if (student) {
+          const courseOrFilter = [];
+          if (student.courseRef) {
+            courseOrFilter.push({ courseId: student.courseRef });
+            courseOrFilter.push({ courseId: student.courseRef.toString() });
+          }
+          if (student.courseId) {
+            courseOrFilter.push({ courseId: student.courseId });
+          }
+          if (courseOrFilter.length > 0) {
+            filter.$or = courseOrFilter;
+          } else {
+            return res.status(200).json({ success: true, count: 0, data: [] });
+          }
+        }
       }
-      if (student.courseId) {
-        courseOrFilter.push({ courseId: student.courseId });
-      }
-      if (courseOrFilter.length > 0) {
-        filter.$or = courseOrFilter;
-      } else {
-        return res.status(200).json({ success: true, count: 0, data: [] });
-      }
+    } else {
+      // Grand Mock Query:
+      // Grand mocks do NOT require or filter by courseId!
+      // Match 'grand_mock', regex variations, or legacy documents without testType, excluding 'course_test'
+      filter.testType = { $ne: 'course_test' };
+      filter.$or = [
+        { testType: 'grand_mock' },
+        { testType: { $regex: /^(grand[-_ ]?mock|mock)$/i } },
+        { testType: { $exists: false } },
+        { testType: null },
+        { testType: '' }
+      ];
     }
 
     const exams = await Exam.find(filter)
@@ -617,7 +665,7 @@ async function getAllGrandMocks(req, res) {
         ...exam,
         courseName,
         moduleName,
-        testType: exam.testType || 'Grand Mock Test',
+        testType: normalizeTestType(exam.testType),
         negativeMark: exam.negativeMark !== undefined && exam.negativeMark !== null
           ? exam.negativeMark
           : (exam.negativeMarkPenalty ?? 0),
@@ -668,18 +716,34 @@ async function getGrandMockById(req, res) {
     // Add student authorization filter
     if (req.user && req.user.role === 'student') {
       const Student = require('../models/Student');
-      const student = await Student.findOne({ userId: req.user.id }) || await Student.findById(req.user.id);
+      const studentId = req.user.studentId || req.user.id || req.user._id;
+      let student = null;
+      if (studentId && mongoose.Types.ObjectId.isValid(studentId)) {
+        student = await Student.findOne({
+          $or: [
+            { _id: new mongoose.Types.ObjectId(studentId) },
+            { userId: new mongoose.Types.ObjectId(studentId) }
+          ]
+        });
+      }
+      if (!student && req.user.email) {
+        student = await Student.findOne({ email: req.user.email.toLowerCase() });
+      }
       
       if (!student) {
         return res.status(403).json({ success: false, message: 'Student profile not found.' });
       }
-      if (student.accountStatus !== 'Approved' && student.status !== 'Active') {
+      if (student.accountStatus && !['Approved', 'Active', 'approved', 'active'].includes(student.accountStatus) &&
+          student.status && !['Approved', 'Active', 'approved', 'active'].includes(student.status)) {
         return res.status(403).json({ success: false, message: 'Account is not active or approved.' });
       }
       
-      const hasAccess = await verifyStudentCourseAccess(req.user, exam.courseId);
-      if (!hasAccess) {
-        return res.status(403).json({ success: false, message: 'You are not authorized to access this exam.' });
+      // Only verify course access if this exam is explicitly a course test
+      if (exam.courseId && normalizeTestType(exam.testType) === 'course_test') {
+        const hasAccess = await verifyStudentCourseAccess(req.user, exam.courseId);
+        if (!hasAccess) {
+          return res.status(403).json({ success: false, message: 'You are not authorized to access this exam.' });
+        }
       }
     }
 
@@ -687,7 +751,7 @@ async function getGrandMockById(req, res) {
       ...exam,
       courseName,
       moduleName,
-      testType: exam.testType || 'Grand Mock Test',
+      testType: normalizeTestType(exam.testType),
       negativeMark: exam.negativeMark !== undefined && exam.negativeMark !== null
         ? exam.negativeMark
         : (exam.negativeMarkPenalty ?? 0)

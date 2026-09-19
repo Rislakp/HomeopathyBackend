@@ -401,8 +401,22 @@ async function getAllGrandMocks(req, res) {
     const filter = {};
     const reqQuery = req ? (req.query || {}) : {};
     const queryType = reqQuery.testType || reqQuery.type;
-    if (queryType && queryType.trim()) {
-      filter.testType = normalizeTestType(queryType);
+    const reqUrl = (req?.originalUrl || req?.baseUrl || req?.path || '').toLowerCase();
+    const isGrandMockEndpoint = reqUrl.includes('grand-mock');
+    const isExplicitCourseTest = queryType && normalizeTestType(queryType) === 'course_test';
+
+    if (isExplicitCourseTest && !isGrandMockEndpoint) {
+      filter.testType = 'course_test';
+    } else {
+      // Grand mock query without requiring courseId
+      filter.testType = { $ne: 'course_test' };
+      filter.$or = [
+        { testType: 'grand_mock' },
+        { testType: { $regex: /^(grand[-_ ]?mock|mock)$/i } },
+        { testType: { $exists: false } },
+        { testType: null },
+        { testType: '' }
+      ];
     }
 
     const exams = await Exam.find(filter)
@@ -416,6 +430,7 @@ async function getAllGrandMocks(req, res) {
         ...exam,
         courseName,
         moduleName,
+        testType: normalizeTestType(exam.testType),
         negativeMark: exam.negativeMark !== undefined && exam.negativeMark !== null
           ? exam.negativeMark
           : (exam.negativeMarkPenalty ?? 0)

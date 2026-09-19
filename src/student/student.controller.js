@@ -202,15 +202,24 @@ async function getAvailableExams(req, res) {
       return res.status(404).json({ success: false, message: 'Student profile not found.' });
     }
 
-    const filter = {};
-    const reqQuery = req ? (req.query || {}) : {};
-    const queryType = reqQuery.testType || reqQuery.type;
-    if (queryType && queryType.trim()) {
-      filter.testType = normalizeTestType(queryType);
+    const isExplicitGrandMock = queryType && normalizeTestType(queryType) === 'grand_mock';
+    const isExplicitCourseTest = queryType && normalizeTestType(queryType) === 'course_test';
+
+    if (isExplicitGrandMock) {
+      filter.testType = { $ne: 'course_test' };
+      filter.$or = [
+        { testType: 'grand_mock' },
+        { testType: { $regex: /^(grand[-_ ]?mock|mock)$/i } },
+        { testType: { $exists: false } },
+        { testType: null },
+        { testType: '' }
+      ];
+    } else if (isExplicitCourseTest) {
+      filter.testType = 'course_test';
     }
 
     let courseDoc = null;
-    if (!isStaff && studentDoc) {
+    if (!isStaff && studentDoc && !isExplicitGrandMock) {
       const studentCourseRef = studentDoc.courseRef || req.user?.courseRef;
       const studentCourseId = studentDoc.courseId || req.user?.courseId;
       const studentCourseTitle = studentDoc.course || studentDoc.preferredCourse || req.user?.course;
@@ -260,9 +269,23 @@ async function getAvailableExams(req, res) {
       }
 
       if (courseOrFilter.length > 0) {
-        filter.$or = courseOrFilter;
+        if (isExplicitCourseTest) {
+          filter.$or = courseOrFilter;
+        } else {
+          // Allow enrolled course exams OR grand mocks
+          filter.$or = [
+            ...courseOrFilter,
+            { testType: 'grand_mock' },
+            { testType: { $regex: /^(grand[-_ ]?mock|mock)$/i } },
+            { courseId: null }
+          ];
+        }
       } else {
-        return res.status(200).json({ success: true, count: 0, data: [] });
+        if (isExplicitCourseTest) {
+          return res.status(200).json({ success: true, count: 0, data: [] });
+        } else {
+          filter.testType = { $ne: 'course_test' };
+        }
       }
     }
 
@@ -350,12 +373,14 @@ async function startExam(req, res) {
       });
     }
 
-    const hasAccess = await verifyStudentCourseAccess(req.user, exam.courseId);
-    if (!hasAccess) {
-      return res.status(403).json({
-        success: false,
-        message: 'You are not authorized to access this exam.'
-      });
+    if (exam.courseId && normalizeTestType(exam.testType) === 'course_test') {
+      const hasAccess = await verifyStudentCourseAccess(req.user, exam.courseId);
+      if (!hasAccess) {
+        return res.status(403).json({
+          success: false,
+          message: 'You are not authorized to access this exam.'
+        });
+      }
     }
 
     const { courseName, moduleName, canonicalCourseId } = await resolveCourseAndModuleNames(exam);
@@ -501,12 +526,14 @@ async function submitExam(req, res) {
       });
     }
 
-    const hasAccess = await verifyStudentCourseAccess(req.user, exam.courseId);
-    if (!hasAccess) {
-      return res.status(403).json({
-        success: false,
-        message: 'You are not authorized to access this exam.'
-      });
+    if (exam.courseId && normalizeTestType(exam.testType) === 'course_test') {
+      const hasAccess = await verifyStudentCourseAccess(req.user, exam.courseId);
+      if (!hasAccess) {
+        return res.status(403).json({
+          success: false,
+          message: 'You are not authorized to access this exam.'
+        });
+      }
     }
 
     // ── Scoring Rules — read from the exam document stored in MongoDB ──────
