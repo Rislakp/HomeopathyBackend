@@ -6,6 +6,9 @@ const resourceSchema = new mongoose.Schema({
   title:         { type: String, trim: true, default: '' },
   url:           { type: String, trim: true, default: '' },
   secure_url:    { type: String, trim: true, default: '' },
+  fileUrl:       { type: String, trim: true, default: '' },
+  documentUrl:   { type: String, trim: true, default: '' },
+  path:          { type: String, trim: true, default: '' },
   public_id:     { type: String, trim: true, default: '' },
   resource_type: { type: String, trim: true, default: '' },
   mimetype:      { type: String, trim: true, default: '' },
@@ -48,6 +51,31 @@ const lessonSchema = new mongoose.Schema({
     default: '',
   },
   videoUrl: {
+    type: String,
+    trim: true,
+    default: '',
+  },
+  fileUrl: {
+    type: String,
+    trim: true,
+    default: '',
+  },
+  documentUrl: {
+    type: String,
+    trim: true,
+    default: '',
+  },
+  pdfUrl: {
+    type: String,
+    trim: true,
+    default: '',
+  },
+  path: {
+    type: String,
+    trim: true,
+    default: '',
+  },
+  url: {
     type: String,
     trim: true,
     default: '',

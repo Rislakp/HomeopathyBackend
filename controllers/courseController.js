@@ -87,6 +87,9 @@ const toResourceObj = (item) => {
       title: title.trim(),
       url: url.trim(),
       secure_url: url.trim(),
+      fileUrl: url.trim(),
+      documentUrl: url.trim(),
+      path: url.trim(),
       public_id: publicId,
       resource_type: resourceType,
       mimetype: resourceType === 'raw' && /\.pdf([?#]|$)/i.test(lowerUrl) ? 'application/pdf' : '',
@@ -135,10 +138,15 @@ const toResourceObj = (item) => {
       publicId = getPublicIdFromUrl(secureUrl || url) || '';
     }
 
+    const finalSecureUrl = (secureUrl || url || '').trim();
+
     return {
       title: (title || '').trim(),
       url: (url || '').trim(),
-      secure_url: (secureUrl || url || '').trim(),
+      secure_url: finalSecureUrl,
+      fileUrl: finalSecureUrl,
+      documentUrl: finalSecureUrl,
+      path: finalSecureUrl,
       public_id: publicId,
       resource_type: (resType || '').trim(),
       mimetype: (item.mimetype || (resType === 'raw' && /\.pdf([?#]|$)/i.test(lowerUrl) ? 'application/pdf' : '')).trim(),
@@ -337,12 +345,15 @@ const serializeLesson = (lesson, req) => {
   const sanitizeResource = (items) => {
     const list = sanitizeFiles(items);
     return list.map((item) => {
-      const canonicalUrl = item.secure_url || item.url || '';
+      const canonicalUrl = item.secure_url || item.url || item.fileUrl || item.documentUrl || item.path || '';
       const absUrl = toAbsoluteUrl(canonicalUrl, req);
       return {
         ...item,
         url: absUrl,
         secure_url: absUrl,
+        fileUrl: absUrl,
+        documentUrl: absUrl,
+        path: absUrl,
       };
     });
   };
@@ -359,13 +370,23 @@ const serializeLesson = (lesson, req) => {
     attachments: rawAttachments,
   });
 
+  const primaryDoc = (isolated.pdfNotes && isolated.pdfNotes[0]) || (isolated.attachments && isolated.attachments[0]) || (isolated.assignments && isolated.assignments[0]) || null;
+  const primaryDocUrl = primaryDoc ? (primaryDoc.url || primaryDoc.secure_url || '') : '';
+  const primaryVideoUrl = toAbsoluteUrl(lesson.videoUrl || (isolated.videoParts[0] && isolated.videoParts[0].url) || '', req);
+  const primaryLessonUrl = primaryDocUrl || primaryVideoUrl || '';
+
   return {
     _id: lesson._id,
     lessonTitle: lesson.lessonTitle || '',
     lessonType: lesson.lessonType || 'Recorded Video',
     durationOrPages: lesson.durationOrPages || '',
     description: lesson.description || '',
-    videoUrl: toAbsoluteUrl(lesson.videoUrl || '', req),
+    videoUrl: primaryVideoUrl,
+    fileUrl: primaryDocUrl || primaryLessonUrl,
+    documentUrl: primaryDocUrl || primaryLessonUrl,
+    pdfUrl: primaryDocUrl,
+    path: primaryDocUrl || primaryLessonUrl,
+    url: primaryDocUrl || primaryLessonUrl,
     videoParts: isolated.videoParts,
     pdfNotes: isolated.pdfNotes,
     assignments: isolated.assignments,
@@ -958,11 +979,13 @@ exports.addLesson = async (req, res) => {
       console.log(`[addLesson] File #${i + 1}: originalname="${f.originalname || 'unknown'}", fieldname="${f.fieldname || 'unknown'}", mimetype="${f.mimetype || 'unknown'}", size=${f.size || (f.buffer ? f.buffer.length : 0)} bytes, secure_url="${f.secure_url || 'NONE'}"`);
     });
 
-    // Safeguard: Ensure any video file has been uploaded to Cloudinary
+    // Safeguard: Ensure any video, PDF, or attachment file has been uploaded to Cloudinary
     for (const f of filesList) {
       const fileMime = (f.mimetype || (f.originalname ? mimeTypes.lookup(f.originalname) : '') || '').toLowerCase();
       const fileExt = path.extname(f.originalname || f.filename || '').toLowerCase().replace('.', '');
       const isVideoFile = fileMime.startsWith('video/') || ALLOWED_VIDEO_FORMATS.includes(fileExt) || ((f.fieldname || '').toLowerCase().includes('video'));
+      const isPdfOrDoc = fileMime === 'application/pdf' || fileExt === 'pdf' || ALLOWED_DOC_FORMATS.includes(fileExt) || ((f.fieldname || '').toLowerCase().includes('pdf')) || ((f.fieldname || '').toLowerCase().includes('attachment')) || ((f.fieldname || '').toLowerCase().includes('assign'));
+
       if (isVideoFile && (!f.secure_url || !f.secure_url.startsWith('http')) && (f.buffer || f.path) && isCloudinaryConfigured()) {
         console.log(`[addLesson] Video file found without Cloudinary URL, uploading now: "${f.originalname}"`);
         console.log('[VIDEO UPLOAD] File received');
@@ -992,6 +1015,33 @@ exports.addLesson = async (req, res) => {
           return res.status(500).json({
             success: false,
             message: 'Failed to upload video to Cloudinary storage.',
+            error: uploadErr.message,
+          });
+        }
+      } else if (isPdfOrDoc && (!f.secure_url || !f.secure_url.startsWith('http')) && (f.buffer || f.path) && isCloudinaryConfigured()) {
+        const folder = (fileMime === 'application/pdf' || fileExt === 'pdf') ? 'homeopathy-media/pdf-notes' : 'homeopathy-media/attachments';
+        console.log(`[addLesson] Document file found without Cloudinary URL, uploading now: "${f.originalname}" to folder: ${folder}`);
+        try {
+          const { cleanBaseName } = extractCleanNameAndExt(f.originalname, fileExt);
+          const uniqueSuffix = `${Date.now()}-${Math.round(Math.random() * 1e6)}`;
+          const publicId = fileExt ? `${cleanBaseName}-${uniqueSuffix}.${fileExt}` : `${cleanBaseName}-${uniqueSuffix}`;
+          const uploaded = await uploadBufferToCloudinary(f, folder, {
+            resource_type: 'raw',
+            public_id: publicId,
+            timeout: 120000,
+          });
+          console.log(`[PDF/DOC UPLOAD] Cloudinary upload successful: ${uploaded.secure_url}`);
+          f.secure_url = uploaded.secure_url;
+          f.url = uploaded.secure_url;
+          f.path = uploaded.secure_url;
+          f.public_id = uploaded.public_id;
+          f.resource_type = 'raw';
+          f.mimetype = (fileMime === 'application/pdf' || fileExt === 'pdf') ? 'application/pdf' : (f.mimetype || 'application/octet-stream');
+        } catch (uploadErr) {
+          console.error(`[PDF/DOC UPLOAD] Cloudinary upload FAILED: ${uploadErr.message || uploadErr}`);
+          return res.status(500).json({
+            success: false,
+            message: 'Failed to upload document file to Cloudinary storage.',
             error: uploadErr.message,
           });
         }
@@ -1033,6 +1083,9 @@ exports.addLesson = async (req, res) => {
           url: fileUrl,
           public_id: publicId,
           secure_url: secureUrl,
+          fileUrl: secureUrl,
+          documentUrl: secureUrl,
+          path: secureUrl,
           resource_type: explicitResourceType,
           mimetype: fileMimeType,
           size: f.bytes || f.size || 0,
@@ -1348,11 +1401,13 @@ exports.updateLesson = async (req, res) => {
       console.log(`[updateLesson] File #${i + 1}: originalname="${f.originalname || 'unknown'}", fieldname="${f.fieldname || 'unknown'}", mimetype="${f.mimetype || 'unknown'}", size=${f.size || (f.buffer ? f.buffer.length : 0)} bytes, secure_url="${f.secure_url || 'NONE'}"`);
     });
 
-    // Safeguard: Ensure any video file has been uploaded to Cloudinary
+    // Safeguard: Ensure any video, PDF, or attachment file has been uploaded to Cloudinary
     for (const f of filesList) {
       const fileMime = (f.mimetype || (f.originalname ? mimeTypes.lookup(f.originalname) : '') || '').toLowerCase();
       const fileExt = path.extname(f.originalname || f.filename || '').toLowerCase().replace('.', '');
       const isVideoFile = fileMime.startsWith('video/') || ALLOWED_VIDEO_FORMATS.includes(fileExt) || ((f.fieldname || '').toLowerCase().includes('video'));
+      const isPdfOrDoc = fileMime === 'application/pdf' || fileExt === 'pdf' || ALLOWED_DOC_FORMATS.includes(fileExt) || ((f.fieldname || '').toLowerCase().includes('pdf')) || ((f.fieldname || '').toLowerCase().includes('attachment')) || ((f.fieldname || '').toLowerCase().includes('assign'));
+
       if (isVideoFile && (!f.secure_url || !f.secure_url.startsWith('http')) && (f.buffer || f.path) && isCloudinaryConfigured()) {
         console.log(`[updateLesson] Video file found without Cloudinary URL, uploading now: "${f.originalname}"`);
         console.log('[VIDEO UPLOAD] File received');
@@ -1382,6 +1437,33 @@ exports.updateLesson = async (req, res) => {
           return res.status(500).json({
             success: false,
             message: 'Failed to upload video to Cloudinary storage.',
+            error: uploadErr.message,
+          });
+        }
+      } else if (isPdfOrDoc && (!f.secure_url || !f.secure_url.startsWith('http')) && (f.buffer || f.path) && isCloudinaryConfigured()) {
+        const folder = (fileMime === 'application/pdf' || fileExt === 'pdf') ? 'homeopathy-media/pdf-notes' : 'homeopathy-media/attachments';
+        console.log(`[updateLesson] Document file found without Cloudinary URL, uploading now: "${f.originalname}" to folder: ${folder}`);
+        try {
+          const { cleanBaseName } = extractCleanNameAndExt(f.originalname, fileExt);
+          const uniqueSuffix = `${Date.now()}-${Math.round(Math.random() * 1e6)}`;
+          const publicId = fileExt ? `${cleanBaseName}-${uniqueSuffix}.${fileExt}` : `${cleanBaseName}-${uniqueSuffix}`;
+          const uploaded = await uploadBufferToCloudinary(f, folder, {
+            resource_type: 'raw',
+            public_id: publicId,
+            timeout: 120000,
+          });
+          console.log(`[PDF/DOC UPLOAD] Cloudinary upload successful: ${uploaded.secure_url}`);
+          f.secure_url = uploaded.secure_url;
+          f.url = uploaded.secure_url;
+          f.path = uploaded.secure_url;
+          f.public_id = uploaded.public_id;
+          f.resource_type = 'raw';
+          f.mimetype = (fileMime === 'application/pdf' || fileExt === 'pdf') ? 'application/pdf' : (f.mimetype || 'application/octet-stream');
+        } catch (uploadErr) {
+          console.error(`[PDF/DOC UPLOAD] Cloudinary upload FAILED: ${uploadErr.message || uploadErr}`);
+          return res.status(500).json({
+            success: false,
+            message: 'Failed to upload document file to Cloudinary storage.',
             error: uploadErr.message,
           });
         }
@@ -1423,6 +1505,9 @@ exports.updateLesson = async (req, res) => {
           url: fileUrl,
           public_id: publicId,
           secure_url: secureUrl,
+          fileUrl: secureUrl,
+          documentUrl: secureUrl,
+          path: secureUrl,
           resource_type: explicitResourceType,
           mimetype: fileMimeType,
           size: f.bytes || f.size || 0,
