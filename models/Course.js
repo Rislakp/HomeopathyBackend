@@ -237,6 +237,11 @@ bannerAliasFields.forEach((field) => {
     });
 });
 
+// Virtual for totalModules
+courseSchema.virtual('totalModules').get(function() {
+  return Array.isArray(this.modules) ? this.modules.length : 0;
+});
+
 // Virtual for enrolledCount
 courseSchema.virtual('enrolledCount').get(function() {
   return this.enrolledStudents ? this.enrolledStudents.length : 0;
