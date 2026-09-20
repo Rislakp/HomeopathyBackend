@@ -430,6 +430,8 @@ const serializeCourse = (courseDoc, req) => {
     obj.modules = obj.modules.map((mod) => serializeModule(mod, req));
   }
 
+  obj.totalModules = Array.isArray(obj.modules) ? obj.modules.length : (obj.modules ? obj.modules.length : 0);
+
   return obj;
 };
 

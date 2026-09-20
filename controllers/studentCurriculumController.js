@@ -155,7 +155,8 @@ const getMyCourses = async (req, res) => {
         thumbnail: formattedCourse.thumbnail || formattedCourse.bannerUrl,
         bannerUrl: formattedCourse.bannerUrl,
         duration: formattedCourse.duration,
-        totalModules,
+        modules: formattedCourse.modules || [],
+        totalModules: Array.isArray(formattedCourse.modules) ? formattedCourse.modules.length : (c.modules ? c.modules.length : totalModules),
         totalLessons,
         createdAt: formattedCourse.createdAt,
       };
