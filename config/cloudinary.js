@@ -79,7 +79,7 @@ const uploadBufferToCloudinary = (file, folder = 'homeopathy-media', options = {
   } else if (options.resource_type) {
     defaultResourceType = options.resource_type;
   } else if (fileMime === 'application/pdf' || /\.pdf$/i.test(fileName)) {
-    defaultResourceType = 'raw';
+    defaultResourceType = 'auto';
   } else if (fileMime.startsWith('image/')) {
     defaultResourceType = 'image';
   }

@@ -22,7 +22,7 @@ const processAttachments = (filesArray) => {
     const ext = path.extname(f.originalname || f.filename || fileUrl || '').toLowerCase().replace('.', '');
     const isVideo = fileMimeType.startsWith('video/') || ALLOWED_VIDEO_FORMATS.includes(ext) || fileUrl.includes('/video/upload/');
     const isPdf = fileMimeType === 'application/pdf' || ext === 'pdf' || /\.pdf(?:[?#]|$)/i.test(fileUrl);
-    const explicitResourceType = f.resource_type || (isVideo ? 'video' : (isPdf ? 'raw' : 'auto'));
+    const explicitResourceType = f.resource_type || (isVideo ? 'video' : (isPdf ? 'image' : 'auto'));
 
     return {
       title: fileTitle,
@@ -78,8 +78,8 @@ const toResourceObj = (item) => {
     let resourceType = '';
     const lowerUrl = url.toLowerCase();
     if (lowerUrl.includes('/video/upload/')) resourceType = 'video';
-    else if (lowerUrl.includes('/raw/upload/') || /\.pdf([?#]|$)/i.test(lowerUrl)) resourceType = 'raw';
-    else if (lowerUrl.includes('/image/upload/')) resourceType = 'image';
+    else if (lowerUrl.includes('/raw/upload/')) resourceType = 'raw';
+    else if (lowerUrl.includes('/image/upload/') || /\.pdf([?#]|$)/i.test(lowerUrl)) resourceType = 'image';
 
     const publicId = url.includes('cloudinary.com') ? (getPublicIdFromUrl(url) || '') : '';
 
@@ -92,7 +92,7 @@ const toResourceObj = (item) => {
       path: url.trim(),
       public_id: publicId,
       resource_type: resourceType,
-      mimetype: resourceType === 'raw' && /\.pdf([?#]|$)/i.test(lowerUrl) ? 'application/pdf' : '',
+      mimetype: /\.pdf([?#]|$)/i.test(lowerUrl) ? 'application/pdf' : '',
       size: 0,
     };
   }
@@ -129,8 +129,8 @@ const toResourceObj = (item) => {
     const lowerUrl = (secureUrl || url || '').toLowerCase();
     if (!resType && lowerUrl) {
       if (lowerUrl.includes('/video/upload/')) resType = 'video';
-      else if (lowerUrl.includes('/raw/upload/') || /\.pdf([?#]|$)/i.test(lowerUrl)) resType = 'raw';
-      else if (lowerUrl.includes('/image/upload/')) resType = 'image';
+      else if (lowerUrl.includes('/raw/upload/')) resType = 'raw';
+      else if (lowerUrl.includes('/image/upload/') || /\.pdf([?#]|$)/i.test(lowerUrl)) resType = 'image';
     }
 
     let publicId = (item.public_id || '').trim();
@@ -149,7 +149,7 @@ const toResourceObj = (item) => {
       path: finalSecureUrl,
       public_id: publicId,
       resource_type: (resType || '').trim(),
-      mimetype: (item.mimetype || (resType === 'raw' && /\.pdf([?#]|$)/i.test(lowerUrl) ? 'application/pdf' : '')).trim(),
+      mimetype: (item.mimetype || (/\.pdf([?#]|$)/i.test(lowerUrl) ? 'application/pdf' : '')).trim(),
       size: typeof item.size === 'number' ? item.size : (Number(item.size) || 0),
     };
   }
@@ -935,15 +935,15 @@ exports.addLesson = async (req, res) => {
       const lowerType = actualLessonType.toLowerCase();
 
       if (explicitUploadType === 'pdf_note' || explicitUploadType === 'pdfnotes' || explicitUploadType === 'pdf_notes' || explicitUploadType === 'pdf') {
-        const item = { title: actualLessonTitle || 'PDF Notes', url: singleLink, secure_url: singleLink, resource_type: 'raw' };
+        const item = { title: actualLessonTitle || 'PDF Notes', url: singleLink, secure_url: singleLink, resource_type: 'auto' };
         if (!finalPdfNotes.some((p) => p.url === singleLink)) finalPdfNotes.push(item);
         registerExplicitCategory(item, 'pdfNotes');
       } else if (explicitUploadType === 'assignment' || explicitUploadType === 'assignments') {
-        const item = { title: actualLessonTitle || 'Assignment', url: singleLink, secure_url: singleLink, resource_type: 'raw' };
+        const item = { title: actualLessonTitle || 'Assignment', url: singleLink, secure_url: singleLink, resource_type: 'auto' };
         if (!finalAssignments.some((p) => p.url === singleLink)) finalAssignments.push(item);
         registerExplicitCategory(item, 'assignments');
       } else if (explicitUploadType === 'attachment' || explicitUploadType === 'attachments') {
-        const item = { title: actualLessonTitle || 'Attachment', url: singleLink, secure_url: singleLink, resource_type: 'raw' };
+        const item = { title: actualLessonTitle || 'Attachment', url: singleLink, secure_url: singleLink, resource_type: 'auto' };
         if (!finalAttachments.some((p) => p.url === singleLink)) finalAttachments.push(item);
         registerExplicitCategory(item, 'attachments');
       } else if (lowerType.includes('video') || lowerType === 'recorded video') {
@@ -952,17 +952,17 @@ exports.addLesson = async (req, res) => {
         if (!finalVideoParts.some((p) => p.url === singleLink)) finalVideoParts.push(item);
         registerExplicitCategory(item, 'videoParts');
       } else if (lowerType.includes('assign')) {
-        const item = { title: actualLessonTitle || 'Assignment', url: singleLink, secure_url: singleLink, resource_type: 'raw' };
+        const item = { title: actualLessonTitle || 'Assignment', url: singleLink, secure_url: singleLink, resource_type: 'auto' };
         if (!finalAssignments.some((p) => p.url === singleLink)) finalAssignments.push(item);
         registerExplicitCategory(item, 'assignments');
       } else if (lowerType.includes('pdf')) {
-        const item = { title: actualLessonTitle || 'PDF Notes', url: singleLink, secure_url: singleLink, resource_type: 'raw' };
+        const item = { title: actualLessonTitle || 'PDF Notes', url: singleLink, secure_url: singleLink, resource_type: 'auto' };
         if (!finalPdfNotes.some((p) => p.url === singleLink)) finalPdfNotes.push(item);
         registerExplicitCategory(item, 'pdfNotes');
       } else if (lowerType.includes('live') || lowerType === 'link') {
         if (!actualMeetingUrl) actualMeetingUrl = singleLink;
       } else {
-        const item = { title: actualLessonTitle || 'Attachment', url: singleLink, secure_url: singleLink, resource_type: 'raw' };
+        const item = { title: actualLessonTitle || 'Attachment', url: singleLink, secure_url: singleLink, resource_type: 'auto' };
         if (!finalAttachments.some((p) => p.url === singleLink)) finalAttachments.push(item);
         registerExplicitCategory(item, 'attachments');
       }
@@ -1028,7 +1028,7 @@ exports.addLesson = async (req, res) => {
           const uniqueSuffix = `${Date.now()}-${Math.round(Math.random() * 1e6)}`;
           const publicId = fileExt ? `${cleanBaseName}-${uniqueSuffix}.${fileExt}` : `${cleanBaseName}-${uniqueSuffix}`;
           const uploaded = await uploadBufferToCloudinary(f, folder, {
-            resource_type: 'raw',
+            resource_type: 'auto',
             public_id: publicId,
             timeout: 120000,
           });
@@ -1037,7 +1037,7 @@ exports.addLesson = async (req, res) => {
           f.url = uploaded.secure_url;
           f.path = uploaded.secure_url;
           f.public_id = uploaded.public_id;
-          f.resource_type = 'raw';
+          f.resource_type = uploaded.resource_type || 'auto';
           f.mimetype = (fileMime === 'application/pdf' || fileExt === 'pdf') ? 'application/pdf' : (f.mimetype || 'application/octet-stream');
         } catch (uploadErr) {
           console.error(`[PDF/DOC UPLOAD] Cloudinary upload FAILED: ${uploadErr.message || uploadErr}`);
@@ -1071,7 +1071,7 @@ exports.addLesson = async (req, res) => {
           if (fileMimeType.startsWith('video/') || ALLOWED_VIDEO_FORMATS.includes(fileExt)) {
             explicitResourceType = 'video';
           } else if (fileMimeType === 'application/pdf' || fileExt === 'pdf' || ALLOWED_DOC_FORMATS.includes(fileExt)) {
-            explicitResourceType = 'raw';
+            explicitResourceType = 'auto';
           } else {
             explicitResourceType = 'auto';
           }
@@ -1358,15 +1358,15 @@ exports.updateLesson = async (req, res) => {
       const lowerType = (targetLesson.lessonType || '').toLowerCase();
 
       if (explicitUploadType === 'pdf_note' || explicitUploadType === 'pdfnotes' || explicitUploadType === 'pdf_notes' || explicitUploadType === 'pdf') {
-        const item = { title: targetLesson.lessonTitle || 'PDF Notes', url: singleLink, secure_url: singleLink, resource_type: 'raw' };
+        const item = { title: targetLesson.lessonTitle || 'PDF Notes', url: singleLink, secure_url: singleLink, resource_type: 'auto' };
         if (!targetLesson.pdfNotes.some((p) => p.url === singleLink)) targetLesson.pdfNotes.push(item);
         registerExplicitCategory(item, 'pdfNotes');
       } else if (explicitUploadType === 'assignment' || explicitUploadType === 'assignments') {
-        const item = { title: targetLesson.lessonTitle || 'Assignment', url: singleLink, secure_url: singleLink, resource_type: 'raw' };
+        const item = { title: targetLesson.lessonTitle || 'Assignment', url: singleLink, secure_url: singleLink, resource_type: 'auto' };
         if (!targetLesson.assignments.some((p) => p.url === singleLink)) targetLesson.assignments.push(item);
         registerExplicitCategory(item, 'assignments');
       } else if (explicitUploadType === 'attachment' || explicitUploadType === 'attachments') {
-        const item = { title: targetLesson.lessonTitle || 'Attachment', url: singleLink, secure_url: singleLink, resource_type: 'raw' };
+        const item = { title: targetLesson.lessonTitle || 'Attachment', url: singleLink, secure_url: singleLink, resource_type: 'auto' };
         if (!targetLesson.attachments.some((p) => p.url === singleLink)) targetLesson.attachments.push(item);
         registerExplicitCategory(item, 'attachments');
       } else if (lowerType.includes('video') || lowerType === 'recorded video') {
@@ -1375,17 +1375,17 @@ exports.updateLesson = async (req, res) => {
         if (!targetLesson.videoParts.some((p) => p.url === singleLink)) targetLesson.videoParts.push(item);
         registerExplicitCategory(item, 'videoParts');
       } else if (lowerType.includes('assign')) {
-        const item = { title: targetLesson.lessonTitle || 'Assignment', url: singleLink, secure_url: singleLink, resource_type: 'raw' };
+        const item = { title: targetLesson.lessonTitle || 'Assignment', url: singleLink, secure_url: singleLink, resource_type: 'auto' };
         if (!targetLesson.assignments.some((p) => p.url === singleLink)) targetLesson.assignments.push(item);
         registerExplicitCategory(item, 'assignments');
       } else if (lowerType.includes('pdf')) {
-        const item = { title: targetLesson.lessonTitle || 'PDF Notes', url: singleLink, secure_url: singleLink, resource_type: 'raw' };
+        const item = { title: targetLesson.lessonTitle || 'PDF Notes', url: singleLink, secure_url: singleLink, resource_type: 'auto' };
         if (!targetLesson.pdfNotes.some((p) => p.url === singleLink)) targetLesson.pdfNotes.push(item);
         registerExplicitCategory(item, 'pdfNotes');
       } else if (lowerType.includes('live') || lowerType === 'link') {
         targetLesson.meetingUrl = singleLink;
       } else {
-        const item = { title: targetLesson.lessonTitle || 'Attachment', url: singleLink, secure_url: singleLink, resource_type: 'raw' };
+        const item = { title: targetLesson.lessonTitle || 'Attachment', url: singleLink, secure_url: singleLink, resource_type: 'auto' };
         if (!targetLesson.attachments.some((p) => p.url === singleLink)) targetLesson.attachments.push(item);
         registerExplicitCategory(item, 'attachments');
       }
@@ -1450,7 +1450,7 @@ exports.updateLesson = async (req, res) => {
           const uniqueSuffix = `${Date.now()}-${Math.round(Math.random() * 1e6)}`;
           const publicId = fileExt ? `${cleanBaseName}-${uniqueSuffix}.${fileExt}` : `${cleanBaseName}-${uniqueSuffix}`;
           const uploaded = await uploadBufferToCloudinary(f, folder, {
-            resource_type: 'raw',
+            resource_type: 'auto',
             public_id: publicId,
             timeout: 120000,
           });
@@ -1459,7 +1459,7 @@ exports.updateLesson = async (req, res) => {
           f.url = uploaded.secure_url;
           f.path = uploaded.secure_url;
           f.public_id = uploaded.public_id;
-          f.resource_type = 'raw';
+          f.resource_type = uploaded.resource_type || 'auto';
           f.mimetype = (fileMime === 'application/pdf' || fileExt === 'pdf') ? 'application/pdf' : (f.mimetype || 'application/octet-stream');
         } catch (uploadErr) {
           console.error(`[PDF/DOC UPLOAD] Cloudinary upload FAILED: ${uploadErr.message || uploadErr}`);

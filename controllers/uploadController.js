@@ -1,4 +1,4 @@
-const { deleteCloudinaryByUrl, cloudinary } = require('../config/cloudinary');
+const { deleteCloudinaryByUrl, parseCloudinaryUrl, cloudinary } = require('../config/cloudinary');
 const https = require('https');
 
 const getBaseUrl = (req) => {
@@ -71,12 +71,17 @@ exports.uploadFiles = async (req, res) => {
       const secureUrl = toAbsoluteUrl(rawUrl, req);
       const publicId = file.public_id || file.filename || '';
       
-      let resourceType = file.resource_type || 'image';
-      if (file.mimetype) {
-        if (file.mimetype.startsWith('video/')) resourceType = 'video';
-        else if (file.mimetype.startsWith('audio/')) resourceType = 'audio';
-        else if (file.mimetype === 'application/pdf') resourceType = 'raw';
-        else if (!file.mimetype.startsWith('image/')) resourceType = 'raw';
+      let resourceType = file.resource_type;
+      if (!resourceType) {
+        if (file.mimetype) {
+          if (file.mimetype.startsWith('video/')) resourceType = 'video';
+          else if (file.mimetype.startsWith('audio/')) resourceType = 'audio';
+          else if (file.mimetype === 'application/pdf') resourceType = 'auto';
+          else if (file.mimetype.startsWith('image/')) resourceType = 'image';
+          else resourceType = 'auto';
+        } else {
+          resourceType = 'auto';
+        }
       }
 
       const originalName = (file.originalname || file.filename || 'file')
@@ -266,7 +271,7 @@ exports.getMediaAssets = async (req, res) => {
         url: item.secure_url || item.url,
         format: item.format || (item.public_id.includes('.') ? item.public_id.split('.').pop() : 'unknown'),
         resource_type: item.resource_type || 'image',
-        mimetype: item.resource_type === 'raw' && (item.format === 'pdf' || /\.pdf$/i.test(item.public_id || ''))
+        mimetype: (item.format === 'pdf' || /\.pdf$/i.test(item.public_id || ''))
           ? 'application/pdf'
           : (item.resource_type === 'image' ? `image/${item.format || 'jpeg'}` : ''),
         bytes,
@@ -326,7 +331,38 @@ exports.downloadFile = (req, res) => {
   res.setHeader('Content-Type', /\.pdf$/i.test(filename) ? 'application/pdf' : 'application/octet-stream');
   res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
 
+  const streamFromSignedUrl = () => {
+    try {
+      const parsedInfo = parseCloudinaryUrl(sourceUrl);
+      if (parsedInfo && parsedInfo.publicId) {
+        const ext = path.extname(filename).replace('.', '') || 'pdf';
+        const privUrl = cloudinary.utils.private_download_url(parsedInfo.publicId, ext, {
+          resource_type: parsedInfo.resourceType || 'image',
+          type: 'upload',
+        });
+        const privParsed = new URL(privUrl);
+        const signedReq = https.get(privParsed, (privStream) => {
+          if (privStream.statusCode >= 200 && privStream.statusCode < 300) {
+            if (privStream.headers['content-length']) res.setHeader('Content-Length', privStream.headers['content-length']);
+            return privStream.pipe(res);
+          }
+          privStream.resume();
+          if (!res.headersSent) res.status(privStream.statusCode || 502).end();
+        });
+        signedReq.on('error', (err) => {
+          if (!res.headersSent) res.status(502).json({ success: false, message: 'Failed to download document.', error: err.message });
+        });
+        return;
+      }
+    } catch (_) {}
+    if (!res.headersSent) res.status(502).end();
+  };
+
   const request = https.get(parsed, (upstream) => {
+    if (upstream.statusCode === 401 || upstream.statusCode === 403) {
+      upstream.resume();
+      return streamFromSignedUrl();
+    }
     if (upstream.statusCode < 200 || upstream.statusCode >= 300) {
       upstream.resume();
       if (!res.headersSent) res.status(upstream.statusCode || 502);
@@ -335,9 +371,8 @@ exports.downloadFile = (req, res) => {
     if (upstream.headers['content-length']) res.setHeader('Content-Length', upstream.headers['content-length']);
     upstream.pipe(res);
   });
-  request.on('error', (error) => {
-    if (!res.headersSent) return res.status(502).json({ success: false, message: 'Failed to download document.', error: error.message });
-    res.destroy(error);
+  request.on('error', () => {
+    streamFromSignedUrl();
   });
 };
 
