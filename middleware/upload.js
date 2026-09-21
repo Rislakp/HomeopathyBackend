@@ -288,6 +288,7 @@ const processUploadsToCloudinary = async (req, res, next) => {
             unique_filename: false,
             timeout: isVideo ? 600000 : 120000,
             ...(isVideo ? { chunk_size: 6000000 } : {}),
+            ...(resource_type === 'raw' ? { access_mode: 'public' } : {}),
           });
 
           if (!uploaded || !uploaded.secure_url || !uploaded.public_id || uploaded.resource_type !== resource_type || !(Number(uploaded.bytes) > 0)) {
@@ -383,6 +384,7 @@ const processUploadsToCloudinary = async (req, res, next) => {
             use_filename: false,
             unique_filename: false,
             timeout: isVideo ? 600000 : 120000,
+            ...(resource_type === 'raw' ? { access_mode: 'public' } : {}),
             ...(isVideo ? { chunk_size: 6000000 } : {}),
           };
 
