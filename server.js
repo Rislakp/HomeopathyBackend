@@ -34,6 +34,8 @@ const allowedOrigins = [
   'https://whitecoat.academy',
   'https://www.whitecoat.academy',
   'https://admin.whitecoat.academy',
+  'https://student.whitecoat.academy',
+  'https://student-portal.whitecoat.academy',
 ];
 
 if (process.env.ALLOWED_ORIGINS) {
@@ -234,6 +236,9 @@ app.use((req, res, next) => {
 
 // 500 Global Error Handler Middleware
 app.use((err, req, res, next) => {
+  if (err.message && err.message.startswith('CORS error')) {
+    return res.status(403).json({ success: false, message: err.message });
+  }
   console.error('Express Error Handler:', err);
   res.status(err.status || 500).json({
     success: false,
