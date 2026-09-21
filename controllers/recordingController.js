@@ -495,6 +495,9 @@ exports.uploadRecordingVideo = async (req, res) => {
     if (!secureUrl || !secureUrl.includes('res.cloudinary.com')) {
       throw new Error('Cloudinary did not return a public secure URL.');
     }
+    
+    // Save to req for potential cleanup in catch block
+    req.uploadedSecureUrl = secureUrl;
 
     // Extract Cloudinary image/video dimensions & specs if present
     const width = Number(uploaded.width || req.body.width) || 1920;
@@ -557,6 +560,9 @@ exports.uploadRecordingVideo = async (req, res) => {
       data: formatRecordingDocument(populatedRec),
     });
   } catch (error) {
+    if (req.uploadedSecureUrl) {
+      deleteCloudinaryByUrl(req.uploadedSecureUrl).catch(err => console.error('Failed to cleanup recording video on save failure:', err));
+    }
     console.error('========== UPLOAD RECORDING VIDEO ERROR ==========');
     console.error('MESSAGE:', error?.message);
     console.error('STACK:', error?.stack);

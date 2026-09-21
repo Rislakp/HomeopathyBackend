@@ -53,6 +53,8 @@ router.post('/api/exams', requireAdmin, createGrandMockExam);
 // Admin Route: Get Summary List of Grand Mock Exams
 router.get('/api/exams/grand-mock', getAllGrandMocks);
 router.get('/api/exams', getAllGrandMocks);
+router.get('/api/admin/exams', getAllGrandMocks);
+router.get('/api/v1/admin/exams', getAllGrandMocks);
 
 // Admin Route: Get Single Grand Mock Exam with Questions
 router.get('/api/exams/grand-mock/:id', getGrandMockById);

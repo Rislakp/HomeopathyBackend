@@ -61,12 +61,31 @@ function formatCourseForStudent(courseDoc) {
 
           ['videoParts', 'pdfNotes', 'assignments', 'attachments'].forEach((resKey) => {
             if (Array.isArray(les[resKey])) {
-              les[resKey] = les[resKey].map((resItem) => ({
-                ...resItem,
-                url: ensureAbsoluteUrl(resItem.url),
-              }));
+              les[resKey] = les[resKey].map((resItem) => {
+                const canonical = resItem.secure_url || resItem.url || resItem.fileUrl || resItem.documentUrl || resItem.path || '';
+                const absUrl = ensureAbsoluteUrl(canonical);
+                return {
+                  ...resItem,
+                  url: absUrl,
+                  secure_url: absUrl,
+                  fileUrl: absUrl,
+                  documentUrl: absUrl,
+                  path: absUrl,
+                };
+              });
             }
           });
+
+          const primaryDoc = (les.pdfNotes && les.pdfNotes[0]) || (les.attachments && les.attachments[0]) || (les.assignments && les.assignments[0]) || null;
+          const primaryDocUrl = primaryDoc ? (primaryDoc.url || primaryDoc.secure_url || '') : '';
+          const primaryLessonUrl = primaryDocUrl || les.videoUrl || '';
+
+          les.fileUrl = primaryDocUrl || primaryLessonUrl;
+          les.documentUrl = primaryDocUrl || primaryLessonUrl;
+          les.pdfUrl = primaryDocUrl;
+          les.path = primaryDocUrl || primaryLessonUrl;
+          les.url = primaryDocUrl || primaryLessonUrl;
+
           return les;
         });
       }
@@ -136,7 +155,8 @@ const getMyCourses = async (req, res) => {
         thumbnail: formattedCourse.thumbnail || formattedCourse.bannerUrl,
         bannerUrl: formattedCourse.bannerUrl,
         duration: formattedCourse.duration,
-        totalModules,
+        modules: formattedCourse.modules || [],
+        totalModules: Array.isArray(formattedCourse.modules) ? formattedCourse.modules.length : (c.modules ? c.modules.length : totalModules),
         totalLessons,
         createdAt: formattedCourse.createdAt,
       };

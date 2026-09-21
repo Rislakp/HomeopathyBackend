@@ -205,64 +205,130 @@ async function getAvailableExams(req, res) {
     const filter = {};
     const reqQuery = req ? (req.query || {}) : {};
     const queryType = reqQuery.testType || reqQuery.type;
-    if (queryType && queryType.trim()) {
-      filter.testType = normalizeTestType(queryType);
+
+    const isExplicitGrandMock = queryType && normalizeTestType(queryType) === 'grand_mock';
+    const isExplicitCourseTest = queryType && normalizeTestType(queryType) === 'course_test';
+
+    const targetCourseId = reqQuery.courseId ? String(reqQuery.courseId).trim() : null;
+
+    if (isExplicitGrandMock) {
+      filter.testType = { $ne: 'course_test' };
+      filter.$or = [
+        { testType: 'grand_mock' },
+        { testType: { $regex: /^(grand[-_ ]?mock|mock)$/i } },
+        { testType: { $exists: false } },
+        { testType: null },
+        { testType: '' }
+      ];
+    } else if (isExplicitCourseTest) {
+      filter.testType = 'course_test';
     }
 
-    let courseDoc = null;
-    if (!isStaff && studentDoc) {
-      const studentCourseRef = studentDoc.courseRef || req.user?.courseRef;
-      const studentCourseId = studentDoc.courseId || req.user?.courseId;
-      const studentCourseTitle = studentDoc.course || studentDoc.preferredCourse || req.user?.course;
+    if (targetCourseId && !isExplicitGrandMock) {
+      if (!isStaff && studentDoc) {
+        const hasAccess = await verifyStudentCourseAccess(req.user, targetCourseId);
+        if (!hasAccess) {
+          return res.status(403).json({
+            success: false,
+            message: 'You are not authorized to access exams for this course.'
+          });
+        }
+      }
 
+      filter.testType = 'course_test';
       const CourseModel = mongoose.models.Course || require('../../models/Course');
-      if (studentCourseRef && mongoose.Types.ObjectId.isValid(studentCourseRef)) {
-        courseDoc = await CourseModel.findById(studentCourseRef).lean();
+      let targetCourseDoc = null;
+      if (mongoose.Types.ObjectId.isValid(targetCourseId)) {
+        targetCourseDoc = await CourseModel.findById(targetCourseId).lean();
       }
-      if (!courseDoc && studentCourseId) {
-        courseDoc = await CourseModel.findOne({
-          $or: [
-            ...(mongoose.Types.ObjectId.isValid(studentCourseId) ? [{ _id: studentCourseId }] : []),
-            { courseId: studentCourseId }
-          ]
-        }).lean();
-      }
-      if (!courseDoc && studentCourseTitle) {
-        courseDoc = await CourseModel.findOne({
-          $or: [{ courseTitle: studentCourseTitle }, { title: studentCourseTitle }]
-        }).lean();
+      if (!targetCourseDoc) {
+        targetCourseDoc = await CourseModel.findOne({ courseId: targetCourseId }).lean();
       }
 
-      const courseOrFilter = [];
-      if (studentCourseRef) {
-        if (mongoose.Types.ObjectId.isValid(studentCourseRef)) {
-          courseOrFilter.push({ courseId: new mongoose.Types.ObjectId(studentCourseRef) });
-        }
-        courseOrFilter.push({ courseId: studentCourseRef.toString() });
+      const specificCourseOr = [{ courseId: targetCourseId }];
+      if (mongoose.Types.ObjectId.isValid(targetCourseId)) {
+        specificCourseOr.push({ courseId: new mongoose.Types.ObjectId(targetCourseId) });
       }
-      if (courseDoc) {
-        if (courseDoc._id) {
-          courseOrFilter.push({ courseId: courseDoc._id });
-          courseOrFilter.push({ courseId: courseDoc._id.toString() });
+      if (targetCourseDoc) {
+        if (targetCourseDoc._id) {
+          specificCourseOr.push({ courseId: targetCourseDoc._id });
+          specificCourseOr.push({ courseId: targetCourseDoc._id.toString() });
         }
-        if (courseDoc.courseId) {
-          courseOrFilter.push({ courseId: courseDoc.courseId });
-        }
-        if (courseDoc.courseTitle) {
-          courseOrFilter.push({ courseName: courseDoc.courseTitle });
+        if (targetCourseDoc.courseId) {
+          specificCourseOr.push({ courseId: targetCourseDoc.courseId });
         }
       }
-      if (studentCourseId) {
-        courseOrFilter.push({ courseId: studentCourseId });
-      }
-      if (studentCourseTitle) {
-        courseOrFilter.push({ courseName: studentCourseTitle });
-      }
+      filter.$or = specificCourseOr;
+    } else {
+      let courseDoc = null;
+      if (!isStaff && studentDoc && !isExplicitGrandMock) {
+        const studentCourseRef = studentDoc.courseRef || req.user?.courseRef;
+        const studentCourseId = studentDoc.courseId || req.user?.courseId;
+        const studentCourseTitle = studentDoc.course || studentDoc.preferredCourse || req.user?.course;
 
-      if (courseOrFilter.length > 0) {
-        filter.$or = courseOrFilter;
-      } else {
-        return res.status(200).json({ success: true, count: 0, data: [] });
+        const CourseModel = mongoose.models.Course || require('../../models/Course');
+        if (studentCourseRef && mongoose.Types.ObjectId.isValid(studentCourseRef)) {
+          courseDoc = await CourseModel.findById(studentCourseRef).lean();
+        }
+        if (!courseDoc && studentCourseId) {
+          courseDoc = await CourseModel.findOne({
+            $or: [
+              ...(mongoose.Types.ObjectId.isValid(studentCourseId) ? [{ _id: studentCourseId }] : []),
+              { courseId: studentCourseId }
+            ]
+          }).lean();
+        }
+        if (!courseDoc && studentCourseTitle) {
+          courseDoc = await CourseModel.findOne({
+            $or: [{ courseTitle: studentCourseTitle }, { title: studentCourseTitle }]
+          }).lean();
+        }
+
+        const courseOrFilter = [];
+        if (studentCourseRef) {
+          if (mongoose.Types.ObjectId.isValid(studentCourseRef)) {
+            courseOrFilter.push({ courseId: new mongoose.Types.ObjectId(studentCourseRef) });
+          }
+          courseOrFilter.push({ courseId: studentCourseRef.toString() });
+        }
+        if (courseDoc) {
+          if (courseDoc._id) {
+            courseOrFilter.push({ courseId: courseDoc._id });
+            courseOrFilter.push({ courseId: courseDoc._id.toString() });
+          }
+          if (courseDoc.courseId) {
+            courseOrFilter.push({ courseId: courseDoc.courseId });
+          }
+          if (courseDoc.courseTitle) {
+            courseOrFilter.push({ courseName: courseDoc.courseTitle });
+          }
+        }
+        if (studentCourseId) {
+          courseOrFilter.push({ courseId: studentCourseId });
+        }
+        if (studentCourseTitle) {
+          courseOrFilter.push({ courseName: studentCourseTitle });
+        }
+
+        if (courseOrFilter.length > 0) {
+          if (isExplicitCourseTest) {
+            filter.$or = courseOrFilter;
+          } else {
+            // Allow enrolled course exams OR grand mocks
+            filter.$or = [
+              ...courseOrFilter,
+              { testType: 'grand_mock' },
+              { testType: { $regex: /^(grand[-_ ]?mock|mock)$/i } },
+              { courseId: null }
+            ];
+          }
+        } else {
+          if (isExplicitCourseTest) {
+            return res.status(200).json({ success: true, count: 0, data: [] });
+          } else {
+            filter.testType = { $ne: 'course_test' };
+          }
+        }
       }
     }
 
@@ -350,12 +416,14 @@ async function startExam(req, res) {
       });
     }
 
-    const hasAccess = await verifyStudentCourseAccess(req.user, exam.courseId);
-    if (!hasAccess) {
-      return res.status(403).json({
-        success: false,
-        message: 'You are not authorized to access this exam.'
-      });
+    if (exam.courseId && normalizeTestType(exam.testType) === 'course_test') {
+      const hasAccess = await verifyStudentCourseAccess(req.user, exam.courseId);
+      if (!hasAccess) {
+        return res.status(403).json({
+          success: false,
+          message: 'You are not authorized to access this exam.'
+        });
+      }
     }
 
     const { courseName, moduleName, canonicalCourseId } = await resolveCourseAndModuleNames(exam);
@@ -501,12 +569,14 @@ async function submitExam(req, res) {
       });
     }
 
-    const hasAccess = await verifyStudentCourseAccess(req.user, exam.courseId);
-    if (!hasAccess) {
-      return res.status(403).json({
-        success: false,
-        message: 'You are not authorized to access this exam.'
-      });
+    if (exam.courseId && normalizeTestType(exam.testType) === 'course_test') {
+      const hasAccess = await verifyStudentCourseAccess(req.user, exam.courseId);
+      if (!hasAccess) {
+        return res.status(403).json({
+          success: false,
+          message: 'You are not authorized to access this exam.'
+        });
+      }
     }
 
     // ── Scoring Rules — read from the exam document stored in MongoDB ──────
@@ -674,7 +744,19 @@ async function getStudentResults(req, res) {
     let matchingExamIds = null;
     if (filterType && filterType.trim()) {
       const targetType = normalizeTestType(filterType);
-      const matchingExams = await Exam.find({ testType: targetType }).select('_id').lean();
+      const query = targetType === 'grand_mock'
+        ? {
+            testType: { $ne: 'course_test' },
+            $or: [
+              { testType: 'grand_mock' },
+              { testType: { $regex: /^(grand[-_ ]?mock|mock)$/i } },
+              { testType: { $exists: false } },
+              { testType: null },
+              { testType: '' }
+            ]
+          }
+        : { testType: 'course_test' };
+      const matchingExams = await Exam.find(query).select('_id').lean();
       matchingExamIds = matchingExams.map(e => e._id.toString());
     }
 
@@ -687,13 +769,19 @@ async function getStudentResults(req, res) {
       results = results.filter(r => r.examId && matchingExamIds.includes(r.examId._id ? r.examId._id.toString() : r.examId.toString()));
     }
     
-    // Also, strictly filter out results for exams belonging to courses the student doesn't have access to
+    // For course tests, strictly filter out results for courses the student no longer has access to.
+    // Grand mock tests are global and bypass course verification.
     const validResults = [];
     for (const r of results) {
       if (!r.examId) continue;
-      const courseId = r.examId.courseId;
-      const hasAccess = await verifyStudentCourseAccess(req.user, courseId);
-      if (hasAccess) {
+      const exam = r.examId;
+      if (exam.courseId && normalizeTestType(exam.testType) === 'course_test') {
+        const hasAccess = await verifyStudentCourseAccess(req.user, exam.courseId);
+        if (hasAccess) {
+          validResults.push(r);
+        }
+      } else {
+        // Grand mock results are global
         validResults.push(r);
       }
     }

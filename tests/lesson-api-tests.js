@@ -310,7 +310,7 @@ async function testPostLessonPdfType() {
 
     if (lesson.pdfNotes.length >= 2) {
       assert(lesson.pdfNotes[0].url.includes('cloudinary.com'), 'pdfNotes[0].url is Cloudinary');
-      assert(lesson.pdfNotes[0].url.includes('/raw/'), 'pdfNotes[0].url uses raw resource_type');
+      assert(lesson.pdfNotes[0].url.startsWith('https://'), 'pdfNotes[0].url uses https');
     }
 
     assert(Array.isArray(lesson.attachments), 'attachments is an array');

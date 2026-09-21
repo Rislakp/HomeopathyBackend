@@ -17,9 +17,9 @@ async function resolveCourseAndModuleNames(exam) {
   let moduleName = exam.moduleName || null;
 
   if (exam.courseId) {
-    if (typeof exam.courseId === 'object') {
+    if (typeof exam.courseId === 'object' && !(exam.courseId instanceof mongoose.Types.ObjectId) && (exam.courseId.courseTitle || exam.courseId.title || exam.courseId.name)) {
       if (!courseName) {
-        courseName = exam.courseId.courseTitle || exam.courseId.title || null;
+        courseName = exam.courseId.courseTitle || exam.courseId.title || exam.courseId.name || null;
       }
       if (!moduleName && exam.moduleId && Array.isArray(exam.courseId.modules)) {
         const modObj = exam.courseId.modules.find(
@@ -29,30 +29,35 @@ async function resolveCourseAndModuleNames(exam) {
           moduleName = modObj.moduleName || null;
         }
       }
-    } else if (typeof exam.courseId === 'string' && (!courseName || !moduleName)) {
-      try {
-        const isObjId = mongoose.Types.ObjectId.isValid(exam.courseId);
-        const CourseModel = mongoose.models.Course || require('../models/Course');
-        const foundCourse = await CourseModel.findOne({
-          $or: [
-            ...(isObjId ? [{ _id: exam.courseId }] : []),
-            { courseId: exam.courseId }
-          ]
-        }).lean();
+    } else {
+      const rawCourseId = exam.courseId ? exam.courseId.toString().trim() : '';
+      const courseIdStr = (rawCourseId && rawCourseId !== 'null' && rawCourseId !== 'undefined') ? rawCourseId : null;
+      if (courseIdStr && (!courseName || !moduleName)) {
+        try {
+          const isObjId = mongoose.Types.ObjectId.isValid(courseIdStr);
+          const CourseModel = mongoose.models.Course || require('../models/Course');
+          const foundCourse = await CourseModel.findOne({
+            $or: [
+              ...(isObjId ? [{ _id: new mongoose.Types.ObjectId(courseIdStr) }] : []),
+              { courseId: courseIdStr },
+              { _id: courseIdStr }
+            ]
+          }).lean();
 
-        if (foundCourse) {
-          if (!courseName) courseName = foundCourse.courseTitle || foundCourse.title || null;
-          if (!moduleName && exam.moduleId && Array.isArray(foundCourse.modules)) {
-            const modObj = foundCourse.modules.find(
-              (m) => m && ((m._id && m._id.toString() === exam.moduleId.toString()) || m.moduleName === exam.moduleId)
-            );
-            if (modObj) {
-              moduleName = modObj.moduleName || null;
+          if (foundCourse) {
+            if (!courseName) courseName = foundCourse.courseTitle || foundCourse.title || foundCourse.name || null;
+            if (!moduleName && exam.moduleId && Array.isArray(foundCourse.modules)) {
+              const modObj = foundCourse.modules.find(
+                (m) => m && ((m._id && m._id.toString() === exam.moduleId.toString()) || m.moduleName === exam.moduleId)
+              );
+              if (modObj) {
+                moduleName = modObj.moduleName || null;
+              }
             }
           }
+        } catch (err) {
+          // Optional lookup error handled gracefully
         }
-      } catch (err) {
-        // Optional lookup error handled gracefully
       }
     }
   }
@@ -425,7 +430,18 @@ async function createGrandMockExam(req, res) {
       questions,
     } = req.body;
 
-    const finalTestType = normalizeTestType(testType);
+    const sanitizedCourseId = (courseId !== undefined && courseId !== null && String(courseId).trim() !== '')
+      ? String(courseId).trim()
+      : null;
+
+    let finalTestType;
+    if (testType && typeof testType === 'string' && testType.trim()) {
+      finalTestType = normalizeTestType(testType);
+    } else if (sanitizedCourseId) {
+      finalTestType = 'course_test';
+    } else {
+      finalTestType = 'grand_mock';
+    }
 
     // Validate required fields
     if (!title || marksPerQuestion === undefined || durationMinutes === undefined || totalQuestions === undefined || !questions) {
@@ -480,10 +496,6 @@ async function createGrandMockExam(req, res) {
         message: questionValidation.error
       });
     }
-
-    const sanitizedCourseId = (courseId !== undefined && courseId !== null && String(courseId).trim() !== '')
-      ? String(courseId).trim()
-      : null;
 
     const sanitizedModuleId = (moduleId !== undefined && moduleId !== null && String(moduleId).trim() !== '')
       ? String(moduleId).trim()
@@ -553,42 +565,136 @@ async function createGrandMockExam(req, res) {
 /**
  * GET /api/exams/grand-mock or /api/exams
  * Fetches exams excluding the questions array for summary list.
- * Optionally filters by ?testType=grand_mock or ?testType=course_test (handles query parameter variations gracefully).
+ * Supports /api/exams (returns all exams including course tests for admin test history),
+ * and /api/exams/grand-mock (returns grand mocks only).
  */
 async function getAllGrandMocks(req, res) {
   try {
     const filter = {};
     const reqQuery = req ? (req.query || {}) : {};
     const queryType = reqQuery.testType || reqQuery.type;
-    if (queryType && queryType.trim()) {
-      filter.testType = normalizeTestType(queryType);
-    }
-    
-    // Add student authorization filter
+    const reqUrl = (req?.originalUrl || req?.baseUrl || req?.path || '').toLowerCase();
+    const isGrandMockEndpoint = reqUrl.includes('grand-mock');
+
+    const cleanQueryType = queryType ? String(queryType).trim().toLowerCase().replace(/[\s-]+/g, '_') : null;
+    const isExplicitCourseTest = cleanQueryType === 'course_test' || cleanQueryType === 'course';
+    const isExplicitGrandMock = cleanQueryType === 'grand_mock' || cleanQueryType === 'mock';
+
+    // Verify student account status if caller is an authenticated student
     if (req.user && req.user.role === 'student') {
       const Student = require('../models/Student');
-      const student = await Student.findOne({ userId: req.user.id }) || await Student.findById(req.user.id);
-      
+      const studentId = req.user.studentId || req.user.id || req.user._id;
+      let student = null;
+      if (studentId && mongoose.Types.ObjectId.isValid(studentId)) {
+        student = await Student.findOne({
+          $or: [
+            { _id: new mongoose.Types.ObjectId(studentId) },
+            { userId: new mongoose.Types.ObjectId(studentId) }
+          ]
+        });
+      }
+      if (!student && req.user.email) {
+        student = await Student.findOne({ email: req.user.email.toLowerCase() });
+      }
+
       if (!student) {
         return res.status(403).json({ success: false, message: 'Student profile not found.' });
       }
-      if (student.accountStatus !== 'Approved' && student.status !== 'Active') {
+      if (student.accountStatus && !['Approved', 'Active', 'approved', 'active'].includes(student.accountStatus) &&
+          student.status && !['Approved', 'Active', 'approved', 'active'].includes(student.status)) {
         return res.status(403).json({ success: false, message: 'Account is not active or approved.' });
       }
-      
-      const courseOrFilter = [];
-      if (student.courseRef) {
-        courseOrFilter.push({ courseId: student.courseRef });
-        courseOrFilter.push({ courseId: student.courseRef.toString() });
+    }
+
+    if (isGrandMockEndpoint || isExplicitGrandMock) {
+      // Specifically Grand Mock query
+      filter.testType = { $ne: 'course_test' };
+      filter.$or = [
+        { testType: 'grand_mock' },
+        { testType: { $regex: /^(grand[-_ ]?mock|mock)$/i } },
+        { testType: { $exists: false } },
+        { testType: null },
+        { testType: '' }
+      ];
+    } else if (isExplicitCourseTest) {
+      filter.testType = 'course_test';
+      if (reqQuery.courseId && String(reqQuery.courseId).trim()) {
+        filter.courseId = String(reqQuery.courseId).trim();
       }
-      if (student.courseId) {
-        courseOrFilter.push({ courseId: student.courseId });
+      // For explicit course tests, apply student course filtering if student
+      if (req.user && req.user.role === 'student') {
+        const Student = require('../models/Student');
+        const studentId = req.user.studentId || req.user.id || req.user._id;
+        let student = null;
+        if (studentId && mongoose.Types.ObjectId.isValid(studentId)) {
+          student = await Student.findOne({
+            $or: [
+              { _id: new mongoose.Types.ObjectId(studentId) },
+              { userId: new mongoose.Types.ObjectId(studentId) }
+            ]
+          });
+        }
+        if (!student && req.user.email) {
+          student = await Student.findOne({ email: req.user.email.toLowerCase() });
+        }
+
+        if (student) {
+          const courseOrFilter = [];
+          if (student.courseRef) {
+            courseOrFilter.push({ courseId: student.courseRef });
+            courseOrFilter.push({ courseId: student.courseRef.toString() });
+          }
+          if (student.courseId) {
+            courseOrFilter.push({ courseId: student.courseId });
+          }
+          if (courseOrFilter.length > 0) {
+            if (!filter.courseId) {
+              filter.$or = courseOrFilter;
+            }
+          } else {
+            return res.status(200).json({ success: true, count: 0, data: [] });
+          }
+        }
       }
-      if (courseOrFilter.length > 0) {
-        filter.$or = courseOrFilter;
-      } else {
-        return res.status(200).json({ success: true, count: 0, data: [] });
+    } else {
+      // General endpoint (e.g. GET /api/exams - Admin test history listing):
+      // Returns ALL tests including course tests and grand mocks!
+      if (reqQuery.courseId && String(reqQuery.courseId).trim()) {
+        filter.courseId = String(reqQuery.courseId).trim();
       }
+      if (req.user && req.user.role === 'student') {
+        const Student = require('../models/Student');
+        const studentId = req.user.studentId || req.user.id || req.user._id;
+        let student = null;
+        if (studentId && mongoose.Types.ObjectId.isValid(studentId)) {
+          student = await Student.findOne({
+            $or: [
+              { _id: new mongoose.Types.ObjectId(studentId) },
+              { userId: new mongoose.Types.ObjectId(studentId) }
+            ]
+          });
+        }
+        if (!student && req.user.email) {
+          student = await Student.findOne({ email: req.user.email.toLowerCase() });
+        }
+
+        const courseOrFilter = [];
+        if (student?.courseRef) {
+          courseOrFilter.push({ courseId: student.courseRef });
+          courseOrFilter.push({ courseId: student.courseRef.toString() });
+        }
+        if (student?.courseId) {
+          courseOrFilter.push({ courseId: student.courseId });
+        }
+        filter.$or = [
+          ...courseOrFilter,
+          { testType: 'grand_mock' },
+          { testType: { $regex: /^(grand[-_ ]?mock|mock)$/i } },
+          { testType: { $exists: false } },
+          { courseId: null }
+        ];
+      }
+      // For Admins / Staff: no testType restriction, so all tests are returned!
     }
 
     const exams = await Exam.find(filter)
@@ -613,14 +719,51 @@ async function getAllGrandMocks(req, res) {
 
     const formattedExams = await Promise.all(exams.map(async (exam) => {
       const { courseName, moduleName } = await resolveCourseAndModuleNames(exam);
+      const rawCourseId = exam.courseId ? (typeof exam.courseId === 'object' && exam.courseId._id ? exam.courseId._id.toString() : exam.courseId.toString()).trim() : '';
+      const courseIdStr = (rawCourseId && rawCourseId !== 'null' && rawCourseId !== 'undefined') ? rawCourseId : null;
+      const rawModuleId = exam.moduleId ? (typeof exam.moduleId === 'object' && exam.moduleId._id ? exam.moduleId._id.toString() : exam.moduleId.toString()).trim() : '';
+      const moduleIdStr = (rawModuleId && rawModuleId !== 'null' && rawModuleId !== 'undefined') ? rawModuleId : null;
+
+      let normalizedType = exam.testType ? normalizeTestType(exam.testType) : null;
+      if (!normalizedType || normalizedType === 'grand_mock') {
+        if (courseIdStr && (exam.testType === 'course_test' || !exam.testType)) {
+          normalizedType = 'course_test';
+        }
+      }
+      if (!normalizedType) {
+        normalizedType = courseIdStr ? 'course_test' : 'grand_mock';
+      }
+
+      const finalCourseName = courseName || exam.courseName || null;
+      const finalModuleName = moduleName || exam.moduleName || null;
+      const resolvedTotalQuestions = exam.totalQuestions !== undefined && exam.totalQuestions !== null
+        ? exam.totalQuestions
+        : (Array.isArray(exam.questions) ? exam.questions.length : 0);
+
       return {
         ...exam,
-        courseName,
-        moduleName,
-        testType: exam.testType || 'Grand Mock Test',
+        courseId: courseIdStr,
+        courseName: finalCourseName,
+        moduleId: moduleIdStr,
+        moduleName: finalModuleName,
+        testType: normalizedType,
+        totalQuestions: resolvedTotalQuestions,
+        questionsCount: resolvedTotalQuestions,
+        durationMinutes: exam.durationMinutes ?? 0,
+        marksPerQuestion: exam.marksPerQuestion ?? 1,
         negativeMark: exam.negativeMark !== undefined && exam.negativeMark !== null
           ? exam.negativeMark
           : (exam.negativeMarkPenalty ?? 0),
+        negativeMarkPenalty: exam.negativeMarkPenalty !== undefined && exam.negativeMarkPenalty !== null
+          ? exam.negativeMarkPenalty
+          : (exam.negativeMark ?? 0),
+        course: courseIdStr ? {
+          _id: courseIdStr,
+          id: courseIdStr,
+          courseTitle: finalCourseName || '',
+          title: finalCourseName || '',
+          name: finalCourseName || ''
+        } : null,
         studentsAttended: countMap[exam._id.toString()] || 0
       };
     }));
@@ -668,29 +811,82 @@ async function getGrandMockById(req, res) {
     // Add student authorization filter
     if (req.user && req.user.role === 'student') {
       const Student = require('../models/Student');
-      const student = await Student.findOne({ userId: req.user.id }) || await Student.findById(req.user.id);
+      const studentId = req.user.studentId || req.user.id || req.user._id;
+      let student = null;
+      if (studentId && mongoose.Types.ObjectId.isValid(studentId)) {
+        student = await Student.findOne({
+          $or: [
+            { _id: new mongoose.Types.ObjectId(studentId) },
+            { userId: new mongoose.Types.ObjectId(studentId) }
+          ]
+        });
+      }
+      if (!student && req.user.email) {
+        student = await Student.findOne({ email: req.user.email.toLowerCase() });
+      }
       
       if (!student) {
         return res.status(403).json({ success: false, message: 'Student profile not found.' });
       }
-      if (student.accountStatus !== 'Approved' && student.status !== 'Active') {
+      if (student.accountStatus && !['Approved', 'Active', 'approved', 'active'].includes(student.accountStatus) &&
+          student.status && !['Approved', 'Active', 'approved', 'active'].includes(student.status)) {
         return res.status(403).json({ success: false, message: 'Account is not active or approved.' });
       }
       
-      const hasAccess = await verifyStudentCourseAccess(req.user, exam.courseId);
-      if (!hasAccess) {
-        return res.status(403).json({ success: false, message: 'You are not authorized to access this exam.' });
+      // Only verify course access if this exam is explicitly a course test
+      if (exam.courseId && normalizeTestType(exam.testType) === 'course_test') {
+        const hasAccess = await verifyStudentCourseAccess(req.user, exam.courseId);
+        if (!hasAccess) {
+          return res.status(403).json({ success: false, message: 'You are not authorized to access this exam.' });
+        }
       }
     }
 
+    const rawCourseId = exam.courseId ? (typeof exam.courseId === 'object' && exam.courseId._id ? exam.courseId._id.toString() : exam.courseId.toString()).trim() : '';
+    const courseIdStr = (rawCourseId && rawCourseId !== 'null' && rawCourseId !== 'undefined') ? rawCourseId : null;
+    const rawModuleId = exam.moduleId ? (typeof exam.moduleId === 'object' && exam.moduleId._id ? exam.moduleId._id.toString() : exam.moduleId.toString()).trim() : '';
+    const moduleIdStr = (rawModuleId && rawModuleId !== 'null' && rawModuleId !== 'undefined') ? rawModuleId : null;
+
+    let normalizedType = exam.testType ? normalizeTestType(exam.testType) : null;
+    if (!normalizedType || normalizedType === 'grand_mock') {
+      if (courseIdStr && (exam.testType === 'course_test' || !exam.testType)) {
+        normalizedType = 'course_test';
+      }
+    }
+    if (!normalizedType) {
+      normalizedType = courseIdStr ? 'course_test' : 'grand_mock';
+    }
+
+    const finalCourseName = courseName || exam.courseName || null;
+    const finalModuleName = moduleName || exam.moduleName || null;
+    const resolvedTotalQuestions = exam.totalQuestions !== undefined && exam.totalQuestions !== null
+      ? exam.totalQuestions
+      : (Array.isArray(exam.questions) ? exam.questions.length : 0);
+
     const formattedExam = {
       ...exam,
-      courseName,
-      moduleName,
-      testType: exam.testType || 'Grand Mock Test',
+      courseId: courseIdStr,
+      courseName: finalCourseName,
+      moduleId: moduleIdStr,
+      moduleName: finalModuleName,
+      testType: normalizedType,
+      totalQuestions: resolvedTotalQuestions,
+      questionsCount: resolvedTotalQuestions,
+      durationMinutes: exam.durationMinutes ?? 0,
+      marksPerQuestion: exam.marksPerQuestion ?? 1,
       negativeMark: exam.negativeMark !== undefined && exam.negativeMark !== null
         ? exam.negativeMark
-        : (exam.negativeMarkPenalty ?? 0)
+        : (exam.negativeMarkPenalty ?? 0),
+      negativeMarkPenalty: exam.negativeMarkPenalty !== undefined && exam.negativeMarkPenalty !== null
+        ? exam.negativeMarkPenalty
+        : (exam.negativeMark ?? 0),
+      course: courseIdStr ? {
+        _id: courseIdStr,
+        id: courseIdStr,
+        courseTitle: finalCourseName || '',
+        title: finalCourseName || '',
+        name: finalCourseName || ''
+      } : null
     };
 
     return res.status(200).json({

@@ -56,10 +56,16 @@ router.post('/api/exams', requireAdmin, createGrandMockExam);
 // Endpoint to get all Grand Mock exams (Summary list)
 router.get('/api/exams/grand-mock', requireAuthUser, getAllGrandMocks);
 router.get('/api/exams', requireAuthUser, getAllGrandMocks);
+router.get('/api/admin/exams', requireAuthUser, getAllGrandMocks);
+router.get('/api/v1/exams/grand-mock', requireAuthUser, getAllGrandMocks);
+router.get('/api/v1/exams', requireAuthUser, getAllGrandMocks);
+router.get('/api/v1/admin/exams', requireAuthUser, getAllGrandMocks);
 
 // Endpoint to get single Grand Mock exam details
 router.get('/api/exams/grand-mock/:id', requireAuthUser, getGrandMockById);
 router.get('/api/exams/:id', requireAuthUser, getGrandMockById);
+router.get('/api/v1/exams/grand-mock/:id', requireAuthUser, getGrandMockById);
+router.get('/api/v1/exams/:id', requireAuthUser, getGrandMockById);
 
 // Admin Route: Update Grand Mock Exam
 router.put('/api/exams/grand-mock/:id', updateGrandMockExam);
