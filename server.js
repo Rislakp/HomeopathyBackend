@@ -57,9 +57,12 @@ const corsOptions = {
       return callback(null, true);
     }
 
-    // Allow localhost and 127.0.0.1 on any port (for local dev & Flutter Web)
-    const isLocalhost = /^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/.test(origin);
-    if (isLocalhost) {
+    // Allow mobile WebViews & emulator origins (file://, capacitor://, ionic://, 10.0.2.2, localhost)
+    const isMobileAppScheme = /^https?:\/\/(localhost|127\.0\.0\.1|10\.0\.2\.2)(:\d+)?$/.test(origin) ||
+                              origin.startsWith('file://') ||
+                              origin.startsWith('capacitor://') ||
+                              origin.startsWith('ionic://');
+    if (isMobileAppScheme) {
       return callback(null, true);
     }
 
@@ -84,7 +87,7 @@ app.use(express.urlencoded({ limit: '100mb', extended: true }));
 app.use((req, res, next) => {
   const url = (req.originalUrl || req.url || '').toLowerCase();
   const isUploadRoute = url.includes('/upload') || url.includes('/recordings') || url.includes('/media');
-  const timeoutMs = isUploadRoute ? 120000 : 30000;
+  const timeoutMs = isUploadRoute ? 120000 : 60000;
 
   res.setTimeout(timeoutMs, () => {
     if (!res.headersSent) {
