@@ -196,6 +196,26 @@ app.use('/api/v1/students', adminRoutes);  // admin student management (list, bu
 app.use('/api/students', adminRoutes);       // admin student management (list, bulk ops)
 
 
+// ── Health / Wake-up endpoint ──────────────────────────────────────────────
+// Zero-latency ping for the Flutter frontend to pre-warm the Render server
+// from its cold start. No DB queries — responds as soon as the Node process
+// is alive. The Flutter app fires this when the login screen loads so the
+// server is already awake by the time the user taps "Login".
+app.get('/api/health', (req, res) => {
+  res.status(200).json({
+    success: true,
+    message: 'Server is awake',
+    timestamp: Date.now(),
+  });
+});
+app.get('/api/v1/health', (req, res) => {
+  res.status(200).json({
+    success: true,
+    message: 'Server is awake',
+    timestamp: Date.now(),
+  });
+});
+
 // Test
 app.get('/', (req, res) => {
   res.json({
