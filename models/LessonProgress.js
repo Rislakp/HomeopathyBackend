@@ -25,6 +25,10 @@ const lessonProgressSchema = new mongoose.Schema({
     type: Boolean,
     default: false,
   },
+  completed: {
+    type: Boolean,
+    default: false,
+  },
   videoProgress: {
     type: Number,
     default: 0,
@@ -37,6 +41,13 @@ const lessonProgressSchema = new mongoose.Schema({
     type: Number,
     default: 0,
   },
+  // Accumulated active time, in seconds. This is deliberately separate from
+  // videoProgress: a seek position is not a measure of time actually studied.
+  activeTimeSeconds: {
+    type: Number,
+    default: 0,
+    min: 0,
+  },
   completedAt: {
     type: Date,
     default: null,
@@ -46,6 +57,14 @@ const lessonProgressSchema = new mongoose.Schema({
     default: false,
   },
   pdfDownloadedAt: {
+    type: Date,
+    default: null,
+  },
+  pdfViewed: {
+    type: Boolean,
+    default: false,
+  },
+  pdfViewedAt: {
     type: Date,
     default: null,
   },

@@ -32,6 +32,14 @@ const activitySchema = new mongoose.Schema(
       required: false,
       default: null,
     },
+    // Optional learning-event context. Keeping these fields on the common
+    // activity record lets the existing recent-activity endpoint return the
+    // latest student actions without a second, unsorted data source.
+    action: { type: String, trim: true, default: '' },
+    courseId: { type: mongoose.Schema.Types.Mixed, default: null },
+    moduleId: { type: String, trim: true, default: '' },
+    lessonId: { type: String, trim: true, default: '' },
+    metadata: { type: mongoose.Schema.Types.Mixed, default: null },
     createdAt: {
       type: Date,
       default: Date.now,
