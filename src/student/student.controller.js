@@ -63,6 +63,28 @@ async function resolveCourseAndModuleNames(exam) {
   return { courseName, moduleName, canonicalCourseId };
 }
 
+function getQuestionCorrectOption(question) {
+  if (!question) return null;
+  const rawCorrectAnswer = question.correctOption ?? question.correctAnswer ?? null;
+  if (rawCorrectAnswer === null || rawCorrectAnswer === undefined || rawCorrectAnswer === '') return null;
+  return normalizeOptionKey(rawCorrectAnswer, question.options) || rawCorrectAnswer.toString().toUpperCase();
+}
+
+function formatQuestionWithAnswerKey(question) {
+  const correctOption = getQuestionCorrectOption(question);
+  const correctOptionText = question && question.options && correctOption
+    ? (question.options[correctOption] || null)
+    : null;
+
+  return {
+    ...question,
+    correctOption,
+    correctAnswer: correctOption,
+    correctOptionText,
+    correctAnswerText: correctOptionText
+  };
+}
+
 /**
  * GET /api/student/profile (or /api/student/me)
  * Fetch authenticated student's profile details.
@@ -629,7 +651,7 @@ async function submitExam(req, res) {
       if (targetQuestion) {
         // Robust option normalization for both selectedOption and correctOption
         const userOptionKey = normalizeOptionKey(ans.selectedOption, targetQuestion.options);
-        const correctOptionKey = normalizeOptionKey(targetQuestion.correctOption, targetQuestion.options);
+        const correctOptionKey = getQuestionCorrectOption(targetQuestion);
 
         const isAttempted = userOptionKey !== null;
         const isCorrect = isAttempted && correctOptionKey !== null && userOptionKey === correctOptionKey;
@@ -645,7 +667,7 @@ async function submitExam(req, res) {
           }
         }
 
-        const correctOptStr = correctOptionKey || (targetQuestion.correctOption ? targetQuestion.correctOption.toString().toUpperCase() : null);
+        const correctOptStr = correctOptionKey;
 
         processedAnswers.push({
           questionId: targetQuestion._id || (mongoose.Types.ObjectId.isValid(qId) ? qId : null),
@@ -719,6 +741,10 @@ async function submitExam(req, res) {
         // ──────────────────────────────────────────────────────────
         status:               testResult.status,
         answers:              processedAnswers,
+        examInfo: {
+          ...exam.toObject(),
+          questions: exam.questions.map(formatQuestionWithAnswerKey)
+        },
         createdAt:            testResult.createdAt
       }
     });
@@ -814,7 +840,7 @@ async function getStudentResults(req, res) {
         if (ans.questionId) {
           targetQ = questionMap.get(ans.questionId.toString());
           if (!correctOpt && targetQ) {
-            correctOpt = normalizeOptionKey(targetQ.correctOption, targetQ.options) || targetQ.correctOption;
+            correctOpt = getQuestionCorrectOption(targetQ);
           }
         }
         return {
@@ -824,7 +850,7 @@ async function getStudentResults(req, res) {
           selectedOptionText: targetQ && targetQ.options && ans.selectedOption ? targetQ.options[ans.selectedOption] : null,
           correctOption: correctOpt || null,
           correctAnswer: correctOpt || null,
-          correctOptionText: targetQ && targetQ.options && correctOpt ? targetQ.options[correctOpt] : null,
+          correctOptionText: targetQ && targetQ.options && correctOpt ? (targetQ.options[correctOpt] || null) : null,
           isCorrect: ans.isCorrect
         };
       });
@@ -832,15 +858,7 @@ async function getStudentResults(req, res) {
       let examMetadata = exam;
       if (exam) {
         const { courseName: resolvedCourseName, moduleName: resolvedModuleName } = await resolveCourseAndModuleNames(exam);
-        const formattedQuestions = (exam.questions || []).map(q => {
-          const cOpt = q.correctOption ? q.correctOption.toString().toUpperCase() : null;
-          return {
-            ...q,
-            correctAnswer: cOpt,
-            correctOptionText: q.options && cOpt ? q.options[cOpt] : null,
-            correctAnswerText: q.options && cOpt ? q.options[cOpt] : null
-          };
-        });
+        const formattedQuestions = (exam.questions || []).map(formatQuestionWithAnswerKey);
 
         examMetadata = {
           ...exam,
