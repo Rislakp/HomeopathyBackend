@@ -1,6 +1,7 @@
 const Course = require('../models/Course');
 const Student = require('../models/Student');
 const LessonProgress = require('../models/LessonProgress');
+const CourseProgress = require('../models/CourseProgress');
 const { verifyStudentCourseAccess } = require('../utils/courseAccessHelper');
 const { logActivity } = require('../utils/activityLogger');
 
@@ -41,6 +42,43 @@ function buildProgressSummary(course, progressDocs) {
     studyTimeSeconds: activeTimeSeconds,
     studyTimeHours: Number((activeTimeSeconds / 3600).toFixed(2)),
   };
+}
+
+async function resolveCourse(courseId) {
+  if (/^[0-9a-fA-F]{24}$/.test(courseId)) {
+    const byId = await Course.findById(courseId);
+    if (byId) return byId;
+  }
+  return Course.findOne({ courseId });
+}
+
+async function saveCourseSummary(studentId, course, progressDocs, studyTimeSeconds) {
+  const summary = buildProgressSummary(course, progressDocs);
+  const completedItemIds = progressDocs
+    .filter((progress) => progress.completed || progress.videoWatched || progress.pdfViewed || progress.pdfDownloaded || progress.completedAt)
+    .map((progress) => String(progress.lessonId));
+  const existingSummary = studyTimeSeconds === undefined
+    ? await CourseProgress.findOne({ studentId, courseId: course._id }).lean()
+    : null;
+  const persistedStudyTime = studyTimeSeconds === undefined
+    ? Math.max(existingSummary?.studyTimeSeconds || 0, summary.studyTimeSeconds)
+    : studyTimeSeconds;
+  await CourseProgress.findOneAndUpdate(
+    { studentId, courseId: course._id },
+    {
+      $set: {
+        completedItemIds: [...new Set(completedItemIds)],
+        totalItems: summary.totalItems,
+        completedItems: summary.completedItems,
+        completionPercentage: summary.percentage,
+        status: summary.status,
+        studyTimeSeconds: persistedStudyTime,
+        lastActivityAt: new Date(),
+      },
+    },
+    { upsert: true, new: true }
+  );
+  return { ...summary, studyTimeSeconds: persistedStudyTime, activeTimeSeconds: persistedStudyTime, studyTimeHours: Number((persistedStudyTime / 3600).toFixed(2)) };
 }
 
 /**
@@ -514,11 +552,12 @@ const updateLessonProgress = async (req, res) => {
     });
 
     const allProgressDocs = await LessonProgress.find({ studentId: studentIdToUse, courseId: course._id });
+    const summary = await saveCourseSummary(studentIdToUse, course, allProgressDocs);
     return res.status(200).json({
       success: true,
       message: 'Lesson progress updated',
       data: progress,
-      summary: buildProgressSummary(course, allProgressDocs),
+      summary,
     });
   } catch (error) {
     console.error('updateLessonProgress Error:', error);
@@ -527,6 +566,102 @@ const updateLessonProgress = async (req, res) => {
       message: 'Failed to update lesson progress',
       error: error.message,
     });
+  }
+};
+
+/**
+ * POST /api/courses/:courseId/progress
+ * Persist a batch of completed curriculum item IDs. `completedVideoIds` and
+ * `completedDocumentIds` are accepted as aliases because clients often track
+ * them separately; they must still resolve to lesson IDs in this course.
+ */
+const saveCourseProgress = async (req, res) => {
+  try {
+    const student = await resolveStudent(req.user);
+    if (!student) return res.status(403).json({ success: false, message: 'Student profile required to track progress' });
+
+    const course = await resolveCourse(req.params.courseId);
+    if (!course) return res.status(404).json({ success: false, message: 'Course not found' });
+    if (!await verifyStudentCourseAccess(req.user, req.params.courseId)) {
+      return res.status(403).json({ success: false, message: 'You do not have access to this specific course' });
+    }
+
+    const requestedIds = [
+      req.body.completedItemIds,
+      req.body.completedLessonIds,
+      req.body.completedVideoIds,
+      req.body.completedDocumentIds,
+      req.body.lessonId,
+      req.body.videoId,
+      req.body.documentId,
+    ].flatMap((value) => Array.isArray(value) ? value : value ? [value] : []).map(String);
+    const curriculumByLessonId = new Map(getCurriculumItems(course).map((item) => [item.lessonId, item]));
+    const completedItems = [...new Set(requestedIds)].map((id) => curriculumByLessonId.get(id)).filter(Boolean);
+
+    if (requestedIds.length > 0 && completedItems.length === 0) {
+      return res.status(400).json({ success: false, message: 'No submitted item IDs belong to this course curriculum' });
+    }
+
+    if (completedItems.length > 0) {
+      const now = new Date();
+      await LessonProgress.bulkWrite(completedItems.map((item) => ({
+        updateOne: {
+          filter: { studentId: student._id, courseId: course._id, lessonId: item.lessonId },
+          update: { $set: { moduleId: item.moduleId, completed: true, completedAt: now, lastAccessedAt: now } },
+          upsert: true,
+        },
+      })));
+    }
+
+    const progressDocs = await LessonProgress.find({ studentId: student._id, courseId: course._id });
+    const summary = await saveCourseSummary(student._id, course, progressDocs);
+    await logActivity({
+      title: 'Course progress updated',
+      description: `${student.name || student.email || 'A student'} marked ${completedItems.length} curriculum item${completedItems.length === 1 ? '' : 's'} complete in ${course.courseTitle || 'a course'}`,
+      type: 'student_learning',
+      action: req.body.action || 'course_progress_updated',
+      actor: student._id,
+      courseId: course._id,
+      metadata: { completedItemIds: completedItems.map((item) => item.lessonId) },
+    });
+    return res.status(200).json({ success: true, data: summary, summary });
+  } catch (error) {
+    console.error('saveCourseProgress Error:', error);
+    return res.status(500).json({ success: false, message: 'Failed to save course progress', error: error.message });
+  }
+};
+
+/** POST /api/courses/:courseId/study-time - atomically add a session increment. */
+const addStudyTime = async (req, res) => {
+  try {
+    const student = await resolveStudent(req.user);
+    if (!student) return res.status(403).json({ success: false, message: 'Student profile required to track study time' });
+    const course = await resolveCourse(req.params.courseId);
+    if (!course) return res.status(404).json({ success: false, message: 'Course not found' });
+    if (!await verifyStudentCourseAccess(req.user, req.params.courseId)) {
+      return res.status(403).json({ success: false, message: 'You do not have access to this specific course' });
+    }
+    const increment = [req.body.incrementSeconds, req.body.studyTimeSeconds, req.body.watchTimeSeconds, req.body.activeTimeSeconds]
+      .find(isFiniteNonNegativeNumber);
+    if (increment === undefined || increment <= 0 || increment > 86400) {
+      return res.status(400).json({ success: false, message: 'A study-time increment between 1 and 86400 seconds is required' });
+    }
+
+    const courseProgress = await CourseProgress.findOneAndUpdate(
+      { studentId: student._id, courseId: course._id },
+      { $inc: { studyTimeSeconds: increment }, $set: { lastActivityAt: new Date() }, $setOnInsert: { totalItems: getCurriculumItems(course).length } },
+      { new: true, upsert: true }
+    );
+    await logActivity({
+      title: 'Study time recorded',
+      description: `${student.name || student.email || 'A student'} studied ${increment} seconds in ${course.courseTitle || 'a course'}`,
+      type: 'student_learning', action: req.body.action || 'study_time_recorded', actor: student._id, courseId: course._id,
+      metadata: { incrementSeconds: increment },
+    });
+    return res.status(200).json({ success: true, data: { studyTimeSeconds: courseProgress.studyTimeSeconds, studyTimeHours: Number((courseProgress.studyTimeSeconds / 3600).toFixed(2)) } });
+  } catch (error) {
+    console.error('addStudyTime Error:', error);
+    return res.status(500).json({ success: false, message: 'Failed to add study time', error: error.message });
   }
 };
 
@@ -575,6 +710,12 @@ const getMyProgress = async (req, res) => {
     });
 
     const summary = buildProgressSummary(course, progressDocs);
+    const storedCourseProgress = await CourseProgress.findOne({ studentId: student._id, courseId: course._id }).lean();
+    if (storedCourseProgress && Number.isFinite(storedCourseProgress.studyTimeSeconds)) {
+      summary.studyTimeSeconds = storedCourseProgress.studyTimeSeconds;
+      summary.activeTimeSeconds = storedCourseProgress.studyTimeSeconds;
+      summary.studyTimeHours = Number((storedCourseProgress.studyTimeSeconds / 3600).toFixed(2));
+    }
     return res.status(200).json({
       success: true,
       count: progressDocs.length,
@@ -603,5 +744,7 @@ module.exports = {
   getMyCourses,
   getMyCourseContent,
   updateLessonProgress,
+  saveCourseProgress,
+  addStudyTime,
   getMyProgress,
 };

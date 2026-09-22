@@ -6,6 +6,8 @@ const {
   getMyCourseContent,
   updateLessonProgress,
   getMyProgress,
+  saveCourseProgress,
+  addStudyTime,
 } = require('../controllers/studentCurriculumController');
 
 // All student curriculum routes require authentication
@@ -24,6 +26,10 @@ router.get('/:courseId/learn', getMyCourseContent);
 // GET course progress
 router.get('/courses/:courseId/progress', getMyProgress);
 router.get('/:courseId/progress', getMyProgress);
+router.post('/courses/:courseId/progress', saveCourseProgress);
+router.post('/:courseId/progress', saveCourseProgress);
+router.post('/courses/:courseId/study-time', addStudyTime);
+router.post('/:courseId/study-time', addStudyTime);
 
 // PATCH lesson progress (watch position, completed status, PDF downloaded)
 router.patch('/courses/:courseId/modules/:moduleId/lessons/:lessonId/progress', updateLessonProgress);

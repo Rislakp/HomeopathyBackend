@@ -2,7 +2,7 @@ const express = require('express');
 const router = express.Router();
 const courseController = require('../controllers/courseController');
 const { requireAdmin, requireAuth } = require('../middleware/rbac');
-const { getMyCourseContent, updateLessonProgress, getMyProgress } = require('../controllers/studentCurriculumController');
+const { getMyCourseContent, updateLessonProgress, getMyProgress, saveCourseProgress, addStudyTime } = require('../controllers/studentCurriculumController');
 const upload = require('../middleware/upload');
 const { handleUploadError, processUploadsToCloudinary } = upload;
 
@@ -30,6 +30,8 @@ router.post('/', requireAdmin, handleUpload, courseController.createCourse);
 router.get('/:courseId/learn', requireAuth, getMyCourseContent);
 router.get('/:courseId/progress', requireAuth, getMyProgress);
 router.patch('/:courseId/modules/:moduleId/lessons/:lessonId/progress', requireAuth, updateLessonProgress);
+router.post('/:courseId/progress', requireAuth, saveCourseProgress);
+router.post('/:courseId/study-time', requireAuth, addStudyTime);
 router.get('/:id', courseController.getCourseById);
 
 // PUT /api/courses/:id - Update course metadata (supports multipart banner image upload)
