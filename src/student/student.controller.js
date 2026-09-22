@@ -645,10 +645,16 @@ async function submitExam(req, res) {
           }
         }
 
+        const correctOptStr = correctOptionKey || (targetQuestion.correctOption ? targetQuestion.correctOption.toString().toUpperCase() : null);
+
         processedAnswers.push({
           questionId: targetQuestion._id || (mongoose.Types.ObjectId.isValid(qId) ? qId : null),
           selectedOption: userOptionKey, // Guaranteed 'A', 'B', 'C', 'D' or null
-          correctOption: correctOptionKey || (targetQuestion.correctOption ? targetQuestion.correctOption.toString().toUpperCase() : null),
+          selectedAnswer: userOptionKey,
+          selectedOptionText: targetQuestion.options && userOptionKey ? targetQuestion.options[userOptionKey] : null,
+          correctOption: correctOptStr,
+          correctAnswer: correctOptStr,
+          correctOptionText: targetQuestion.options && correctOptStr ? targetQuestion.options[correctOptStr] : null,
           isCorrect: isCorrect
         });
       }
@@ -712,7 +718,7 @@ async function submitExam(req, res) {
         totalWrong:           totalWrong,
         // ──────────────────────────────────────────────────────────
         status:               testResult.status,
-        answers:              testResult.answers,
+        answers:              processedAnswers,
         createdAt:            testResult.createdAt
       }
     });
@@ -804,16 +810,21 @@ async function getStudentResults(req, res) {
 
       const formattedAnswers = (result.answers || []).map((ans) => {
         let correctOpt = ans.correctOption || ans.correctAnswer || null;
-        if (!correctOpt && ans.questionId) {
-          const targetQ = questionMap.get(ans.questionId.toString());
-          if (targetQ) {
+        let targetQ = null;
+        if (ans.questionId) {
+          targetQ = questionMap.get(ans.questionId.toString());
+          if (!correctOpt && targetQ) {
             correctOpt = normalizeOptionKey(targetQ.correctOption, targetQ.options) || targetQ.correctOption;
           }
         }
         return {
           questionId: ans.questionId,
           selectedOption: ans.selectedOption !== undefined ? ans.selectedOption : null,
+          selectedAnswer: ans.selectedOption !== undefined ? ans.selectedOption : null,
+          selectedOptionText: targetQ && targetQ.options && ans.selectedOption ? targetQ.options[ans.selectedOption] : null,
           correctOption: correctOpt || null,
+          correctAnswer: correctOpt || null,
+          correctOptionText: targetQ && targetQ.options && correctOpt ? targetQ.options[correctOpt] : null,
           isCorrect: ans.isCorrect
         };
       });
@@ -821,20 +832,22 @@ async function getStudentResults(req, res) {
       let examMetadata = exam;
       if (exam) {
         const { courseName: resolvedCourseName, moduleName: resolvedModuleName } = await resolveCourseAndModuleNames(exam);
-        if (exam.questions) {
-          const { questions, ...restExam } = exam;
-          examMetadata = {
-            ...restExam,
-            courseName: resolvedCourseName,
-            moduleName: resolvedModuleName
+        const formattedQuestions = (exam.questions || []).map(q => {
+          const cOpt = q.correctOption ? q.correctOption.toString().toUpperCase() : null;
+          return {
+            ...q,
+            correctAnswer: cOpt,
+            correctOptionText: q.options && cOpt ? q.options[cOpt] : null,
+            correctAnswerText: q.options && cOpt ? q.options[cOpt] : null
           };
-        } else {
-          examMetadata = {
-            ...exam,
-            courseName: resolvedCourseName,
-            moduleName: resolvedModuleName
-          };
-        }
+        });
+
+        examMetadata = {
+          ...exam,
+          courseName: resolvedCourseName,
+          moduleName: resolvedModuleName,
+          questions: formattedQuestions
+        };
       }
 
       return {

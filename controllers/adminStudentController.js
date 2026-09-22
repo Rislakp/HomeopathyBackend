@@ -810,24 +810,41 @@ async function getAdminStudentResults(req, res) {
 
       const formattedAnswers = (result.answers || []).map((ans) => {
         let correctOpt = ans.correctOption || ans.correctAnswer || null;
-        if (!correctOpt && ans.questionId) {
-          const targetQ = questionMap.get(ans.questionId.toString());
+        let targetQ = null;
+        if (ans.questionId) {
+          targetQ = questionMap.get(ans.questionId.toString());
           if (targetQ) {
-            correctOpt = targetQ.correctOption;
+            correctOpt = correctOpt || targetQ.correctOption;
           }
         }
         return {
           questionId: ans.questionId,
           selectedOption: ans.selectedOption !== undefined ? ans.selectedOption : null,
+          selectedAnswer: ans.selectedOption !== undefined ? ans.selectedOption : null,
+          selectedOptionText: targetQ && targetQ.options && ans.selectedOption ? targetQ.options[ans.selectedOption] : null,
           correctOption: correctOpt || null,
+          correctAnswer: correctOpt || null,
+          correctOptionText: targetQ && targetQ.options && correctOpt ? targetQ.options[correctOpt] : null,
           isCorrect: ans.isCorrect
         };
       });
 
       let examMetadata = exam;
-      if (exam && exam.questions) {
-        const { questions, ...restExam } = exam;
-        examMetadata = restExam;
+      if (exam) {
+        const formattedQuestions = (exam.questions || []).map(q => {
+          const cOpt = q.correctOption ? q.correctOption.toString().toUpperCase() : null;
+          return {
+            ...q,
+            correctAnswer: cOpt,
+            correctOptionText: q.options && cOpt ? q.options[cOpt] : null,
+            correctAnswerText: q.options && cOpt ? q.options[cOpt] : null
+          };
+        });
+        
+        examMetadata = {
+          ...exam,
+          questions: formattedQuestions
+        };
       }
 
       return {

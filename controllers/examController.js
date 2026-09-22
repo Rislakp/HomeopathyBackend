@@ -864,8 +864,19 @@ async function getGrandMockById(req, res) {
       ? exam.totalQuestions
       : (Array.isArray(exam.questions) ? exam.questions.length : 0);
 
+    const formattedQuestions = (exam.questions || []).map(q => {
+      const cOpt = q.correctOption ? q.correctOption.toString().toUpperCase() : null;
+      return {
+        ...q,
+        correctAnswer: cOpt,
+        correctOptionText: q.options && cOpt ? q.options[cOpt] : null,
+        correctAnswerText: q.options && cOpt ? q.options[cOpt] : null
+      };
+    });
+
     const formattedExam = {
       ...exam,
+      questions: formattedQuestions,
       courseId: courseIdStr,
       courseName: finalCourseName,
       moduleId: moduleIdStr,
