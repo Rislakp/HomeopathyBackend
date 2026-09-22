@@ -687,11 +687,12 @@ async function getAllGrandMocks(req, res) {
           courseOrFilter.push({ courseId: student.courseId });
         }
         filter.$or = [
-          ...courseOrFilter,
+          ...courseOrFilter.map(c => ({ ...c, testType: 'course_test' })),
           { testType: 'grand_mock' },
           { testType: { $regex: /^(grand[-_ ]?mock|mock)$/i } },
           { testType: { $exists: false } },
-          { courseId: null }
+          { testType: null },
+          { testType: '' }
         ];
       }
       // For Admins / Staff: no testType restriction, so all tests are returned!

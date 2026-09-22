@@ -316,10 +316,12 @@ async function getAvailableExams(req, res) {
           } else {
             // Allow enrolled course exams OR grand mocks
             filter.$or = [
-              ...courseOrFilter,
+              ...courseOrFilter.map(c => ({ ...c, testType: 'course_test' })),
               { testType: 'grand_mock' },
               { testType: { $regex: /^(grand[-_ ]?mock|mock)$/i } },
-              { courseId: null }
+              { testType: { $exists: false } },
+              { testType: null },
+              { testType: '' }
             ];
           }
         } else {
