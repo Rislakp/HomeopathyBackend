@@ -135,8 +135,10 @@ function buildProgressSummary(course, contentProgressDocs, studyTimeSeconds = 0)
       (doc) =>
         doc.completed === true &&
         (String(doc.itemId) === String(ci.itemId) ||
+          (ci.item && (String(doc.itemId) === String(ci.item._id) || String(doc.itemId) === String(ci.item.id))) ||
           (!doc.itemId && String(doc.lessonId) === String(ci.lessonId)) ||
-          (doc.itemId === doc.lessonId && String(doc.lessonId) === String(ci.lessonId)))
+          (doc.itemId === doc.lessonId && String(doc.lessonId) === String(ci.lessonId)) ||
+          (doc.lessonId && String(doc.lessonId) === String(ci.lessonId) && doc.itemType === ci.itemType))
     )
   );
 
@@ -1106,7 +1108,12 @@ const updateContentItemProgress = async (req, res) => {
     // Validate that the itemId actually belongs to this course's curriculum
     const allItems = getCurriculumItems(course);
     const targetItem = allItems.find(
-      (ci) => String(ci.itemId) === String(itemId) || (ci.lessonId === String(lessonId) && ci.moduleId === String(moduleId) && String(ci.itemId) === String(itemId))
+      (ci) =>
+        String(ci.itemId) === String(itemId) ||
+        (ci.item && (String(ci.item._id) === String(itemId) || String(ci.item.id) === String(itemId))) ||
+        (ci.lessonId === String(lessonId) && ci.moduleId === String(moduleId) && String(ci.itemId) === String(itemId)) ||
+        (ci.lessonId === String(lessonId) && (String(ci.itemId).endsWith(':' + itemId) || String(itemId).includes(ci.arrayKey || ''))) ||
+        (ci.lessonId === String(lessonId) && ci.item && (ci.item.title === itemId || ci.item.url === itemId || ci.item.public_id === itemId))
     );
     if (!targetItem) {
       return res.status(404).json({

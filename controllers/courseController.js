@@ -97,6 +97,8 @@ const toResourceObj = (item) => {
     };
   }
   if (typeof item === 'object' && !Array.isArray(item)) {
+    const rawId = item._id || item.id;
+    const resolvedId = rawId ? rawId.toString() : undefined;
     const cloudUrl = (item.secure_url && item.secure_url.startsWith('http'))
       ? item.secure_url
       : (item.url && item.url.startsWith('http'))
@@ -141,6 +143,7 @@ const toResourceObj = (item) => {
     const finalSecureUrl = (secureUrl || url || '').trim();
 
     return {
+      ...(resolvedId ? { _id: resolvedId, id: resolvedId } : {}),
       title: (title || '').trim(),
       url: (url || '').trim(),
       secure_url: finalSecureUrl,
