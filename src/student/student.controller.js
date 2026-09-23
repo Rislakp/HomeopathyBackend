@@ -4,6 +4,11 @@ const TestResult = require('../common/models/testResult.model');
 const Student = require('../../models/Student');
 const User = require('../../models/User');
 const { verifyStudentCourseAccess } = require('../../utils/courseAccessHelper');
+const {
+  getStudentCandidateIds,
+  getStudentExamAttemptMap,
+  computeExamAttemptMetrics
+} = require('../../utils/examAttemptHelper');
 try { require('../../models/Course'); } catch (e) {}
 
 /**
@@ -338,25 +343,21 @@ async function getAvailableExams(req, res) {
       .sort({ createdAt: -1 })
       .lean();
 
-    // 2. Fetch student's test results
-    const studentResults = await TestResult.find({ studentId })
-      .sort({ createdAt: -1 })
-      .lean();
+    // 2. Resolve candidate IDs for the authenticated student
+    const candidateIds = await getStudentCandidateIds(req.user);
 
-    // 3. Map results by examId (latest attempt per exam)
-    const resultMap = new Map();
-    for (const result of studentResults) {
-      const examIdStr = result.examId.toString();
-      if (!resultMap.has(examIdStr)) {
-        resultMap.set(examIdStr, result);
-      }
-    }
+    // 3. Fetch student's test results mapped by examId
+    const attemptMap = await getStudentExamAttemptMap(
+      candidateIds,
+      exams.map((e) => e._id)
+    );
 
-    // 4. Combine exams with student's previous status and score
+    // 4. Combine exams with authoritative student attempt status and previous score
     const formattedExams = await Promise.all(exams.map(async (exam) => {
-      const examIdStr = exam._id.toString();
-      const previousResult = resultMap.get(examIdStr);
       const { courseName, moduleName, canonicalCourseId } = await resolveCourseAndModuleNames(exam);
+      const examIdStr = exam._id.toString();
+      const resultsForExam = attemptMap.get(examIdStr) || [];
+      const metrics = computeExamAttemptMetrics(exam, resultsForExam);
 
       return {
         ...exam,
@@ -366,13 +367,16 @@ async function getAvailableExams(req, res) {
         negativeMark: exam.negativeMark !== undefined && exam.negativeMark !== null
           ? exam.negativeMark
           : (exam.negativeMarkPenalty ?? 0),
-        status: previousResult ? 'Attempted' : 'Not Started',
-        previousScore: previousResult ? previousResult.score : null,
-        totalMarks: previousResult
-          ? previousResult.totalMarks
-          : (exam.totalQuestions || 0) * (exam.marksPerQuestion || 1),
-        lastAttemptedAt: previousResult ? previousResult.createdAt : null,
-        resultId: previousResult ? previousResult._id : null
+        status: metrics.status,
+        attemptStatus: metrics.attemptStatus,
+        hasAttempted: metrics.hasAttempted,
+        isCompleted: metrics.isCompleted,
+        previousScore: metrics.previousScore,
+        score: metrics.score,
+        totalMarks: metrics.totalMarks,
+        lastAttemptedAt: metrics.lastAttemptedAt,
+        submittedAt: metrics.submittedAt,
+        resultId: metrics.resultId
       };
     }));
 
@@ -395,6 +399,7 @@ async function getAvailableExams(req, res) {
  * GET /api/student/exams/:id/start
  * Fetch exam details for starting a test.
  * CRITICAL ANTI-CHEAT: Strips the `correctOption` field from all questions before sending to client.
+ * Also records an "In Progress" attempt state if no completed attempt exists yet.
  */
 async function startExam(req, res) {
   try {
@@ -423,6 +428,56 @@ async function startExam(req, res) {
           success: false,
           message: 'You are not authorized to access this exam.'
         });
+      }
+    }
+
+    // Record 'In Progress' attempt if student has not completed it yet
+    if (req.user) {
+      try {
+        const candidateIds = await getStudentCandidateIds(req.user);
+        if (candidateIds.length > 0) {
+          const existingCompleted = await TestResult.findOne({
+            studentId: { $in: candidateIds },
+            examId: exam._id,
+            status: { $in: ['Completed', 'Attempted'] }
+          }).lean();
+
+          if (!existingCompleted) {
+            const existingInProgress = await TestResult.findOne({
+              studentId: { $in: candidateIds },
+              examId: exam._id,
+              status: 'In Progress'
+            }).lean();
+
+            if (!existingInProgress) {
+              const primaryStudentId = (req.user.id && mongoose.Types.ObjectId.isValid(req.user.id))
+                ? new mongoose.Types.ObjectId(req.user.id)
+                : candidateIds[0];
+
+              const totalQ = exam.totalQuestions || (Array.isArray(exam.questions) ? exam.questions.length : 0);
+              const marksPerQ = exam.marksPerQuestion || 1;
+
+              await TestResult.create({
+                studentId: primaryStudentId,
+                examId: exam._id,
+                score: 0,
+                totalMarks: totalQ * marksPerQ,
+                totalAttempted: 0,
+                totalCorrect: 0,
+                totalWrong: 0,
+                unansweredQuestions: totalQ,
+                positiveMarks: 0,
+                negativeMarks: 0,
+                maximumScore: totalQ * marksPerQ,
+                percentage: 0,
+                status: 'In Progress',
+                answers: []
+              });
+            }
+          }
+        }
+      } catch (trackErr) {
+        console.warn('Failed to record In Progress state during startExam:', trackErr.message);
       }
     }
 
@@ -661,23 +716,51 @@ async function submitExam(req, res) {
       ? Math.round((finalScore / maximumScore) * 10000) / 100
       : 0;
 
-    // 4. Save TestResult document in MongoDB
-    const testResult = await TestResult.create({
-      studentId,
+    // 4. Save or update TestResult document in MongoDB
+    const candidateIds = await getStudentCandidateIds(req.user);
+    const primaryStudentId = (req.user.id && mongoose.Types.ObjectId.isValid(req.user.id))
+      ? new mongoose.Types.ObjectId(req.user.id)
+      : candidateIds[0];
+
+    const existingInProgress = await TestResult.findOne({
+      studentId: { $in: candidateIds },
       examId: exam._id,
-      score: finalScore,
-      totalMarks,
-      totalAttempted,
-      totalCorrect,
-      totalWrong,
-      unansweredQuestions,
-      positiveMarks: Math.round(positiveMarks * 100) / 100,
-      negativeMarks: Math.round(negativeMarks * 100) / 100,
-      maximumScore,
-      percentage,
-      status: 'Completed',
-      answers: processedAnswers
+      status: 'In Progress'
     });
+
+    let testResult;
+    if (existingInProgress) {
+      existingInProgress.score = finalScore;
+      existingInProgress.totalMarks = totalMarks;
+      existingInProgress.totalAttempted = totalAttempted;
+      existingInProgress.totalCorrect = totalCorrect;
+      existingInProgress.totalWrong = totalWrong;
+      existingInProgress.unansweredQuestions = unansweredQuestions;
+      existingInProgress.positiveMarks = Math.round(positiveMarks * 100) / 100;
+      existingInProgress.negativeMarks = Math.round(negativeMarks * 100) / 100;
+      existingInProgress.maximumScore = maximumScore;
+      existingInProgress.percentage = percentage;
+      existingInProgress.status = 'Completed';
+      existingInProgress.answers = processedAnswers;
+      testResult = await existingInProgress.save();
+    } else {
+      testResult = await TestResult.create({
+        studentId: primaryStudentId,
+        examId: exam._id,
+        score: finalScore,
+        totalMarks,
+        totalAttempted,
+        totalCorrect,
+        totalWrong,
+        unansweredQuestions,
+        positiveMarks: Math.round(positiveMarks * 100) / 100,
+        negativeMarks: Math.round(negativeMarks * 100) / 100,
+        maximumScore,
+        percentage,
+        status: 'Completed',
+        answers: processedAnswers
+      });
+    }
 
     return res.status(201).json({
       success: true,
@@ -710,6 +793,9 @@ async function submitExam(req, res) {
         totalWrong:           totalWrong,
         // ──────────────────────────────────────────────────────────
         status:               testResult.status,
+        attemptStatus:        'completed',
+        hasAttempted:         true,
+        isCompleted:          true,
         answers:              testResult.answers,
         createdAt:            testResult.createdAt
       }
@@ -730,9 +816,9 @@ async function submitExam(req, res) {
  */
 async function getStudentResults(req, res) {
   try {
-    const studentId = req.user && req.user.id;
+    const candidateIds = await getStudentCandidateIds(req.user);
 
-    if (!studentId) {
+    if (!candidateIds || candidateIds.length === 0) {
       return res.status(401).json({
         success: false,
         message: 'Unauthorized: Student ID not found in session/token.'
@@ -760,7 +846,7 @@ async function getStudentResults(req, res) {
       matchingExamIds = matchingExams.map(e => e._id.toString());
     }
 
-    let results = await TestResult.find({ studentId })
+    let results = await TestResult.find({ studentId: { $in: candidateIds } })
       .populate('examId', 'title testType courseId moduleId courseName moduleName marksPerQuestion negativeMark negativeMarkPenalty durationMinutes totalQuestions questions')
       .sort({ createdAt: -1 })
       .lean();

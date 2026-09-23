@@ -43,6 +43,8 @@ function buildProgressSummary(course, progressDocs) {
   const status = totalItems > 0 && completedItems === totalItems ? 'Completed' : completedItems > 0 ? 'In Progress' : 'Not Started';
 
   return {
+    courseId: course.courseId || (course._id ? course._id.toString() : ''),
+    courseObjId: course._id ? course._id.toString() : '',
     totalItems,
     totalLessons: totalItems,
     completedItems,
@@ -862,6 +864,8 @@ const getMyProgress = async (req, res) => {
     }
     return res.status(200).json({
       success: true,
+      courseId: course.courseId || course._id.toString(),
+      courseObjId: course._id.toString(),
       count: progressDocs.length,
       data: progressDocs,
       summary,

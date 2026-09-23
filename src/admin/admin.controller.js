@@ -3,6 +3,11 @@ const pdfParse = require('pdf-parse');
 const Tesseract = require('tesseract.js');
 const xlsx = require('xlsx');
 const Exam = require('../../models/Exam');
+const {
+  getStudentCandidateIds,
+  getStudentExamAttemptMap,
+  computeExamAttemptMetrics
+} = require('../../utils/examAttemptHelper');
 try { require('../../models/Course'); } catch (e) {}
 
 /**
@@ -466,6 +471,11 @@ async function getAllGrandMocks(req, res) {
       console.warn('[admin.controller.js] Failed to aggregate attendance counts:', aggErr.message);
     }
 
+    const candidateIds = req.user ? await getStudentCandidateIds(req.user) : [];
+    const attemptMap = candidateIds.length > 0
+      ? await getStudentExamAttemptMap(candidateIds, exams.map(e => e._id))
+      : new Map();
+
     const formattedExams = await Promise.all(exams.map(async (exam) => {
       const { courseName, moduleName } = await resolveCourseAndModuleNames(exam);
       const rawCourseId = exam.courseId ? (typeof exam.courseId === 'object' && exam.courseId._id ? exam.courseId._id.toString() : exam.courseId.toString()).trim() : '';
@@ -489,6 +499,9 @@ async function getAllGrandMocks(req, res) {
         ? exam.totalQuestions
         : (Array.isArray(exam.questions) ? exam.questions.length : 0);
 
+      const resultsForExam = attemptMap.get(exam._id.toString()) || [];
+      const metrics = computeExamAttemptMetrics(exam, resultsForExam);
+
       return {
         ...exam,
         courseId: courseIdStr,
@@ -506,6 +519,15 @@ async function getAllGrandMocks(req, res) {
         negativeMarkPenalty: exam.negativeMarkPenalty !== undefined && exam.negativeMarkPenalty !== null
           ? exam.negativeMarkPenalty
           : (exam.negativeMark ?? 0),
+        status: metrics.status,
+        attemptStatus: metrics.attemptStatus,
+        hasAttempted: metrics.hasAttempted,
+        isCompleted: metrics.isCompleted,
+        previousScore: metrics.previousScore,
+        score: metrics.score,
+        lastAttemptedAt: metrics.lastAttemptedAt,
+        submittedAt: metrics.submittedAt,
+        resultId: metrics.resultId,
         course: courseIdStr ? {
           _id: courseIdStr,
           id: courseIdStr,
@@ -577,6 +599,13 @@ async function getGrandMockById(req, res) {
       ? exam.totalQuestions
       : (Array.isArray(exam.questions) ? exam.questions.length : 0);
 
+    const candidateIds = req.user ? await getStudentCandidateIds(req.user) : [];
+    const attemptMap = candidateIds.length > 0
+      ? await getStudentExamAttemptMap(candidateIds, [exam._id])
+      : new Map();
+    const resultsForExam = attemptMap.get(exam._id.toString()) || [];
+    const metrics = computeExamAttemptMetrics(exam, resultsForExam);
+
     const formattedExam = {
       ...exam,
       courseId: courseIdStr,
@@ -594,6 +623,15 @@ async function getGrandMockById(req, res) {
       negativeMarkPenalty: exam.negativeMarkPenalty !== undefined && exam.negativeMarkPenalty !== null
         ? exam.negativeMarkPenalty
         : (exam.negativeMark ?? 0),
+      status: metrics.status,
+      attemptStatus: metrics.attemptStatus,
+      hasAttempted: metrics.hasAttempted,
+      isCompleted: metrics.isCompleted,
+      previousScore: metrics.previousScore,
+      score: metrics.score,
+      lastAttemptedAt: metrics.lastAttemptedAt,
+      submittedAt: metrics.submittedAt,
+      resultId: metrics.resultId,
       course: courseIdStr ? {
         _id: courseIdStr,
         id: courseIdStr,

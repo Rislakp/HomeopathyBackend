@@ -77,6 +77,11 @@ async function verifyStudentCourseAccess(reqUser, requestedCourseId) {
     }
   }
 
+  // Active / Trial subscribers have full curriculum access to published courses
+  if (['Active', 'Trial'].includes(student.subscriptionStatus) || student.subscription === 'Active' || student.subscription === 'VIP' || student.subscription === 'Premium') {
+    return true;
+  }
+
   return false;
 }
 
