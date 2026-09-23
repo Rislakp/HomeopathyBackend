@@ -74,26 +74,22 @@ const buildProfileResponse = async (user, studentDoc = null) => {
 
     if (targetCourse) {
       const studentId = studentDoc ? studentDoc._id : user._id;
-      const LessonProgress = require('../models/LessonProgress');
+      const ContentItemProgress = require('../models/ContentItemProgress');
       const CourseProgress = require('../models/CourseProgress');
       const { buildProgressSummary } = require('./studentCurriculumController');
 
-      const progressDocs = await LessonProgress.find({
+      const contentProgressDocs = await ContentItemProgress.find({
         studentId: studentId,
         courseId: targetCourse._id,
-      });
+      }).lean();
 
-      const summary = buildProgressSummary(targetCourse, progressDocs);
       const storedCourseProgress = await CourseProgress.findOne({
         studentId: studentId,
         courseId: targetCourse._id,
       }).lean();
 
-      if (storedCourseProgress && Number.isFinite(storedCourseProgress.studyTimeSeconds)) {
-        summary.studyTimeSeconds = storedCourseProgress.studyTimeSeconds;
-        summary.activeTimeSeconds = storedCourseProgress.studyTimeSeconds;
-        summary.studyTimeHours = Number((storedCourseProgress.studyTimeSeconds / 3600).toFixed(2));
-      }
+      const studyTimeSec = storedCourseProgress?.studyTimeSeconds || 0;
+      const summary = buildProgressSummary(targetCourse, contentProgressDocs, studyTimeSec);
 
       const courseItem = {
         id: targetCourse._id.toString(),

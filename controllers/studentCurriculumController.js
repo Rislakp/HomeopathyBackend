@@ -9,10 +9,54 @@ const { logActivity } = require('../utils/activityLogger');
 const isFiniteNonNegativeNumber = (value) => typeof value === 'number' && Number.isFinite(value) && value >= 0;
 
 /**
+ * Helper to extract duration in seconds from various request payload formats:
+ * - seconds fields (incrementSeconds, durationSeconds, activeTimeSeconds, watchTimeSeconds, etc.)
+ * - hours fields (studyTimeHours, activeTimeHours)
+ * - startTime & endTime timestamps
+ */
+function extractDurationSeconds(body) {
+  if (!body || typeof body !== 'object') return 0;
+  const directSeconds = [
+    body.incrementSeconds,
+    body.studyTimeSeconds,
+    body.watchTimeSeconds,
+    body.activeTimeSeconds,
+    body.timeSpentSeconds,
+    body.durationSeconds,
+    body.elapsedSeconds,
+    body.seconds,
+    body.duration,
+  ].find(isFiniteNonNegativeNumber);
+
+  if (directSeconds !== undefined && directSeconds > 0) {
+    return directSeconds;
+  }
+
+  const directHours = [body.activeTimeHours, body.studyTimeHours].find(isFiniteNonNegativeNumber);
+  if (directHours !== undefined && directHours > 0) {
+    return Math.round(directHours * 3600);
+  }
+
+  if (body.startTime && body.endTime) {
+    const start = new Date(body.startTime).getTime();
+    const end = new Date(body.endTime).getTime();
+    if (!isNaN(start) && !isNaN(end) && end > start) {
+      const diffSec = Math.round((end - start) / 1000);
+      if (diffSec > 0 && diffSec <= 86400) {
+        return diffSec;
+      }
+    }
+  }
+
+  return 0;
+}
+
+/**
  * Flatten every content item across all modules → lessons → resource arrays.
  * Returns one entry per actual learning item (videoPart, pdfNote, assignment, attachment).
  * Each item has a stable `itemId` — the resource subdocument's _id when present,
  * or a deterministic composite key for legacy items saved before _id was enabled.
+ * If a lesson has no sub-resource arrays, it is counted as 1 standalone item.
  */
 function getCurriculumItems(course) {
   const items = [];
@@ -30,9 +74,11 @@ function getCurriculumItems(course) {
     const moduleId = module._id ? module._id.toString() : String(module.id || '');
     for (const lesson of (module.lessons || [])) {
       const lessonId = lesson._id ? lesson._id.toString() : String(lesson.id || '');
+      let hasSubResources = false;
       for (const arrayKey of RESOURCE_ARRAYS) {
         const resources = lesson[arrayKey];
         if (!Array.isArray(resources) || resources.length === 0) continue;
+        hasSubResources = true;
         resources.forEach((resource, idx) => {
           // Prefer MongoDB-generated _id; fall back to composite key for legacy items
           const itemId = resource._id
@@ -45,7 +91,29 @@ function getCurriculumItems(course) {
             itemType: ITEM_TYPE_MAP[arrayKey],
             arrayKey,
             item: resource,
+            lesson,
           });
+        });
+      }
+
+      if (!hasSubResources) {
+        // Fallback for standalone/legacy lessons without subdocument resource arrays
+        const type = (lesson.lessonType || '').toLowerCase();
+        const itemType = type.includes('pdf')
+          ? 'pdfNote'
+          : type.includes('assign')
+            ? 'assignment'
+            : type.includes('attach')
+              ? 'attachment'
+              : 'videoPart';
+        items.push({
+          moduleId,
+          lessonId,
+          itemId: lessonId,
+          itemType,
+          arrayKey: 'legacy',
+          item: lesson,
+          lesson,
         });
       }
     }
@@ -60,14 +128,20 @@ function getCurriculumItems(course) {
  */
 function buildProgressSummary(course, contentProgressDocs, studyTimeSeconds = 0) {
   const curriculumItems = getCurriculumItems(course);
-  const validItemIds = new Set(curriculumItems.map((ci) => ci.itemId));
 
-  // Only count progress records that belong to actual current curriculum items
-  const currentProgress = (contentProgressDocs || []).filter(
-    (doc) => validItemIds.has(String(doc.itemId)) && doc.completed === true
+  // Completed content items matching current curriculum
+  const completedCurriculumItems = curriculumItems.filter((ci) =>
+    (contentProgressDocs || []).some(
+      (doc) =>
+        doc.completed === true &&
+        (String(doc.itemId) === String(ci.itemId) ||
+          (!doc.itemId && String(doc.lessonId) === String(ci.lessonId)) ||
+          (doc.itemId === doc.lessonId && String(doc.lessonId) === String(ci.lessonId)))
+    )
   );
 
-  const completedItemIds = [...new Set(currentProgress.map((doc) => String(doc.itemId)))];
+  const completedItemIds = [...new Set(completedCurriculumItems.map((ci) => String(ci.itemId)))];
+  const completedLessonIds = [...new Set(completedCurriculumItems.map((ci) => String(ci.lessonId)))];
   const completedItems = completedItemIds.length;
   const totalItems = curriculumItems.length;
 
@@ -89,7 +163,7 @@ function buildProgressSummary(course, contentProgressDocs, studyTimeSeconds = 0)
     completedItems,
     completedLessons: completedItems, // alias kept for backward-compat
     completedItemIds,
-    completedLessonIds: completedItemIds, // alias kept for backward-compat
+    completedLessonIds,
     remainingItems: Math.max(totalItems - completedItems, 0),
     remainingLessons: Math.max(totalItems - completedItems, 0),
     percentage,
@@ -603,14 +677,7 @@ const updateLessonProgress = async (req, res) => {
       });
     }
 
-    let course = null;
-    if (courseId.match(/^[0-9a-fA-F]{24}$/)) {
-      course = await Course.findById(courseId);
-    }
-    if (!course) {
-      course = await Course.findOne({ courseId });
-    }
-
+    const course = await resolveCourse(courseId);
     if (!course) {
       return res.status(404).json({
         success: false,
@@ -618,12 +685,12 @@ const updateLessonProgress = async (req, res) => {
       });
     }
 
-    // Do not create progress rows for stale or arbitrary identifiers. Metrics
-    // must be based on the same curriculum items students can actually see.
-    const curriculumItem = getCurriculumItems(course).find(
+    // Identify all curriculum items belonging to this lesson
+    const allCurriculumItems = getCurriculumItems(course);
+    const lessonItems = allCurriculumItems.filter(
       (item) => item.moduleId === String(moduleId) && item.lessonId === String(lessonId)
     );
-    if (!curriculumItem) {
+    if (lessonItems.length === 0) {
       return res.status(404).json({ success: false, message: 'Lesson not found in this course module' });
     }
 
@@ -662,24 +729,12 @@ const updateLessonProgress = async (req, res) => {
     const isPdfViewed = pdfViewed === true || viewedPdf === true || pdfDownloaded === true;
     const isCompleted = percent >= 90 || videoWatched === true || isPdfViewed || completed === true || lessonCompleted === true;
 
-    // Clients should send activeTimeSeconds for timers which pause when the
-    // app is backgrounded.
-    const explicitActiveSeconds = [
-      req.body.activeTimeSeconds,
-      req.body.timeSpentSeconds,
-      req.body.elapsedSeconds,
-      req.body.watchTimeSeconds,
-      req.body.activeTime,
-      req.body.timeSpent,
-    ].find(isFiniteNonNegativeNumber);
-    const explicitActiveHours = [req.body.activeTimeHours, req.body.studyTimeHours].find(isFiniteNonNegativeNumber);
-    const activeDeltaSeconds = explicitActiveSeconds !== undefined
-      ? explicitActiveSeconds
-      : explicitActiveHours !== undefined
-        ? explicitActiveHours * 3600
-      : (isFiniteNonNegativeNumber(videoProgress)
-        ? Math.max(0, currentProgress - (existingProgress?.videoProgress || 0))
-        : 0);
+    // Study time handling: extract explicit duration from body or videoProgress delta
+    const extractedSeconds = extractDurationSeconds(req.body);
+    const videoProgressDelta = isFiniteNonNegativeNumber(videoProgress)
+      ? Math.max(0, currentProgress - (existingProgress?.videoProgress || 0))
+      : 0;
+    const activeDeltaSeconds = extractedSeconds > 0 ? extractedSeconds : videoProgressDelta;
 
     const updateFields = {
       lastAccessedAt: new Date(),
@@ -711,6 +766,42 @@ const updateLessonProgress = async (req, res) => {
       { new: true, upsert: true }
     );
 
+    // Atomically increment CourseProgress studyTimeSeconds if active time was spent
+    if (activeDeltaSeconds > 0) {
+      await CourseProgress.findOneAndUpdate(
+        { studentId: studentIdToUse, courseId: course._id },
+        {
+          $inc: { studyTimeSeconds: activeDeltaSeconds },
+          $set: { lastActivityAt: new Date() },
+          $setOnInsert: { totalItems: allCurriculumItems.length },
+        },
+        { upsert: true, new: true }
+      );
+    }
+
+    // If lesson or its media is completed, mark corresponding ContentItemProgress items as completed
+    if (isCompleted) {
+      const now = new Date();
+      await ContentItemProgress.bulkWrite(
+        lessonItems.map((ci) => ({
+          updateOne: {
+            filter: { studentId: studentIdToUse, courseId: course._id, itemId: ci.itemId },
+            update: {
+              $set: {
+                moduleId,
+                lessonId,
+                itemType: ci.itemType,
+                completed: true,
+                completedAt: now,
+                lastAccessedAt: now,
+              },
+            },
+            upsert: true,
+          },
+        }))
+      );
+    }
+
     const wasCompleted = Boolean(existingProgress?.completed || existingProgress?.videoWatched || existingProgress?.pdfViewed || existingProgress?.pdfDownloaded || existingProgress?.completedAt);
     const action = isCompleted && !wasCompleted
       ? 'lesson_completed'
@@ -719,11 +810,11 @@ const updateLessonProgress = async (req, res) => {
         : videoWatched === true
           ? 'video_watched'
           : 'lesson_progressed';
-    const studentName = student.name || student.fullName || student.email || 'A student';
+    const studentName = student?.name || student?.fullName || student?.email || 'A student';
 
     await logActivity({
       title: action === 'lesson_completed' ? 'Lesson completed' : action === 'pdf_viewed' ? 'PDF viewed' : 'Lesson activity',
-      description: `${studentName} ${action === 'lesson_completed' ? 'completed' : action === 'pdf_viewed' ? 'viewed material in' : 'continued'} ${curriculumItem.lesson.lessonTitle || 'a lesson'} in ${course.courseTitle || 'a course'}`,
+      description: `${studentName} ${action === 'lesson_completed' ? 'completed' : action === 'pdf_viewed' ? 'viewed material in' : 'continued'} ${lessonItems[0]?.lesson?.lessonTitle || 'a lesson'} in ${course.courseTitle || 'a course'}`,
       type: 'student_learning',
       action,
       actor: studentIdToUse,
@@ -733,8 +824,8 @@ const updateLessonProgress = async (req, res) => {
       metadata: { activeTimeSeconds: activeDeltaSeconds, watchedPercent: progress.watchedPercent || 0 },
     });
 
-    const allProgressDocs = await LessonProgress.find({ studentId: studentIdToUse, courseId: course._id });
-    const summary = await saveCourseSummary(studentIdToUse, course, allProgressDocs);
+    const allContentDocs = await ContentItemProgress.find({ studentId: studentIdToUse, courseId: course._id }).lean();
+    const summary = await saveCourseSummary(studentIdToUse, course, allContentDocs);
     return res.status(200).json({
       success: true,
       message: 'Lesson progress updated',
@@ -745,8 +836,10 @@ const updateLessonProgress = async (req, res) => {
       completedItemIds: summary.completedItemIds,
       completedLessons: summary.completedLessons,
       totalLessons: summary.totalLessons,
+      completedItems: summary.completedItems,
+      totalItems: summary.totalItems,
       completionPercentage: summary.completionPercentage,
-      progressPercentage: summary.completionPercentage,
+      progressPercentage: summary.progressPercentage,
       percentage: summary.percentage,
       progress: summary.progress,
       status: summary.status,
@@ -787,16 +880,48 @@ const saveCourseProgress = async (req, res) => {
       req.body.videoId,
       req.body.documentId,
     ].flatMap((value) => Array.isArray(value) ? value : value ? [value] : []).map(String);
-    const curriculumByLessonId = new Map(getCurriculumItems(course).map((item) => [item.lessonId, item]));
-    const completedItems = [...new Set(requestedIds)].map((id) => curriculumByLessonId.get(id)).filter(Boolean);
+    
+    const allCurriculumItems = getCurriculumItems(course);
+    const curriculumByItemId = new Map(allCurriculumItems.map((item) => [String(item.itemId), item]));
+    const curriculumByLessonId = new Map(allCurriculumItems.map((item) => [String(item.lessonId), item]));
+    
+    const matchedItems = [...new Set(requestedIds)]
+      .flatMap((id) => {
+        const itemById = curriculumByItemId.get(id);
+        if (itemById) return [itemById];
+        // If id is a lessonId, find all items belonging to that lesson
+        const itemsForLesson = allCurriculumItems.filter((ci) => String(ci.lessonId) === id);
+        return itemsForLesson;
+      })
+      .filter(Boolean);
 
-    if (requestedIds.length > 0 && completedItems.length === 0) {
+    if (requestedIds.length > 0 && matchedItems.length === 0) {
       return res.status(400).json({ success: false, message: 'No submitted item IDs belong to this course curriculum' });
     }
 
-    if (completedItems.length > 0) {
-      const now = new Date();
-      await LessonProgress.bulkWrite(completedItems.map((item) => ({
+    const now = new Date();
+    if (matchedItems.length > 0) {
+      // 1. Bulk update ContentItemProgress
+      await ContentItemProgress.bulkWrite(matchedItems.map((item) => ({
+        updateOne: {
+          filter: { studentId: student._id, courseId: course._id, itemId: item.itemId },
+          update: {
+            $set: {
+              moduleId: item.moduleId,
+              lessonId: item.lessonId,
+              itemType: item.itemType,
+              completed: true,
+              completedAt: now,
+              lastAccessedAt: now,
+            },
+          },
+          upsert: true,
+        },
+      })));
+
+      // 2. Also sync LessonProgress
+      const uniqueLessonMap = new Map(matchedItems.map((item) => [item.lessonId, item]));
+      await LessonProgress.bulkWrite([...uniqueLessonMap.values()].map((item) => ({
         updateOne: {
           filter: { studentId: student._id, courseId: course._id, lessonId: item.lessonId },
           update: { $set: { moduleId: item.moduleId, completed: true, completedAt: now, lastAccessedAt: now } },
@@ -805,16 +930,16 @@ const saveCourseProgress = async (req, res) => {
       })));
     }
 
-    const progressDocs = await LessonProgress.find({ studentId: student._id, courseId: course._id });
-    const summary = await saveCourseSummary(student._id, course, progressDocs);
+    const allContentDocs = await ContentItemProgress.find({ studentId: student._id, courseId: course._id }).lean();
+    const summary = await saveCourseSummary(student._id, course, allContentDocs);
     await logActivity({
       title: 'Course progress updated',
-      description: `${student.name || student.email || 'A student'} marked ${completedItems.length} curriculum item${completedItems.length === 1 ? '' : 's'} complete in ${course.courseTitle || 'a course'}`,
+      description: `${student.name || student.email || 'A student'} marked ${matchedItems.length} curriculum item${matchedItems.length === 1 ? '' : 's'} complete in ${course.courseTitle || 'a course'}`,
       type: 'student_learning',
       action: req.body.action || 'course_progress_updated',
       actor: student._id,
       courseId: course._id,
-      metadata: { completedItemIds: completedItems.map((item) => item.lessonId) },
+      metadata: { completedItemIds: matchedItems.map((item) => item.itemId) },
     });
     return res.status(200).json({
       success: true,
@@ -825,8 +950,10 @@ const saveCourseProgress = async (req, res) => {
       completedItemIds: summary.completedItemIds,
       completedLessons: summary.completedLessons,
       totalLessons: summary.totalLessons,
+      completedItems: summary.completedItems,
+      totalItems: summary.totalItems,
       completionPercentage: summary.completionPercentage,
-      progressPercentage: summary.completionPercentage,
+      progressPercentage: summary.progressPercentage,
       percentage: summary.percentage,
       progress: summary.progress,
       status: summary.status,
@@ -849,10 +976,10 @@ const addStudyTime = async (req, res) => {
     if (!await verifyStudentCourseAccess(req.user, req.params.courseId)) {
       return res.status(403).json({ success: false, message: 'You do not have access to this specific course' });
     }
-    const increment = [req.body.incrementSeconds, req.body.studyTimeSeconds, req.body.watchTimeSeconds, req.body.activeTimeSeconds]
-      .find(isFiniteNonNegativeNumber);
-    if (increment === undefined || increment <= 0 || increment > 86400) {
-      return res.status(400).json({ success: false, message: 'A study-time increment between 1 and 86400 seconds is required' });
+    
+    const increment = extractDurationSeconds(req.body);
+    if (increment <= 0 || increment > 86400) {
+      return res.status(400).json({ success: false, message: 'A valid study-time increment between 1 and 86400 seconds is required' });
     }
 
     const courseProgress = await CourseProgress.findOneAndUpdate(
@@ -894,14 +1021,7 @@ const getMyProgress = async (req, res) => {
       });
     }
 
-    let course = null;
-    if (courseId.match(/^[0-9a-fA-F]{24}$/)) {
-      course = await Course.findById(courseId);
-    }
-    if (!course) {
-      course = await Course.findOne({ courseId });
-    }
-
+    const course = await resolveCourse(courseId);
     if (!course) {
       return res.status(404).json({
         success: false,
@@ -923,19 +1043,16 @@ const getMyProgress = async (req, res) => {
       courseId: course._id,
     }).lean();
 
-    const summary = await saveCourseSummary(student._id, course, contentProgressDocs);
     const storedCourseProgress = await CourseProgress.findOne({ studentId: student._id, courseId: course._id }).lean();
-    if (storedCourseProgress && Number.isFinite(storedCourseProgress.studyTimeSeconds)) {
-      summary.studyTimeSeconds = storedCourseProgress.studyTimeSeconds;
-      summary.activeTimeSeconds = storedCourseProgress.studyTimeSeconds;
-      summary.studyTimeHours = Number((storedCourseProgress.studyTimeSeconds / 3600).toFixed(2));
-    }
+    const persistedStudyTime = storedCourseProgress?.studyTimeSeconds || 0;
+    const summary = await saveCourseSummary(student._id, course, contentProgressDocs, persistedStudyTime);
+
     return res.status(200).json({
       success: true,
       courseId: course.courseId || course._id.toString(),
       courseObjId: course._id.toString(),
-      count: progressDocs.length,
-      data: progressDocs,
+      count: contentProgressDocs.length,
+      data: contentProgressDocs,
       summary,
       progressSummary: summary,
       completedLessonIds: summary.completedLessonIds,
@@ -946,7 +1063,7 @@ const getMyProgress = async (req, res) => {
       completedLessons: summary.completedLessons,
       percentage: summary.percentage,
       completionPercentage: summary.completionPercentage,
-      progressPercentage: summary.completionPercentage,
+      progressPercentage: summary.progressPercentage,
       progress: summary.progress,
       status: summary.status,
       studyTimeSeconds: summary.studyTimeSeconds,
@@ -967,7 +1084,7 @@ const getMyProgress = async (req, res) => {
  * Mark a specific content item (videoPart, pdfNote, assignment, attachment) as completed.
  *
  * Body:
- *   { itemType: 'videoPart'|'pdfNote'|'assignment'|'attachment', completed: true }
+ *   { itemType: 'videoPart'|'pdfNote'|'assignment'|'attachment', completed: true, durationSeconds: ..., activeTimeSeconds: ..., startTime: ..., endTime: ... }
  *
  * Response includes the updated course-level progress summary.
  */
@@ -989,7 +1106,7 @@ const updateContentItemProgress = async (req, res) => {
     // Validate that the itemId actually belongs to this course's curriculum
     const allItems = getCurriculumItems(course);
     const targetItem = allItems.find(
-      (ci) => ci.lessonId === lessonId && ci.moduleId === moduleId && ci.itemId === itemId
+      (ci) => String(ci.itemId) === String(itemId) || (ci.lessonId === String(lessonId) && ci.moduleId === String(moduleId) && String(ci.itemId) === String(itemId))
     );
     if (!targetItem) {
       return res.status(404).json({
@@ -1007,9 +1124,23 @@ const updateContentItemProgress = async (req, res) => {
     const resolvedItemType = itemType || targetItem.itemType;
     const isCompleted = completed !== false; // default true if not specified
 
+    // Extract study time / duration if sent
+    const activeSeconds = extractDurationSeconds(req.body);
+    if (activeSeconds > 0) {
+      await CourseProgress.findOneAndUpdate(
+        { studentId: studentIdToUse, courseId: course._id },
+        {
+          $inc: { studyTimeSeconds: activeSeconds },
+          $set: { lastActivityAt: new Date() },
+          $setOnInsert: { totalItems: allItems.length },
+        },
+        { upsert: true, new: true }
+      );
+    }
+
     const updateFields = {
-      moduleId,
-      lessonId,
+      moduleId: targetItem.moduleId,
+      lessonId: targetItem.lessonId,
       itemType: resolvedItemType,
       lastAccessedAt: new Date(),
     };
@@ -1019,10 +1150,26 @@ const updateContentItemProgress = async (req, res) => {
     }
 
     await ContentItemProgress.findOneAndUpdate(
-      { studentId: studentIdToUse, courseId: course._id, itemId },
+      { studentId: studentIdToUse, courseId: course._id, itemId: targetItem.itemId },
       { $set: updateFields },
       { new: true, upsert: true }
     );
+
+    // Also synchronize LessonProgress if applicable
+    if (isCompleted) {
+      const lessonUpdate = { lastAccessedAt: new Date() };
+      if (resolvedItemType === 'videoPart') {
+        lessonUpdate.videoWatched = true;
+      } else if (resolvedItemType === 'pdfNote') {
+        lessonUpdate.pdfViewed = true;
+        lessonUpdate.pdfViewedAt = new Date();
+      }
+      await LessonProgress.findOneAndUpdate(
+        { studentId: studentIdToUse, courseId: course._id, lessonId: targetItem.lessonId },
+        { $set: lessonUpdate, $setOnInsert: { moduleId: targetItem.moduleId } },
+        { upsert: true }
+      );
+    }
 
     // Re-fetch all content-item docs and recompute the course summary
     const allContentProgress = await ContentItemProgress.find({
@@ -1033,21 +1180,21 @@ const updateContentItemProgress = async (req, res) => {
 
     const studentName = student?.name || student?.fullName || student?.email || 'A student';
     await logActivity({
-      title: 'Content item completed',
-      description: `${studentName} completed a ${resolvedItemType} in ${course.courseTitle || 'a course'}`,
+      title: isCompleted ? 'Content item completed' : 'Content item progress updated',
+      description: `${studentName} ${isCompleted ? 'completed' : 'interacted with'} a ${resolvedItemType} in ${course.courseTitle || 'a course'}`,
       type: 'student_learning',
-      action: 'content_item_completed',
+      action: isCompleted ? 'content_item_completed' : 'content_item_progressed',
       actor: studentIdToUse,
       courseId: course._id,
-      moduleId,
-      lessonId,
-      metadata: { itemId, itemType: resolvedItemType },
+      moduleId: targetItem.moduleId,
+      lessonId: targetItem.lessonId,
+      metadata: { itemId: targetItem.itemId, itemType: resolvedItemType, activeTimeSeconds: activeSeconds },
     });
 
     return res.status(200).json({
       success: true,
       message: 'Content item progress updated',
-      itemId,
+      itemId: targetItem.itemId,
       itemType: resolvedItemType,
       completed: isCompleted,
       summary,
@@ -1084,4 +1231,5 @@ module.exports = {
   updateContentItemProgress,
   buildProgressSummary,
   saveCourseSummary,
+  extractDurationSeconds,
 };

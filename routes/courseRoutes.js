@@ -2,7 +2,7 @@ const express = require('express');
 const router = express.Router();
 const courseController = require('../controllers/courseController');
 const { requireAdmin, requireAuth } = require('../middleware/rbac');
-const { getMyCourseContent, updateLessonProgress, getMyProgress, saveCourseProgress, addStudyTime } = require('../controllers/studentCurriculumController');
+const { getMyCourseContent, updateLessonProgress, updateContentItemProgress, getMyProgress, saveCourseProgress, addStudyTime } = require('../controllers/studentCurriculumController');
 const upload = require('../middleware/upload');
 const { handleUploadError, processUploadsToCloudinary } = upload;
 
@@ -29,6 +29,7 @@ router.post('/', requireAdmin, handleUpload, courseController.createCourse);
 // GET /api/courses/:id - Fetch single course with complete modules & lessons tree
 router.get('/:courseId/learn', requireAuth, getMyCourseContent);
 router.get('/:courseId/progress', requireAuth, getMyProgress);
+router.patch('/:courseId/modules/:moduleId/lessons/:lessonId/items/:itemId/progress', requireAuth, updateContentItemProgress);
 router.patch('/:courseId/modules/:moduleId/lessons/:lessonId/progress', requireAuth, updateLessonProgress);
 router.post('/:courseId/progress', requireAuth, saveCourseProgress);
 router.post('/:courseId/study-time', requireAuth, addStudyTime);
