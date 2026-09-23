@@ -2,65 +2,105 @@ const Course = require('../models/Course');
 const Student = require('../models/Student');
 const LessonProgress = require('../models/LessonProgress');
 const CourseProgress = require('../models/CourseProgress');
+const ContentItemProgress = require('../models/ContentItemProgress');
 const { verifyStudentCourseAccess } = require('../utils/courseAccessHelper');
 const { logActivity } = require('../utils/activityLogger');
 
 const isFiniteNonNegativeNumber = (value) => typeof value === 'number' && Number.isFinite(value) && value >= 0;
 
+/**
+ * Flatten every content item across all modules → lessons → resource arrays.
+ * Returns one entry per actual learning item (videoPart, pdfNote, assignment, attachment).
+ * Each item has a stable `itemId` — the resource subdocument's _id when present,
+ * or a deterministic composite key for legacy items saved before _id was enabled.
+ */
 function getCurriculumItems(course) {
-  return (course.modules || []).flatMap((module) =>
-    (module.lessons || []).map((lesson) => ({
-      moduleId: module._id ? module._id.toString() : String(module.id || ''),
-      lessonId: lesson._id ? lesson._id.toString() : String(lesson.id || ''),
-      lesson,
-    }))
-  );
+  const items = [];
+  const RESOURCE_ARRAYS = ['videoParts', 'pdfNotes', 'assignments', 'attachments'];
+
+  // Canonical itemType labels (singular, stored in ContentItemProgress.itemType)
+  const ITEM_TYPE_MAP = {
+    videoParts:   'videoPart',
+    pdfNotes:     'pdfNote',
+    assignments:  'assignment',
+    attachments:  'attachment',
+  };
+
+  for (const module of (course.modules || [])) {
+    const moduleId = module._id ? module._id.toString() : String(module.id || '');
+    for (const lesson of (module.lessons || [])) {
+      const lessonId = lesson._id ? lesson._id.toString() : String(lesson.id || '');
+      for (const arrayKey of RESOURCE_ARRAYS) {
+        const resources = lesson[arrayKey];
+        if (!Array.isArray(resources) || resources.length === 0) continue;
+        resources.forEach((resource, idx) => {
+          // Prefer MongoDB-generated _id; fall back to composite key for legacy items
+          const itemId = resource._id
+            ? resource._id.toString()
+            : `${lessonId}:${arrayKey}:${idx}`;
+          items.push({
+            moduleId,
+            lessonId,
+            itemId,
+            itemType: ITEM_TYPE_MAP[arrayKey],
+            arrayKey,
+            item: resource,
+          });
+        });
+      }
+    }
+  }
+  return items;
 }
 
-function buildProgressSummary(course, progressDocs) {
+/**
+ * Build the progress summary for a course using ContentItemProgress records.
+ * progressDocs must be an array of ContentItemProgress documents.
+ * studyTimeSeconds is merged in separately from CourseProgress.
+ */
+function buildProgressSummary(course, contentProgressDocs, studyTimeSeconds = 0) {
   const curriculumItems = getCurriculumItems(course);
-  const validLessonIds = new Set(curriculumItems.map((item) => item.lessonId));
-  const currentProgress = (progressDocs || []).filter((progress) => validLessonIds.has(String(progress.lessonId)));
-  const completedItemIds = [
-    ...new Set(
-      currentProgress
-        .filter((progress) =>
-          progress.completed === true ||
-          progress.videoWatched === true ||
-          progress.pdfViewed === true ||
-          progress.pdfDownloaded === true ||
-          Boolean(progress.completedAt) ||
-          (Number(progress.watchedPercent) >= 90)
-        )
-        .map((progress) => String(progress.lessonId))
-    )
-  ];
+  const validItemIds = new Set(curriculumItems.map((ci) => ci.itemId));
+
+  // Only count progress records that belong to actual current curriculum items
+  const currentProgress = (contentProgressDocs || []).filter(
+    (doc) => validItemIds.has(String(doc.itemId)) && doc.completed === true
+  );
+
+  const completedItemIds = [...new Set(currentProgress.map((doc) => String(doc.itemId)))];
   const completedItems = completedItemIds.length;
   const totalItems = curriculumItems.length;
-  const percentage = totalItems === 0 ? 0 : Math.round((completedItems / totalItems) * 100);
+
   const progressRatio = totalItems === 0 ? 0 : Number((completedItems / totalItems).toFixed(4));
-  const activeTimeSeconds = currentProgress.reduce((total, progress) => total + (Number(progress.activeTimeSeconds) || 0), 0);
-  const status = totalItems > 0 && completedItems === totalItems ? 'Completed' : completedItems > 0 ? 'In Progress' : 'Not Started';
+  const percentage = totalItems === 0 ? 0 : Math.round((completedItems / totalItems) * 100);
+  const progressPercentage = totalItems === 0 ? 0 : Number(((completedItems / totalItems) * 100).toFixed(2));
+  const status =
+    totalItems > 0 && completedItems === totalItems
+      ? 'Completed'
+      : completedItems > 0
+        ? 'In Progress'
+        : 'Not Started';
 
   return {
     courseId: course.courseId || (course._id ? course._id.toString() : ''),
     courseObjId: course._id ? course._id.toString() : '',
     totalItems,
-    totalLessons: totalItems,
+    totalLessons: totalItems,        // alias kept for backward-compat
     completedItems,
-    completedLessons: completedItems,
+    completedLessons: completedItems, // alias kept for backward-compat
     completedItemIds,
-    completedLessonIds: completedItemIds,
+    completedLessonIds: completedItemIds, // alias kept for backward-compat
     remainingItems: Math.max(totalItems - completedItems, 0),
     remainingLessons: Math.max(totalItems - completedItems, 0),
     percentage,
     completionPercentage: percentage,
-    progressPercentage: percentage,
+    progressPercentage,
     progress: progressRatio,
     status,
-    activeTimeSeconds,
-    studyTimeSeconds: activeTimeSeconds,
-    studyTimeHours: Number((activeTimeSeconds / 3600).toFixed(2)),
+    // Study time comes from CourseProgress (accumulated separately)
+    activeTimeSeconds: studyTimeSeconds,
+    studyTimeSeconds,
+    studyTimeHours: Number((studyTimeSeconds / 3600).toFixed(2)),
   };
 }
 
@@ -72,21 +112,29 @@ async function resolveCourse(courseId) {
   return Course.findOne({ courseId });
 }
 
-async function saveCourseSummary(studentId, course, progressDocs, studyTimeSeconds) {
-  const summary = buildProgressSummary(course, progressDocs);
-  const existingSummary = studyTimeSeconds === undefined
+/**
+ * Persist a course-level progress summary to CourseProgress (the materialized cache).
+ * contentProgressDocs = ContentItemProgress[] already fetched for this student+course.
+ * Pass studyTimeSeconds explicitly to atomically set it; omit to retain the stored value.
+ */
+async function saveCourseSummary(studentId, course, contentProgressDocs, studyTimeSeconds) {
+  // Resolve persisted study time first
+  const existingCourseProgress = studyTimeSeconds === undefined
     ? await CourseProgress.findOne({ studentId, courseId: course._id }).lean()
     : null;
-  const persistedStudyTime = studyTimeSeconds === undefined
-    ? Math.max(existingSummary?.studyTimeSeconds || 0, summary.studyTimeSeconds)
-    : studyTimeSeconds;
+  const persistedStudyTime = studyTimeSeconds !== undefined
+    ? studyTimeSeconds
+    : (existingCourseProgress?.studyTimeSeconds || 0);
+
+  const summary = buildProgressSummary(course, contentProgressDocs, persistedStudyTime);
+
   await CourseProgress.findOneAndUpdate(
     { studentId, courseId: course._id },
     {
       $set: {
-        completedItemIds: summary.completedLessonIds,
-        totalItems: summary.totalLessons,
-        completedItems: summary.completedLessons,
+        completedItemIds: summary.completedItemIds,
+        totalItems: summary.totalItems,
+        completedItems: summary.completedItems,
         completionPercentage: summary.completionPercentage,
         status: summary.status,
         studyTimeSeconds: persistedStudyTime,
@@ -95,12 +143,8 @@ async function saveCourseSummary(studentId, course, progressDocs, studyTimeSecon
     },
     { upsert: true, new: true }
   );
-  return {
-    ...summary,
-    studyTimeSeconds: persistedStudyTime,
-    activeTimeSeconds: persistedStudyTime,
-    studyTimeHours: Number((persistedStudyTime / 3600).toFixed(2)),
-  };
+
+  return summary;
 }
 
 /**
@@ -245,17 +289,20 @@ const getMyCourses = async (req, res) => {
         );
       }
 
+      // Default summary for unauthenticated / staff views
+      const totalContentItems = getCurriculumItems(c).length;
       let summary = {
-        totalItems: totalLessons,
-        totalLessons,
+        totalItems: totalContentItems,
+        totalLessons: totalContentItems,
         completedItems: 0,
         completedLessons: 0,
         completedItemIds: [],
         completedLessonIds: [],
-        remainingItems: totalLessons,
-        remainingLessons: totalLessons,
+        remainingItems: totalContentItems,
+        remainingLessons: totalContentItems,
         percentage: 0,
         completionPercentage: 0,
+        progressPercentage: 0,
         progress: 0,
         status: 'Not Started',
         activeTimeSeconds: 0,
@@ -264,17 +311,15 @@ const getMyCourses = async (req, res) => {
       };
 
       if (student) {
-        const progressDocs = await LessonProgress.find({
+        // Fetch content-item completion records (the source of truth for progress %)
+        const contentProgressDocs = await ContentItemProgress.find({
           studentId: student._id,
           courseId: c._id,
-        });
-        summary = buildProgressSummary(c, progressDocs);
+        }).lean();
+        // Merge persisted study time from CourseProgress
         const storedCourseProgress = await CourseProgress.findOne({ studentId: student._id, courseId: c._id }).lean();
-        if (storedCourseProgress && Number.isFinite(storedCourseProgress.studyTimeSeconds)) {
-          summary.studyTimeSeconds = storedCourseProgress.studyTimeSeconds;
-          summary.activeTimeSeconds = storedCourseProgress.studyTimeSeconds;
-          summary.studyTimeHours = Number((storedCourseProgress.studyTimeSeconds / 3600).toFixed(2));
-        }
+        const studyTimeSec = storedCourseProgress?.studyTimeSeconds || 0;
+        summary = buildProgressSummary(c, contentProgressDocs, studyTimeSec);
       }
 
       return {
@@ -394,14 +439,17 @@ const getMyCourseContent = async (req, res) => {
     }
 
     // 2. Fetch progress records if student
+    //    lessonProgressMap  — used for per-lesson video position / pdf flags in the response
+    //    contentProgressDocs — source of truth for item-based completion percentage
     let progressMap = {};
     let summary = null;
     if (student) {
-      const progressDocs = await LessonProgress.find({
+      // Lesson-level detail (video position, pdf flags) — kept for UI progress indicators
+      const lessonProgressDocs = await LessonProgress.find({
         studentId: student._id,
         courseId: course._id,
       });
-      progressDocs.forEach((p) => {
+      lessonProgressDocs.forEach((p) => {
         progressMap[p.lessonId] = {
           videoWatched: p.videoWatched,
           completed: p.completed || false,
@@ -418,8 +466,14 @@ const getMyCourseContent = async (req, res) => {
         };
       });
 
-      // Authoritative dynamic summary calculated across all modules & lessons
-      summary = await saveCourseSummary(student._id, course, progressDocs);
+      // Content-item completion — authoritative source for progress percentage
+      const contentProgressDocs = await ContentItemProgress.find({
+        studentId: student._id,
+        courseId: course._id,
+      }).lean();
+
+      // Persist and return the updated summary
+      summary = await saveCourseSummary(student._id, course, contentProgressDocs);
     } else {
       const curriculumItems = getCurriculumItems(course);
       summary = {
@@ -433,6 +487,7 @@ const getMyCourseContent = async (req, res) => {
         remainingLessons: curriculumItems.length,
         percentage: 0,
         completionPercentage: 0,
+        progressPercentage: 0,
         progress: 0,
         status: 'Not Started',
         activeTimeSeconds: 0,
@@ -802,7 +857,12 @@ const addStudyTime = async (req, res) => {
 
     const courseProgress = await CourseProgress.findOneAndUpdate(
       { studentId: student._id, courseId: course._id },
-      { $inc: { studyTimeSeconds: increment }, $set: { lastActivityAt: new Date() }, $setOnInsert: { totalItems: getCurriculumItems(course).length } },
+      {
+        $inc: { studyTimeSeconds: increment },
+        $set: { lastActivityAt: new Date() },
+        // Set totalItems on insert using the content-item count (not lesson count)
+        $setOnInsert: { totalItems: getCurriculumItems(course).length },
+      },
       { new: true, upsert: true }
     );
     await logActivity({
@@ -857,12 +917,13 @@ const getMyProgress = async (req, res) => {
       });
     }
 
-    const progressDocs = await LessonProgress.find({
+    // Content-item completion is the authoritative source for the progress summary
+    const contentProgressDocs = await ContentItemProgress.find({
       studentId: student._id,
       courseId: course._id,
-    });
+    }).lean();
 
-    const summary = await saveCourseSummary(student._id, course, progressDocs);
+    const summary = await saveCourseSummary(student._id, course, contentProgressDocs);
     const storedCourseProgress = await CourseProgress.findOne({ studentId: student._id, courseId: course._id }).lean();
     if (storedCourseProgress && Number.isFinite(storedCourseProgress.studyTimeSeconds)) {
       summary.studyTimeSeconds = storedCourseProgress.studyTimeSeconds;
@@ -901,6 +962,118 @@ const getMyProgress = async (req, res) => {
   }
 };
 
+/**
+ * PATCH /api/student/courses/:courseId/modules/:moduleId/lessons/:lessonId/items/:itemId/progress
+ * Mark a specific content item (videoPart, pdfNote, assignment, attachment) as completed.
+ *
+ * Body:
+ *   { itemType: 'videoPart'|'pdfNote'|'assignment'|'attachment', completed: true }
+ *
+ * Response includes the updated course-level progress summary.
+ */
+const updateContentItemProgress = async (req, res) => {
+  try {
+    const { courseId, moduleId, lessonId, itemId } = req.params;
+    const { itemType, completed } = req.body;
+
+    const student = await resolveStudent(req.user);
+    if (!student && !['admin', 'superadmin'].includes((req.user?.role || '').toLowerCase())) {
+      return res.status(403).json({ success: false, message: 'Student profile required to track progress' });
+    }
+
+    const course = await resolveCourse(courseId);
+    if (!course) {
+      return res.status(404).json({ success: false, message: 'Course not found' });
+    }
+
+    // Validate that the itemId actually belongs to this course's curriculum
+    const allItems = getCurriculumItems(course);
+    const targetItem = allItems.find(
+      (ci) => ci.lessonId === lessonId && ci.moduleId === moduleId && ci.itemId === itemId
+    );
+    if (!targetItem) {
+      return res.status(404).json({
+        success: false,
+        message: 'Content item not found in this course module/lesson',
+      });
+    }
+
+    const hasAccess = await verifyStudentCourseAccess(req.user, courseId);
+    if (!hasAccess) {
+      return res.status(403).json({ success: false, message: 'You do not have access to this specific course' });
+    }
+
+    const studentIdToUse = student ? student._id : req.user.id;
+    const resolvedItemType = itemType || targetItem.itemType;
+    const isCompleted = completed !== false; // default true if not specified
+
+    const updateFields = {
+      moduleId,
+      lessonId,
+      itemType: resolvedItemType,
+      lastAccessedAt: new Date(),
+    };
+    if (isCompleted) {
+      updateFields.completed = true;
+      updateFields.completedAt = new Date();
+    }
+
+    await ContentItemProgress.findOneAndUpdate(
+      { studentId: studentIdToUse, courseId: course._id, itemId },
+      { $set: updateFields },
+      { new: true, upsert: true }
+    );
+
+    // Re-fetch all content-item docs and recompute the course summary
+    const allContentProgress = await ContentItemProgress.find({
+      studentId: studentIdToUse,
+      courseId: course._id,
+    }).lean();
+    const summary = await saveCourseSummary(studentIdToUse, course, allContentProgress);
+
+    const studentName = student?.name || student?.fullName || student?.email || 'A student';
+    await logActivity({
+      title: 'Content item completed',
+      description: `${studentName} completed a ${resolvedItemType} in ${course.courseTitle || 'a course'}`,
+      type: 'student_learning',
+      action: 'content_item_completed',
+      actor: studentIdToUse,
+      courseId: course._id,
+      moduleId,
+      lessonId,
+      metadata: { itemId, itemType: resolvedItemType },
+    });
+
+    return res.status(200).json({
+      success: true,
+      message: 'Content item progress updated',
+      itemId,
+      itemType: resolvedItemType,
+      completed: isCompleted,
+      summary,
+      progressSummary: summary,
+      completedItemIds: summary.completedItemIds,
+      completedLessonIds: summary.completedLessonIds,
+      completedItems: summary.completedItems,
+      totalItems: summary.totalItems,
+      completionPercentage: summary.completionPercentage,
+      progressPercentage: summary.progressPercentage,
+      percentage: summary.percentage,
+      progress: summary.progress,
+      status: summary.status,
+      studyTimeSeconds: summary.studyTimeSeconds,
+      studyTimeHours: summary.studyTimeHours,
+    });
+  } catch (error) {
+    console.error('updateContentItemProgress Error:', error);
+    return res.status(500).json({
+      success: false,
+      message: 'Failed to update content item progress',
+      error: error.message,
+    });
+  }
+};
+
 module.exports = {
   getMyCourses,
   getMyCourseContent,
@@ -908,6 +1081,7 @@ module.exports = {
   saveCourseProgress,
   addStudyTime,
   getMyProgress,
+  updateContentItemProgress,
   buildProgressSummary,
   saveCourseSummary,
 };

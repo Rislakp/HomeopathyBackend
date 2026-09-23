@@ -5,6 +5,7 @@ const {
   getMyCourses,
   getMyCourseContent,
   updateLessonProgress,
+  updateContentItemProgress,
   getMyProgress,
   saveCourseProgress,
   addStudyTime,
@@ -34,5 +35,10 @@ router.post('/:courseId/study-time', addStudyTime);
 // PATCH lesson progress (watch position, completed status, PDF downloaded)
 router.patch('/courses/:courseId/modules/:moduleId/lessons/:lessonId/progress', updateLessonProgress);
 router.patch('/:courseId/modules/:moduleId/lessons/:lessonId/progress', updateLessonProgress);
+
+// PATCH individual content item progress (videoPart, pdfNote, assignment, attachment)
+// itemId is the resource subdocument's _id (or composite fallback key for legacy items)
+router.patch('/courses/:courseId/modules/:moduleId/lessons/:lessonId/items/:itemId/progress', updateContentItemProgress);
+router.patch('/:courseId/modules/:moduleId/lessons/:lessonId/items/:itemId/progress', updateContentItemProgress);
 
 module.exports = router;

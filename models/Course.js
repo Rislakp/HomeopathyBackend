@@ -14,7 +14,7 @@ const resourceSchema = new mongoose.Schema({
   mimetype:      { type: String, trim: true, default: '' },
   duration:      { type: Number, default: 0 },
   size:          { type: Number, default: 0 },
-}, { _id: false });
+});
 
 // Subdocument Schema for Lessons
 const lessonSchema = new mongoose.Schema({
