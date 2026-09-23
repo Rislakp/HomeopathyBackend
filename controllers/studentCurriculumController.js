@@ -55,6 +55,7 @@ function buildProgressSummary(course, progressDocs) {
     remainingLessons: Math.max(totalItems - completedItems, 0),
     percentage,
     completionPercentage: percentage,
+    progressPercentage: percentage,
     progress: progressRatio,
     status,
     activeTimeSeconds,
@@ -294,6 +295,7 @@ const getMyCourses = async (req, res) => {
         completedLessonIds: summary.completedLessonIds,
         completedItemIds: summary.completedItemIds,
         completionPercentage: summary.completionPercentage,
+        progressPercentage: summary.completionPercentage,
         percentage: summary.percentage,
         progress: summary.progress,
         status: summary.status,
@@ -470,6 +472,7 @@ const getMyCourseContent = async (req, res) => {
     formattedCourse.completedLessons = summary.completedLessons;
     formattedCourse.totalLessons = summary.totalLessons;
     formattedCourse.completionPercentage = summary.completionPercentage;
+    formattedCourse.progressPercentage = summary.completionPercentage;
     formattedCourse.percentage = summary.percentage;
     formattedCourse.progress = summary.progress;
     formattedCourse.status = summary.status;
@@ -490,6 +493,7 @@ const getMyCourseContent = async (req, res) => {
         completedItems: summary.completedItems,
         totalItems: summary.totalItems,
         completionPercentage: summary.completionPercentage,
+        progressPercentage: summary.completionPercentage,
         percentage: summary.percentage,
         progress: summary.progress,
         status: summary.status,
@@ -501,6 +505,7 @@ const getMyCourseContent = async (req, res) => {
       completedLessonIds: summary.completedLessonIds,
       completedItemIds: summary.completedItemIds,
       completionPercentage: summary.completionPercentage,
+      progressPercentage: summary.completionPercentage,
       percentage: summary.percentage,
       progress: summary.progress,
       totalLessons: summary.totalLessons,
@@ -686,6 +691,7 @@ const updateLessonProgress = async (req, res) => {
       completedLessons: summary.completedLessons,
       totalLessons: summary.totalLessons,
       completionPercentage: summary.completionPercentage,
+      progressPercentage: summary.completionPercentage,
       percentage: summary.percentage,
       progress: summary.progress,
       status: summary.status,
@@ -765,6 +771,7 @@ const saveCourseProgress = async (req, res) => {
       completedLessons: summary.completedLessons,
       totalLessons: summary.totalLessons,
       completionPercentage: summary.completionPercentage,
+      progressPercentage: summary.completionPercentage,
       percentage: summary.percentage,
       progress: summary.progress,
       status: summary.status,
@@ -878,6 +885,7 @@ const getMyProgress = async (req, res) => {
       completedLessons: summary.completedLessons,
       percentage: summary.percentage,
       completionPercentage: summary.completionPercentage,
+      progressPercentage: summary.completionPercentage,
       progress: summary.progress,
       status: summary.status,
       studyTimeSeconds: summary.studyTimeSeconds,

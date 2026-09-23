@@ -109,6 +109,7 @@ const buildProfileResponse = async (user, studentDoc = null) => {
         completedLessonIds: summary.completedLessonIds,
         completedItemIds: summary.completedItemIds,
         completionPercentage: summary.completionPercentage,
+        progressPercentage: summary.completionPercentage,
         percentage: summary.percentage,
         progress: summary.progress,
         status: summary.status,
@@ -122,7 +123,10 @@ const buildProfileResponse = async (user, studentDoc = null) => {
       base.courseProgress = summary;
       base.progress = summary;
       base.completedLessonIds = summary.completedLessonIds;
+      base.totalLessons = summary.totalLessons;
+      base.completedLessons = summary.completedLessons;
       base.completionPercentage = summary.completionPercentage;
+      base.progressPercentage = summary.completionPercentage;
     } else if (courseRef || courseId) {
       base.courses.push({
         id: courseRef ? courseRef.toString() : courseId,
@@ -133,6 +137,7 @@ const buildProfileResponse = async (user, studentDoc = null) => {
         completedLessons: 0,
         completedLessonIds: [],
         completionPercentage: 0,
+        progressPercentage: 0,
         progress: 0,
         status: 'Not Started',
         studyTimeSeconds: 0,
@@ -480,4 +485,5 @@ module.exports = {
   getProfile,
   updateProfile,
   deleteAccount,
+  buildProfileResponse,
 };

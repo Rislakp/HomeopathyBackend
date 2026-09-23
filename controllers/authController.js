@@ -133,6 +133,7 @@ const buildUserResponse = async (user, studentDoc = null) => {
           completedLessonIds: summary.completedLessonIds,
           completedItemIds: summary.completedItemIds,
           completionPercentage: summary.completionPercentage,
+          progressPercentage: summary.completionPercentage,
           percentage: summary.percentage,
           progress: summary.progress,
           status: summary.status,
@@ -146,7 +147,10 @@ const buildUserResponse = async (user, studentDoc = null) => {
         response.courseProgress = summary;
         response.progress = summary;
         response.completedLessonIds = summary.completedLessonIds;
+        response.totalLessons = summary.totalLessons;
+        response.completedLessons = summary.completedLessons;
         response.completionPercentage = summary.completionPercentage;
+        response.progressPercentage = summary.completionPercentage;
       } else if (courseRef || courseId) {
         response.courses.push({
           id: courseRef ? courseRef.toString() : courseId,
@@ -158,6 +162,7 @@ const buildUserResponse = async (user, studentDoc = null) => {
           completedLessons: 0,
           completedLessonIds: [],
           completionPercentage: 0,
+          progressPercentage: 0,
           progress: 0,
           status: 'Not Started',
           studyTimeSeconds: 0,
@@ -923,4 +928,5 @@ module.exports = {
   updatePassword: resetPassword,
   resetPasswordDirect: resetPassword,
   generateToken,
+  buildUserResponse,
 };
