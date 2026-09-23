@@ -20,25 +20,42 @@ function getCurriculumItems(course) {
 function buildProgressSummary(course, progressDocs) {
   const curriculumItems = getCurriculumItems(course);
   const validLessonIds = new Set(curriculumItems.map((item) => item.lessonId));
-  const currentProgress = progressDocs.filter((progress) => validLessonIds.has(String(progress.lessonId)));
-  const completedItemIds = new Set(
-    currentProgress
-      .filter((progress) => progress.completed || progress.videoWatched || progress.pdfViewed || progress.pdfDownloaded || progress.completedAt)
-      .map((progress) => String(progress.lessonId))
-  );
-  const completedItems = completedItemIds.size;
+  const currentProgress = (progressDocs || []).filter((progress) => validLessonIds.has(String(progress.lessonId)));
+  const completedItemIds = [
+    ...new Set(
+      currentProgress
+        .filter((progress) =>
+          progress.completed === true ||
+          progress.videoWatched === true ||
+          progress.pdfViewed === true ||
+          progress.pdfDownloaded === true ||
+          Boolean(progress.completedAt) ||
+          (Number(progress.watchedPercent) >= 90)
+        )
+        .map((progress) => String(progress.lessonId))
+    )
+  ];
+  const completedItems = completedItemIds.length;
   const totalItems = curriculumItems.length;
   const percentage = totalItems === 0 ? 0 : Math.round((completedItems / totalItems) * 100);
+  const progressRatio = totalItems === 0 ? 0 : Number((completedItems / totalItems).toFixed(4));
   const activeTimeSeconds = currentProgress.reduce((total, progress) => total + (Number(progress.activeTimeSeconds) || 0), 0);
+  const status = totalItems > 0 && completedItems === totalItems ? 'Completed' : completedItems > 0 ? 'In Progress' : 'Not Started';
 
   return {
     totalItems,
+    totalLessons: totalItems,
     completedItems,
+    completedLessons: completedItems,
+    completedItemIds,
+    completedLessonIds: completedItemIds,
     remainingItems: Math.max(totalItems - completedItems, 0),
+    remainingLessons: Math.max(totalItems - completedItems, 0),
     percentage,
-    status: totalItems > 0 && completedItems === totalItems ? 'Completed' : completedItems > 0 ? 'In Progress' : 'Not Started',
+    completionPercentage: percentage,
+    progress: progressRatio,
+    status,
     activeTimeSeconds,
-    // UI-friendly values; the canonical persisted value remains seconds.
     studyTimeSeconds: activeTimeSeconds,
     studyTimeHours: Number((activeTimeSeconds / 3600).toFixed(2)),
   };
@@ -54,9 +71,6 @@ async function resolveCourse(courseId) {
 
 async function saveCourseSummary(studentId, course, progressDocs, studyTimeSeconds) {
   const summary = buildProgressSummary(course, progressDocs);
-  const completedItemIds = progressDocs
-    .filter((progress) => progress.completed || progress.videoWatched || progress.pdfViewed || progress.pdfDownloaded || progress.completedAt)
-    .map((progress) => String(progress.lessonId));
   const existingSummary = studyTimeSeconds === undefined
     ? await CourseProgress.findOne({ studentId, courseId: course._id }).lean()
     : null;
@@ -67,10 +81,10 @@ async function saveCourseSummary(studentId, course, progressDocs, studyTimeSecon
     { studentId, courseId: course._id },
     {
       $set: {
-        completedItemIds: [...new Set(completedItemIds)],
-        totalItems: summary.totalItems,
-        completedItems: summary.completedItems,
-        completionPercentage: summary.percentage,
+        completedItemIds: summary.completedLessonIds,
+        totalItems: summary.totalLessons,
+        completedItems: summary.completedLessons,
+        completionPercentage: summary.completionPercentage,
         status: summary.status,
         studyTimeSeconds: persistedStudyTime,
         lastActivityAt: new Date(),
@@ -78,7 +92,12 @@ async function saveCourseSummary(studentId, course, progressDocs, studyTimeSecon
     },
     { upsert: true, new: true }
   );
-  return { ...summary, studyTimeSeconds: persistedStudyTime, activeTimeSeconds: persistedStudyTime, studyTimeHours: Number((persistedStudyTime / 3600).toFixed(2)) };
+  return {
+    ...summary,
+    studyTimeSeconds: persistedStudyTime,
+    activeTimeSeconds: persistedStudyTime,
+    studyTimeHours: Number((persistedStudyTime / 3600).toFixed(2)),
+  };
 }
 
 /**
@@ -211,7 +230,7 @@ const getMyCourses = async (req, res) => {
       });
     }
 
-    const formatted = courses.map((c) => {
+    const formatted = await Promise.all(courses.map(async (c) => {
       const formattedCourse = formatCourseForStudent(c);
       let totalLessons = 0;
       let totalModules = 0;
@@ -222,6 +241,39 @@ const getMyCourses = async (req, res) => {
           0
         );
       }
+
+      let summary = {
+        totalItems: totalLessons,
+        totalLessons,
+        completedItems: 0,
+        completedLessons: 0,
+        completedItemIds: [],
+        completedLessonIds: [],
+        remainingItems: totalLessons,
+        remainingLessons: totalLessons,
+        percentage: 0,
+        completionPercentage: 0,
+        progress: 0,
+        status: 'Not Started',
+        activeTimeSeconds: 0,
+        studyTimeSeconds: 0,
+        studyTimeHours: 0,
+      };
+
+      if (student) {
+        const progressDocs = await LessonProgress.find({
+          studentId: student._id,
+          courseId: c._id,
+        });
+        summary = buildProgressSummary(c, progressDocs);
+        const storedCourseProgress = await CourseProgress.findOne({ studentId: student._id, courseId: c._id }).lean();
+        if (storedCourseProgress && Number.isFinite(storedCourseProgress.studyTimeSeconds)) {
+          summary.studyTimeSeconds = storedCourseProgress.studyTimeSeconds;
+          summary.activeTimeSeconds = storedCourseProgress.studyTimeSeconds;
+          summary.studyTimeHours = Number((storedCourseProgress.studyTimeSeconds / 3600).toFixed(2));
+        }
+      }
+
       return {
         _id: formattedCourse._id,
         courseId: formattedCourse.courseId,
@@ -235,10 +287,21 @@ const getMyCourses = async (req, res) => {
         duration: formattedCourse.duration,
         modules: formattedCourse.modules || [],
         totalModules: Array.isArray(formattedCourse.modules) ? formattedCourse.modules.length : (c.modules ? c.modules.length : totalModules),
-        totalLessons,
+        totalLessons: summary.totalLessons,
+        completedLessons: summary.completedLessons,
+        completedLessonIds: summary.completedLessonIds,
+        completedItemIds: summary.completedItemIds,
+        completionPercentage: summary.completionPercentage,
+        percentage: summary.percentage,
+        progress: summary.progress,
+        status: summary.status,
+        studyTimeSeconds: summary.studyTimeSeconds,
+        studyTimeHours: summary.studyTimeHours,
+        summary: summary,
+        progressSummary: summary,
         createdAt: formattedCourse.createdAt,
       };
-    });
+    }));
 
     return res.status(200).json({
       success: true,
@@ -328,6 +391,7 @@ const getMyCourseContent = async (req, res) => {
 
     // 2. Fetch progress records if student
     let progressMap = {};
+    let summary = null;
     if (student) {
       const progressDocs = await LessonProgress.find({
         studentId: student._id,
@@ -349,6 +413,28 @@ const getMyCourseContent = async (req, res) => {
           lastAccessedAt: p.lastAccessedAt,
         };
       });
+
+      // Authoritative dynamic summary calculated across all modules & lessons
+      summary = await saveCourseSummary(student._id, course, progressDocs);
+    } else {
+      const curriculumItems = getCurriculumItems(course);
+      summary = {
+        totalItems: curriculumItems.length,
+        totalLessons: curriculumItems.length,
+        completedItems: 0,
+        completedLessons: 0,
+        completedItemIds: [],
+        completedLessonIds: [],
+        remainingItems: curriculumItems.length,
+        remainingLessons: curriculumItems.length,
+        percentage: 0,
+        completionPercentage: 0,
+        progress: 0,
+        status: 'Not Started',
+        activeTimeSeconds: 0,
+        studyTimeSeconds: 0,
+        studyTimeHours: 0,
+      };
     }
 
     // 3. Format full curriculum with absolute URLs and attached progress
@@ -375,12 +461,49 @@ const getMyCourseContent = async (req, res) => {
       }));
     }
 
+    formattedCourse.summary = summary;
+    formattedCourse.progressSummary = summary;
+    formattedCourse.completedLessonIds = summary.completedLessonIds;
+    formattedCourse.completedItemIds = summary.completedItemIds;
+    formattedCourse.completedLessons = summary.completedLessons;
+    formattedCourse.totalLessons = summary.totalLessons;
+    formattedCourse.completionPercentage = summary.completionPercentage;
+    formattedCourse.percentage = summary.percentage;
+    formattedCourse.progress = summary.progress;
+    formattedCourse.status = summary.status;
+    formattedCourse.studyTimeSeconds = summary.studyTimeSeconds;
+    formattedCourse.studyTimeHours = summary.studyTimeHours;
+
     return res.status(200).json({
       success: true,
       data: {
         course: formattedCourse,
         progress: progressMap,
+        summary: summary,
+        progressSummary: summary,
+        completedLessonIds: summary.completedLessonIds,
+        completedItemIds: summary.completedItemIds,
+        completedLessons: summary.completedLessons,
+        totalLessons: summary.totalLessons,
+        completedItems: summary.completedItems,
+        totalItems: summary.totalItems,
+        completionPercentage: summary.completionPercentage,
+        percentage: summary.percentage,
+        progress: summary.progress,
+        status: summary.status,
+        studyTimeSeconds: summary.studyTimeSeconds,
+        studyTimeHours: summary.studyTimeHours,
       },
+      summary: summary,
+      progressSummary: summary,
+      completedLessonIds: summary.completedLessonIds,
+      completedItemIds: summary.completedItemIds,
+      completionPercentage: summary.completionPercentage,
+      percentage: summary.percentage,
+      progress: summary.progress,
+      totalLessons: summary.totalLessons,
+      completedLessons: summary.completedLessons,
+      status: summary.status,
     });
   } catch (error) {
     console.error('getMyCourseContent Error:', error);
@@ -478,8 +601,7 @@ const updateLessonProgress = async (req, res) => {
     const isCompleted = percent >= 90 || videoWatched === true || isPdfViewed || completed === true || lessonCompleted === true;
 
     // Clients should send activeTimeSeconds for timers which pause when the
-    // app is backgrounded. Older video clients get a best-effort fallback from
-    // a forward position delta; new clients should always send active time.
+    // app is backgrounded.
     const explicitActiveSeconds = [
       req.body.activeTimeSeconds,
       req.body.timeSpentSeconds,
@@ -508,7 +630,6 @@ const updateLessonProgress = async (req, res) => {
 
     if (isCompleted) {
       updateFields.completed = true;
-      // A PDF view or a manually completed item is not a video watch.
       if (percent >= 90 || videoWatched === true) updateFields.videoWatched = true;
       updateFields.completedAt = existingProgress?.completedAt || new Date();
     }
@@ -537,8 +658,7 @@ const updateLessonProgress = async (req, res) => {
           ? 'video_watched'
           : 'lesson_progressed';
     const studentName = student.name || student.fullName || student.email || 'A student';
-    // Logging is intentionally non-fatal, so a transient activity-feed issue
-    // cannot discard a valid learning-progress update.
+
     await logActivity({
       title: action === 'lesson_completed' ? 'Lesson completed' : action === 'pdf_viewed' ? 'PDF viewed' : 'Lesson activity',
       description: `${studentName} ${action === 'lesson_completed' ? 'completed' : action === 'pdf_viewed' ? 'viewed material in' : 'continued'} ${curriculumItem.lesson.lessonTitle || 'a lesson'} in ${course.courseTitle || 'a course'}`,
@@ -558,6 +678,17 @@ const updateLessonProgress = async (req, res) => {
       message: 'Lesson progress updated',
       data: progress,
       summary,
+      progressSummary: summary,
+      completedLessonIds: summary.completedLessonIds,
+      completedItemIds: summary.completedItemIds,
+      completedLessons: summary.completedLessons,
+      totalLessons: summary.totalLessons,
+      completionPercentage: summary.completionPercentage,
+      percentage: summary.percentage,
+      progress: summary.progress,
+      status: summary.status,
+      studyTimeSeconds: summary.studyTimeSeconds,
+      studyTimeHours: summary.studyTimeHours,
     });
   } catch (error) {
     console.error('updateLessonProgress Error:', error);
@@ -571,9 +702,7 @@ const updateLessonProgress = async (req, res) => {
 
 /**
  * POST /api/courses/:courseId/progress
- * Persist a batch of completed curriculum item IDs. `completedVideoIds` and
- * `completedDocumentIds` are accepted as aliases because clients often track
- * them separately; they must still resolve to lesson IDs in this course.
+ * Persist a batch of completed curriculum item IDs.
  */
 const saveCourseProgress = async (req, res) => {
   try {
@@ -624,7 +753,22 @@ const saveCourseProgress = async (req, res) => {
       courseId: course._id,
       metadata: { completedItemIds: completedItems.map((item) => item.lessonId) },
     });
-    return res.status(200).json({ success: true, data: summary, summary });
+    return res.status(200).json({
+      success: true,
+      data: summary,
+      summary,
+      progressSummary: summary,
+      completedLessonIds: summary.completedLessonIds,
+      completedItemIds: summary.completedItemIds,
+      completedLessons: summary.completedLessons,
+      totalLessons: summary.totalLessons,
+      completionPercentage: summary.completionPercentage,
+      percentage: summary.percentage,
+      progress: summary.progress,
+      status: summary.status,
+      studyTimeSeconds: summary.studyTimeSeconds,
+      studyTimeHours: summary.studyTimeHours,
+    });
   } catch (error) {
     console.error('saveCourseProgress Error:', error);
     return res.status(500).json({ success: false, message: 'Failed to save course progress', error: error.message });
@@ -709,7 +853,7 @@ const getMyProgress = async (req, res) => {
       courseId: course._id,
     });
 
-    const summary = buildProgressSummary(course, progressDocs);
+    const summary = await saveCourseSummary(student._id, course, progressDocs);
     const storedCourseProgress = await CourseProgress.findOne({ studentId: student._id, courseId: course._id }).lean();
     if (storedCourseProgress && Number.isFinite(storedCourseProgress.studyTimeSeconds)) {
       summary.studyTimeSeconds = storedCourseProgress.studyTimeSeconds;
@@ -721,11 +865,16 @@ const getMyProgress = async (req, res) => {
       count: progressDocs.length,
       data: progressDocs,
       summary,
-      // Top-level aliases retain compatibility with dashboards that do not
-      // unwrap `summary`.
+      progressSummary: summary,
+      completedLessonIds: summary.completedLessonIds,
+      completedItemIds: summary.completedItemIds,
       totalItems: summary.totalItems,
+      totalLessons: summary.totalLessons,
       completedItems: summary.completedItems,
+      completedLessons: summary.completedLessons,
       percentage: summary.percentage,
+      completionPercentage: summary.completionPercentage,
+      progress: summary.progress,
       status: summary.status,
       studyTimeSeconds: summary.studyTimeSeconds,
       studyTimeHours: summary.studyTimeHours,
@@ -747,4 +896,6 @@ module.exports = {
   saveCourseProgress,
   addStudyTime,
   getMyProgress,
+  buildProgressSummary,
+  saveCourseSummary,
 };

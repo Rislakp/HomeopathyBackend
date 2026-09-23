@@ -35,9 +35,9 @@ const generateToken = (user) => {
 };
 
 /**
- * Helper to build sanitized user JSON response object
+ * Helper to build sanitized user JSON response object with authoritative course progress
  */
-const buildUserResponse = (user, studentDoc = null) => {
+const buildUserResponse = async (user, studentDoc = null) => {
   const courseRef = (studentDoc && studentDoc.courseRef) || user.courseRef || null;
   const courseId = (studentDoc && studentDoc.courseId) || user.courseId || (courseRef ? courseRef.toString() : '');
   const courseTitle = (studentDoc && studentDoc.course) || user.course || user.preferredCourse || '';
@@ -58,23 +58,122 @@ const buildUserResponse = (user, studentDoc = null) => {
     courses: [],
   };
 
-  if (courseRef || courseId) {
-    response.courses.push({
-      id: courseRef ? courseRef.toString() : courseId,
-      courseId: courseId,
-      title: courseTitle || 'Assigned Course',
-    });
-  }
-
   if (studentDoc) {
     response.status = studentDoc.status || 'Pending';
     response.accountStatus = studentDoc.accountStatus || 'Pending';
     response.isApproved = studentDoc.isApproved || false;
+    response.subscription = studentDoc.subscription || 'None';
+    response.subscriptionStatus = studentDoc.subscriptionStatus || 'None';
+    response.subscriptionExpiresAt = studentDoc.subscriptionExpiresAt || null;
   } else {
     // Fallback to User document fields if Student document is not found
     response.status = user.status || 'Pending';
     response.accountStatus = user.accountStatus || 'Pending';
     response.isApproved = user.isApproved || false;
+  }
+
+  // If student user, look up assigned course details & calculate progress
+  if (response.role === 'student') {
+    try {
+      let targetCourse = null;
+      if (courseRef && require('mongoose').Types.ObjectId.isValid(courseRef)) {
+        targetCourse = await Course.findById(courseRef);
+      }
+      if (!targetCourse && courseId) {
+        if (/^[0-9a-fA-F]{24}$/.test(courseId)) {
+          targetCourse = await Course.findById(courseId);
+        }
+        if (!targetCourse) {
+          targetCourse = await Course.findOne({ courseId });
+        }
+      }
+      if (!targetCourse && courseTitle) {
+        targetCourse = await Course.findOne({
+          $or: [
+            { courseTitle: courseTitle },
+            { title: courseTitle },
+          ],
+        });
+      }
+
+      if (targetCourse) {
+        const studentId = studentDoc ? studentDoc._id : user._id;
+        const LessonProgress = require('../models/LessonProgress');
+        const CourseProgress = require('../models/CourseProgress');
+        const { buildProgressSummary } = require('./studentCurriculumController');
+
+        const progressDocs = await LessonProgress.find({
+          studentId: studentId,
+          courseId: targetCourse._id,
+        });
+
+        const summary = buildProgressSummary(targetCourse, progressDocs);
+        const storedCourseProgress = await CourseProgress.findOne({
+          studentId: studentId,
+          courseId: targetCourse._id,
+        }).lean();
+
+        if (storedCourseProgress && Number.isFinite(storedCourseProgress.studyTimeSeconds)) {
+          summary.studyTimeSeconds = storedCourseProgress.studyTimeSeconds;
+          summary.activeTimeSeconds = storedCourseProgress.studyTimeSeconds;
+          summary.studyTimeHours = Number((storedCourseProgress.studyTimeSeconds / 3600).toFixed(2));
+        }
+
+        const courseItem = {
+          id: targetCourse._id.toString(),
+          _id: targetCourse._id.toString(),
+          courseId: targetCourse.courseId || targetCourse._id.toString(),
+          title: targetCourse.courseTitle || courseTitle || 'Assigned Course',
+          courseTitle: targetCourse.courseTitle || courseTitle || 'Assigned Course',
+          thumbnail: targetCourse.thumbnail || targetCourse.bannerUrl || '',
+          bannerUrl: targetCourse.bannerUrl || targetCourse.thumbnail || '',
+          totalModules: Array.isArray(targetCourse.modules) ? targetCourse.modules.length : 0,
+          totalLessons: summary.totalLessons,
+          completedLessons: summary.completedLessons,
+          completedLessonIds: summary.completedLessonIds,
+          completedItemIds: summary.completedItemIds,
+          completionPercentage: summary.completionPercentage,
+          percentage: summary.percentage,
+          progress: summary.progress,
+          status: summary.status,
+          studyTimeSeconds: summary.studyTimeSeconds,
+          studyTimeHours: summary.studyTimeHours,
+          summary: summary,
+          progressSummary: summary,
+        };
+
+        response.courses.push(courseItem);
+        response.courseProgress = summary;
+        response.progress = summary;
+        response.completedLessonIds = summary.completedLessonIds;
+        response.completionPercentage = summary.completionPercentage;
+      } else if (courseRef || courseId) {
+        response.courses.push({
+          id: courseRef ? courseRef.toString() : courseId,
+          _id: courseRef ? courseRef.toString() : courseId,
+          courseId: courseId,
+          title: courseTitle || 'Assigned Course',
+          courseTitle: courseTitle || 'Assigned Course',
+          totalLessons: 0,
+          completedLessons: 0,
+          completedLessonIds: [],
+          completionPercentage: 0,
+          progress: 0,
+          status: 'Not Started',
+          studyTimeSeconds: 0,
+          studyTimeHours: 0,
+        });
+      }
+    } catch (courseErr) {
+      console.warn('Notice: Could not load dynamic progress for auth response:', courseErr.message);
+      if (courseRef || courseId) {
+        response.courses.push({
+          id: courseRef ? courseRef.toString() : courseId,
+          courseId: courseId,
+          title: courseTitle || 'Assigned Course',
+        });
+      }
+    }
   }
 
   return response;
@@ -164,7 +263,7 @@ const registerStudent = async (req, res) => {
       enrolledCourse = await Course.findOne({ $or: courseQuery }).select('_id courseId courseTitle');
     }
 
-    if (!enrolledCourse) {
+    if (finalCourse && !enrolledCourse) {
       return res.status(400).json({
         success: false,
         message: 'Please select a valid course during registration.',
@@ -250,7 +349,7 @@ const registerStudent = async (req, res) => {
       message: 'Student registered successfully',
       token,
       role: 'student',
-      user: buildUserResponse(user, studentDoc),
+      user: await buildUserResponse(user, studentDoc),
     });
   } catch (error) {
     console.error('Student Registration Error:', error);
@@ -343,7 +442,7 @@ const universalLogin = async (req, res) => {
       message: 'Login successful',
       token,
       role: userRole,
-      user: buildUserResponse(user, studentDocForResponse),
+      user: await buildUserResponse(user, studentDocForResponse),
     });
   } catch (error) {
     console.error('Universal Login Error:', error);
@@ -460,7 +559,7 @@ const studentLogin = async (req, res) => {
       message: 'Login successful',
       token,
       role: 'student',
-      user: buildUserResponse(user, studentDocFound),
+      user: await buildUserResponse(user, studentDocFound),
     });
   } catch (error) {
     console.error('Student Login Error:', error);
@@ -576,7 +675,7 @@ const adminLogin = async (req, res) => {
           message: 'Access denied: Admin privileges required',
         });
       }
-      userObj = buildUserResponse(user);
+      userObj = await buildUserResponse(user);
     }
 
     // Generate token
@@ -633,7 +732,7 @@ const getMe = async (req, res) => {
 
     return res.status(200).json({
       success: true,
-      user: buildUserResponse(user, studentDoc),
+      user: await buildUserResponse(user, studentDoc),
     });
   } catch (error) {
     console.error('GetMe Error:', error);
@@ -686,7 +785,7 @@ const updateUserRole = async (req, res) => {
     return res.status(200).json({
       success: true,
       message: `User role updated to '${cleanRole}' successfully`,
-      user: buildUserResponse(user),
+      user: await buildUserResponse(user),
     });
   } catch (error) {
     console.error('UpdateUserRole Error:', error);

@@ -15,9 +15,13 @@ const isAuthorized = (req, targetId) => {
 };
 
 /**
- * Build the sanitized profile response object (no password).
+ * Build the sanitized profile response object (no password) with dynamic progress metrics.
  */
-const buildProfileResponse = (user, studentDoc = null) => {
+const buildProfileResponse = async (user, studentDoc = null) => {
+  const courseRef = (studentDoc && studentDoc.courseRef) || user.courseRef || null;
+  const courseId = (studentDoc && studentDoc.courseId) || user.courseId || (courseRef ? courseRef.toString() : '');
+  const courseTitle = (studentDoc && studentDoc.course) || user.course || user.preferredCourse || '';
+
   const base = {
     id: user._id ? user._id.toString() : user.id,
     name: user.name,
@@ -28,6 +32,10 @@ const buildProfileResponse = (user, studentDoc = null) => {
     dateOfBirth: user.dateOfBirth || '',
     qualification: user.qualification || '',
     preferredCourse: user.preferredCourse || '',
+    course: courseTitle,
+    courseId: courseId,
+    courseRef: courseRef ? courseRef.toString() : null,
+    courses: [],
     createdAt: user.createdAt,
     updatedAt: user.updatedAt,
   };
@@ -36,12 +44,103 @@ const buildProfileResponse = (user, studentDoc = null) => {
     base.studentProfileId = studentDoc._id
       ? studentDoc._id.toString()
       : studentDoc.id;
-    base.course = studentDoc.course || '';
+    base.course = studentDoc.course || courseTitle;
     base.subscription = studentDoc.subscription || '';
     base.subscriptionStatus = studentDoc.subscriptionStatus || 'None';
     base.subscriptionExpiresAt = studentDoc.subscriptionExpiresAt || null;
     base.status = studentDoc.status || 'Active';
     base.examScores = studentDoc.examScores || [];
+  }
+
+  try {
+    const Course = require('../models/Course');
+    let targetCourse = null;
+    if (courseRef && require('mongoose').Types.ObjectId.isValid(courseRef)) {
+      targetCourse = await Course.findById(courseRef);
+    }
+    if (!targetCourse && courseId) {
+      if (/^[0-9a-fA-F]{24}$/.test(courseId)) {
+        targetCourse = await Course.findById(courseId);
+      }
+      if (!targetCourse) {
+        targetCourse = await Course.findOne({ courseId });
+      }
+    }
+    if (!targetCourse && courseTitle) {
+      targetCourse = await Course.findOne({
+        $or: [{ courseTitle: courseTitle }, { title: courseTitle }],
+      });
+    }
+
+    if (targetCourse) {
+      const studentId = studentDoc ? studentDoc._id : user._id;
+      const LessonProgress = require('../models/LessonProgress');
+      const CourseProgress = require('../models/CourseProgress');
+      const { buildProgressSummary } = require('./studentCurriculumController');
+
+      const progressDocs = await LessonProgress.find({
+        studentId: studentId,
+        courseId: targetCourse._id,
+      });
+
+      const summary = buildProgressSummary(targetCourse, progressDocs);
+      const storedCourseProgress = await CourseProgress.findOne({
+        studentId: studentId,
+        courseId: targetCourse._id,
+      }).lean();
+
+      if (storedCourseProgress && Number.isFinite(storedCourseProgress.studyTimeSeconds)) {
+        summary.studyTimeSeconds = storedCourseProgress.studyTimeSeconds;
+        summary.activeTimeSeconds = storedCourseProgress.studyTimeSeconds;
+        summary.studyTimeHours = Number((storedCourseProgress.studyTimeSeconds / 3600).toFixed(2));
+      }
+
+      const courseItem = {
+        id: targetCourse._id.toString(),
+        _id: targetCourse._id.toString(),
+        courseId: targetCourse.courseId || targetCourse._id.toString(),
+        title: targetCourse.courseTitle || courseTitle || 'Assigned Course',
+        courseTitle: targetCourse.courseTitle || courseTitle || 'Assigned Course',
+        thumbnail: targetCourse.thumbnail || targetCourse.bannerUrl || '',
+        bannerUrl: targetCourse.bannerUrl || targetCourse.thumbnail || '',
+        totalModules: Array.isArray(targetCourse.modules) ? targetCourse.modules.length : 0,
+        totalLessons: summary.totalLessons,
+        completedLessons: summary.completedLessons,
+        completedLessonIds: summary.completedLessonIds,
+        completedItemIds: summary.completedItemIds,
+        completionPercentage: summary.completionPercentage,
+        percentage: summary.percentage,
+        progress: summary.progress,
+        status: summary.status,
+        studyTimeSeconds: summary.studyTimeSeconds,
+        studyTimeHours: summary.studyTimeHours,
+        summary: summary,
+        progressSummary: summary,
+      };
+
+      base.courses.push(courseItem);
+      base.courseProgress = summary;
+      base.progress = summary;
+      base.completedLessonIds = summary.completedLessonIds;
+      base.completionPercentage = summary.completionPercentage;
+    } else if (courseRef || courseId) {
+      base.courses.push({
+        id: courseRef ? courseRef.toString() : courseId,
+        _id: courseRef ? courseRef.toString() : courseId,
+        courseId: courseId,
+        title: courseTitle || 'Assigned Course',
+        totalLessons: 0,
+        completedLessons: 0,
+        completedLessonIds: [],
+        completionPercentage: 0,
+        progress: 0,
+        status: 'Not Started',
+        studyTimeSeconds: 0,
+        studyTimeHours: 0,
+      });
+    }
+  } catch (err) {
+    console.warn('Notice: Could not load dynamic progress for profile response:', err.message);
   }
 
   return base;
@@ -92,9 +191,11 @@ const getProfile = async (req, res) => {
         (await Student.findOne({ email: user.email }));
     }
 
+    const profile = await buildProfileResponse(user, studentDoc);
+
     return res.status(200).json({
       success: true,
-      profile: buildProfileResponse(user, studentDoc),
+      profile,
     });
   } catch (error) {
     console.error('[studentProfileController] getProfile Error:', error);
@@ -259,7 +360,7 @@ const updateProfile = async (req, res) => {
     return res.status(200).json({
       success: true,
       message: 'Profile updated successfully.',
-      profile: buildProfileResponse(updatedUser, studentDoc),
+      profile: await buildProfileResponse(updatedUser, studentDoc),
     });
   } catch (error) {
     console.error('[studentProfileController] updateProfile Error:', error);
