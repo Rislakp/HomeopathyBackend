@@ -166,6 +166,7 @@ app.use('/api/v1', require('./routes/recordingRoutes'));
 
 const studentFacultyRoutes = require('./routes/studentFacultyRoutes');
 app.use('/api/student/faculty', studentFacultyRoutes);
+app.use('/api/v1/student/faculty', studentFacultyRoutes);
 app.use('/api/student', require('./routes/studentCurriculumRoutes'));
 app.use('/api/v1/student', require('./routes/studentCurriculumRoutes'));
 app.use('/api/student_new', require('./routes/studentRoutes'));
