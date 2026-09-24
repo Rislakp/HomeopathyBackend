@@ -140,6 +140,12 @@ app.use(express.static(path.join(__dirname, 'public')));
 
 // Routes
 const authRoutes = require('./routes/authRoutes');
+const adminAuthRoutes = require('./routes/adminAuthRoutes');
+
+// ── Public Authentication Endpoints (Strictly public, NO auth middleware) ───
+app.use('/api/admin/auth', adminAuthRoutes);
+app.use('/api/v1/admin/auth', adminAuthRoutes);
+app.use('/admin/auth', adminAuthRoutes);
 
 app.use('/api/auth', authRoutes);
 app.use('/api/v1/auth', authRoutes);
@@ -194,9 +200,6 @@ app.use('/api/admin/activities', adminDashboardRoutes);
 app.use('/api/v1/admin/activities', adminDashboardRoutes);
 
 const adminRoutes = require('./routes/adminRoutes');
-app.use('/api/admin/auth', require('./routes/adminAuthRoutes'));
-app.use('/api/v1/admin/auth', require('./routes/adminAuthRoutes'));
-app.use('/admin/auth', require('./routes/adminAuthRoutes'));
 app.use('/api/v1/admin', adminRoutes);
 app.use('/api/admin', adminRoutes);
 app.use('/api/v1/students', adminRoutes);  // admin student management (list, bulk ops)
