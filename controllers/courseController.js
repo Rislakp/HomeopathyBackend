@@ -154,6 +154,11 @@ const toResourceObj = (item) => {
       resource_type: (resType || '').trim(),
       mimetype: (item.mimetype || (/\.pdf([?#]|$)/i.test(lowerUrl) ? 'application/pdf' : '')).trim(),
       size: typeof item.size === 'number' ? item.size : (Number(item.size) || 0),
+      duration: typeof item.duration === 'number' ? item.duration : (Number(item.duration) || 0),
+      width: typeof item.width === 'number' ? item.width : (item.width ? Number(item.width) : null),
+      height: typeof item.height === 'number' ? item.height : (item.height ? Number(item.height) : null),
+      format: (item.format || '').trim(),
+      bytes: typeof item.bytes === 'number' ? item.bytes : (Number(item.bytes || item.size) || 0),
     };
   }
   return null;
@@ -380,11 +385,19 @@ const serializeLesson = (lesson, req) => {
 
   return {
     _id: lesson._id,
+    id: lesson._id ? lesson._id.toString() : undefined,
     lessonTitle: lesson.lessonTitle || '',
     lessonType: lesson.lessonType || 'Recorded Video',
     durationOrPages: lesson.durationOrPages || '',
     description: lesson.description || '',
     videoUrl: primaryVideoUrl,
+    videoPublicId: lesson.videoPublicId || (primaryVideoUrl ? (getPublicIdFromUrl(primaryVideoUrl) || '') : ''),
+    videoResourceType: lesson.videoResourceType || 'video',
+    videoDuration: lesson.videoDuration || 0,
+    videoWidth: lesson.videoWidth || null,
+    videoHeight: lesson.videoHeight || null,
+    videoFormat: lesson.videoFormat || '',
+    videoBytes: lesson.videoBytes || 0,
     fileUrl: primaryDocUrl || primaryLessonUrl,
     documentUrl: primaryDocUrl || primaryLessonUrl,
     pdfUrl: primaryDocUrl,
@@ -883,6 +896,44 @@ exports.addLesson = async (req, res) => {
       status,
     } = req.body;
 
+    const videoPublicId = (
+      req.body.videoPublicId ||
+      req.body.video_public_id ||
+      req.body.public_id ||
+      (req.body.videoMetadata && req.body.videoMetadata.videoPublicId) ||
+      (req.body.videoMetadata && req.body.videoMetadata.public_id) ||
+      ''
+    ).trim();
+    const videoResourceType = (
+      req.body.videoResourceType ||
+      req.body.video_resource_type ||
+      req.body.resourceType ||
+      req.body.resource_type ||
+      (req.body.videoMetadata && req.body.videoMetadata.resourceType) ||
+      'video'
+    ).trim();
+    const videoDuration = Number(
+      req.body.videoDuration ||
+      req.body.duration ||
+      (req.body.videoMetadata && req.body.videoMetadata.duration) ||
+      0
+    );
+    const videoWidth = req.body.videoWidth !== undefined ? Number(req.body.videoWidth) : (req.body.width !== undefined ? Number(req.body.width) : (req.body.videoMetadata && req.body.videoMetadata.width !== undefined ? Number(req.body.videoMetadata.width) : null));
+    const videoHeight = req.body.videoHeight !== undefined ? Number(req.body.videoHeight) : (req.body.height !== undefined ? Number(req.body.height) : (req.body.videoMetadata && req.body.videoMetadata.height !== undefined ? Number(req.body.videoMetadata.height) : null));
+    const videoFormat = (
+      req.body.videoFormat ||
+      req.body.format ||
+      (req.body.videoMetadata && req.body.videoMetadata.format) ||
+      ''
+    ).trim();
+    const videoBytes = Number(
+      req.body.videoBytes ||
+      req.body.bytes ||
+      req.body.size ||
+      (req.body.videoMetadata && req.body.videoMetadata.bytes) ||
+      0
+    );
+
     const actualLessonTitle = (lessonTitle || title || '').trim();
     if (!actualLessonTitle) {
       console.log('[addLesson] Step 2 failed: lessonTitle is missing');
@@ -1215,13 +1266,22 @@ exports.addLesson = async (req, res) => {
     console.log(JSON.stringify(finalAttachments, null, 2));
     console.log('===========================================');
 
+    const resolvedPublicId = videoPublicId || (finalVideoUrl ? (getPublicIdFromUrl(finalVideoUrl) || '') : '');
+
     const newLesson = {
       lessonTitle: actualLessonTitle,
       lessonType: actualLessonType,
-      durationOrPages: (durationOrPages || duration || pages || '').trim(),
+      durationOrPages: (durationOrPages || duration || pages || (videoDuration ? `${Math.round(videoDuration)} sec` : '') || '').trim(),
       description: (description || '').trim(),
       meetingUrl: actualMeetingUrl,
       videoUrl: finalVideoUrl,
+      videoPublicId: resolvedPublicId,
+      videoResourceType: videoResourceType || 'video',
+      videoDuration: videoDuration,
+      videoWidth: videoWidth,
+      videoHeight: videoHeight,
+      videoFormat: videoFormat,
+      videoBytes: videoBytes,
       videoParts: finalVideoParts,
       pdfNotes: finalPdfNotes,
       assignments: finalAssignments,
@@ -1328,6 +1388,36 @@ exports.updateLesson = async (req, res) => {
     if (meetingUrl !== undefined) targetLesson.meetingUrl = meetingUrl.trim();
     if (status !== undefined) targetLesson.status = status.trim();
     if (videoUrl !== undefined) targetLesson.videoUrl = videoUrl.trim();
+
+    if (req.body.videoPublicId !== undefined || req.body.video_public_id !== undefined || req.body.public_id !== undefined || (req.body.videoMetadata && req.body.videoMetadata.videoPublicId !== undefined)) {
+      targetLesson.videoPublicId = (req.body.videoPublicId || req.body.video_public_id || req.body.public_id || (req.body.videoMetadata && req.body.videoMetadata.videoPublicId) || '').trim();
+    } else if (targetLesson.videoUrl && !targetLesson.videoPublicId) {
+      targetLesson.videoPublicId = getPublicIdFromUrl(targetLesson.videoUrl) || '';
+    }
+
+    if (req.body.videoResourceType !== undefined || req.body.resourceType !== undefined || (req.body.videoMetadata && req.body.videoMetadata.resourceType !== undefined)) {
+      targetLesson.videoResourceType = (req.body.videoResourceType || req.body.resourceType || (req.body.videoMetadata && req.body.videoMetadata.resourceType) || 'video').trim();
+    }
+
+    if (req.body.videoDuration !== undefined || duration !== undefined || (req.body.videoMetadata && req.body.videoMetadata.duration !== undefined)) {
+      targetLesson.videoDuration = Number(req.body.videoDuration || duration || (req.body.videoMetadata && req.body.videoMetadata.duration) || 0);
+    }
+
+    if (req.body.videoWidth !== undefined || req.body.width !== undefined || (req.body.videoMetadata && req.body.videoMetadata.width !== undefined)) {
+      targetLesson.videoWidth = Number(req.body.videoWidth ?? req.body.width ?? (req.body.videoMetadata ? req.body.videoMetadata.width : null));
+    }
+
+    if (req.body.videoHeight !== undefined || req.body.height !== undefined || (req.body.videoMetadata && req.body.videoMetadata.height !== undefined)) {
+      targetLesson.videoHeight = Number(req.body.videoHeight ?? req.body.height ?? (req.body.videoMetadata ? req.body.videoMetadata.height : null));
+    }
+
+    if (req.body.videoFormat !== undefined || req.body.format !== undefined || (req.body.videoMetadata && req.body.videoMetadata.format !== undefined)) {
+      targetLesson.videoFormat = (req.body.videoFormat || req.body.format || (req.body.videoMetadata && req.body.videoMetadata.format) || '').trim();
+    }
+
+    if (req.body.videoBytes !== undefined || req.body.bytes !== undefined || req.body.size !== undefined || (req.body.videoMetadata && req.body.videoMetadata.bytes !== undefined)) {
+      targetLesson.videoBytes = Number(req.body.videoBytes || req.body.bytes || req.body.size || (req.body.videoMetadata && req.body.videoMetadata.bytes) || 0);
+    }
 
     // Array fields — replace when provided in body
     const explicitCategoryMap = new Map();

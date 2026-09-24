@@ -14,6 +14,10 @@ const resourceSchema = new mongoose.Schema({
   mimetype:      { type: String, trim: true, default: '' },
   duration:      { type: Number, default: 0 },
   size:          { type: Number, default: 0 },
+  width:         { type: Number, default: null },
+  height:        { type: Number, default: null },
+  format:        { type: String, trim: true, default: '' },
+  bytes:         { type: Number, default: 0 },
 });
 
 // Subdocument Schema for Lessons
@@ -54,6 +58,37 @@ const lessonSchema = new mongoose.Schema({
     type: String,
     trim: true,
     default: '',
+  },
+  videoPublicId: {
+    type: String,
+    trim: true,
+    default: '',
+  },
+  videoResourceType: {
+    type: String,
+    trim: true,
+    default: 'video',
+  },
+  videoDuration: {
+    type: Number,
+    default: 0,
+  },
+  videoWidth: {
+    type: Number,
+    default: null,
+  },
+  videoHeight: {
+    type: Number,
+    default: null,
+  },
+  videoFormat: {
+    type: String,
+    trim: true,
+    default: '',
+  },
+  videoBytes: {
+    type: Number,
+    default: 0,
   },
   fileUrl: {
     type: String,

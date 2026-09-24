@@ -422,4 +422,99 @@ exports.deleteFile = async (req, res) => {
   }
 };
 
+/**
+ * @desc    Generate signed parameters for direct frontend upload to Cloudinary (Video)
+ * @route   POST /api/upload/video/signature or /api/uploads/video/signature
+ * @access  Private (Admin / SuperAdmin / Authorized Staff)
+ */
+exports.generateVideoSignature = async (req, res) => {
+  try {
+    const config = cloudinary.config();
+    const cloudName = config.cloud_name || process.env.CLOUDINARY_CLOUD_NAME;
+    const apiKey = config.api_key || process.env.CLOUDINARY_API_KEY;
+    const apiSecret = config.api_secret || process.env.CLOUDINARY_API_SECRET;
+
+    if (!cloudName || !apiKey || !apiSecret) {
+      return res.status(500).json({
+        success: false,
+        message: 'Cloudinary configuration is incomplete on the server.',
+      });
+    }
+
+    const timestamp = Math.round(Date.now() / 1000);
+    const folder = (req.body.folder || 'homeopathy-media/videos').trim();
+
+    const paramsToSign = {
+      timestamp: timestamp,
+      folder: folder,
+    };
+
+    if (req.body.public_id || req.body.publicId) {
+      paramsToSign.public_id = String(req.body.public_id || req.body.publicId).trim();
+    }
+
+    const signature = cloudinary.utils.api_sign_request(paramsToSign, apiSecret);
+    const uploadUrl = `https://api.cloudinary.com/v1_1/${cloudName}/video/upload`;
+
+    return res.status(200).json({
+      success: true,
+      data: {
+        timestamp: timestamp,
+        signature: signature,
+        apiKey: apiKey,
+        cloudName: cloudName,
+        folder: folder,
+        resourceType: 'video',
+        uploadUrl: uploadUrl,
+        public_id: paramsToSign.public_id || null,
+      },
+    });
+  } catch (error) {
+    console.error('Generate video signature error:', error);
+    return res.status(500).json({
+      success: false,
+      message: 'Failed to generate video upload signature',
+      error: error.message,
+    });
+  }
+};
+
+/**
+ * @desc    Dedicated cleanup endpoint for video uploads if lesson creation fails
+ * @route   DELETE /api/upload/video or /api/uploads/video
+ * @access  Private (Admin / SuperAdmin)
+ */
+exports.deleteVideo = async (req, res) => {
+  try {
+    const { url, public_id, publicId } = req.body;
+    const targetPublicId = public_id || publicId;
+
+    if (!url && !targetPublicId) {
+      return res.status(400).json({
+        success: false,
+        message: 'Please provide either url or public_id to delete video',
+      });
+    }
+
+    if (url) {
+      await deleteCloudinaryByUrl(url);
+    } else if (targetPublicId) {
+      await cloudinary.uploader.destroy(targetPublicId, { resource_type: 'video' });
+    }
+
+    return res.status(200).json({
+      success: true,
+      message: 'Video deleted successfully',
+    });
+  } catch (error) {
+    console.error('Delete video error:', error);
+    return res.status(500).json({
+      success: false,
+      message: 'Failed to delete video',
+      error: error.message,
+    });
+  }
+};
+
+
 

@@ -4,6 +4,8 @@ const uploadController = require('../controllers/uploadController');
 const upload = require('../middleware/upload');
 const { handleUploadError, processUploadsToCloudinary } = upload;
 
+const { requireAuth, requireAdmin } = require('../middleware/rbac');
+
 // Flexible wrapper that accepts multiple files under 'files', 'images', 'file', 'image', or any field name
 const handleFileUpload = (req, res, next) => {
   upload.any()(req, res, (err) => {
@@ -14,12 +16,19 @@ const handleFileUpload = (req, res, next) => {
   });
 };
 
-
 // GET /api/media or GET /api/upload - List stored Cloudinary assets
 router.get('/', uploadController.getMediaAssets);
 router.get('/media', uploadController.getMediaAssets);
 router.get('/list', uploadController.getMediaAssets);
 router.get('/download', uploadController.downloadFile);
+
+// POST /api/upload/video/signature - Generate Cloudinary upload signature for direct video uploads
+router.post('/video/signature', requireAdmin, uploadController.generateVideoSignature);
+router.post('/video-signature', requireAdmin, uploadController.generateVideoSignature);
+router.post('/signature', requireAdmin, uploadController.generateVideoSignature);
+
+// DELETE /api/upload/video - Dedicated video cleanup endpoint
+router.delete('/video', requireAdmin, uploadController.deleteVideo);
 
 // POST /api/upload - Multiple or single file upload to Cloudinary
 router.post('/', handleFileUpload, uploadController.uploadFiles);
