@@ -49,6 +49,10 @@ async function verifyStudentCourseAccess(reqUser, requestedCourseId) {
   if (studentCourseRefStr === targetCourseIdStr) return true;
   if (studentCourseIdStr === targetCourseIdStr) return true;
   if (student.course && student.course.trim().toLowerCase() === targetCourseIdStr.toLowerCase()) return true;
+  if (Array.isArray(student.courseIds)) {
+    const found = student.courseIds.some(id => String(id).trim().toLowerCase() === targetCourseIdStr.toLowerCase());
+    if (found) return true;
+  }
   
   // Also check if the requestedCourseId matches the student's assigned courseRef exactly 
   // (if they requested a custom string ID but the student has the ObjectId and vice versa)

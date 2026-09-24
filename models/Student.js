@@ -73,6 +73,12 @@ const studentSchema = new mongoose.Schema({
     trim: true,
     default: '',
   },
+  courseIds: [
+    {
+      type: String,
+      trim: true,
+    },
+  ],
   subscriptionPlanId: {
     type: mongoose.Schema.Types.ObjectId,
     ref: 'SubscriptionPlan',

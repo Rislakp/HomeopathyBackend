@@ -182,6 +182,8 @@ const studentRoutes = require('./src/student/student.routes');
 app.use(studentRoutes);
 const adminExamRoutes = require('./src/admin/admin.routes');
 app.use(adminExamRoutes);
+const unaniExamRoutes = require('./src/unani/exams/routes/unaniExam.routes');
+app.use(unaniExamRoutes);
 const facultyRoutes = require('./routes/facultyRoutes');
 app.use('/api/admin/faculty', facultyRoutes);
 app.use('/api/v1/admin/faculty', facultyRoutes);

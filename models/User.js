@@ -62,6 +62,12 @@ const userSchema = new mongoose.Schema(
       trim: true,
       default: '',
     },
+    courseIds: [
+      {
+        type: String,
+        trim: true,
+      },
+    ],
     courseRef: {
       type: mongoose.Schema.Types.ObjectId,
       ref: 'Course',

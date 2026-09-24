@@ -256,10 +256,120 @@ const requireRole = (...allowedRoles) => {
 const requireAdmin = requireRole('admin', 'superadmin');
 const requireStudent = requireRole('student');
 
+/**
+ * Middleware factory to enforce that the authenticated student has access to a specific course (e.g. 'unani').
+ * Admins and Superadmins bypass this check.
+ */
+const requireCourseAccess = (requiredCourseId) => {
+  return async (req, res, next) => {
+    const runAccessCheck = async () => {
+      try {
+        const userRole = (req.user?.role || '').toLowerCase().trim();
+        // Admin / Superadmin bypass course enrollment check
+        if (['admin', 'superadmin'].includes(userRole)) {
+          return next();
+        }
+
+        const targetCourseStr = String(requiredCourseId || '').toLowerCase().trim();
+        if (!targetCourseStr) return next();
+
+        // Retrieve actual Student document from DB
+        let student = null;
+        if (Student) {
+          const userId = req.user.studentId || req.user.userId || req.user.id;
+          if (req.user.studentId && require('mongoose').Types.ObjectId.isValid(req.user.studentId)) {
+            student = await Student.findById(req.user.studentId);
+          }
+          if (!student && userId && require('mongoose').Types.ObjectId.isValid(userId)) {
+            student = await Student.findOne({ userId });
+            if (!student) {
+              student = await Student.findById(userId);
+            }
+          }
+          if (!student && req.user.email) {
+            student = await Student.findOne({ email: req.user.email.toLowerCase() });
+          }
+        }
+
+        const enrolledIds = new Set();
+
+        // Extract course identifiers from student document
+        if (student) {
+          if (Array.isArray(student.courseIds)) {
+            student.courseIds.forEach(id => {
+              if (id) enrolledIds.add(String(id).toLowerCase().trim());
+            });
+          }
+          if (student.courseId) enrolledIds.add(String(student.courseId).toLowerCase().trim());
+          if (student.course) enrolledIds.add(String(student.course).toLowerCase().trim());
+          if (student.courseRef) enrolledIds.add(String(student.courseRef).toLowerCase().trim());
+          if (Array.isArray(student.enrolledCourses)) {
+            student.enrolledCourses.forEach(id => {
+              if (id) enrolledIds.add(String(id).toLowerCase().trim());
+            });
+          }
+
+          // Check if courseRef points to a Course document with matching courseId
+          if (student.courseRef && require('mongoose').Types.ObjectId.isValid(student.courseRef)) {
+            try {
+              const Course = require('../models/Course');
+              const courseDoc = await Course.findById(student.courseRef);
+              if (courseDoc) {
+                if (courseDoc.courseId) enrolledIds.add(String(courseDoc.courseId).toLowerCase().trim());
+                if (courseDoc.courseTitle) enrolledIds.add(String(courseDoc.courseTitle).toLowerCase().trim());
+              }
+            } catch (e) {
+              // Ignore lookup errors
+            }
+          }
+        }
+
+        // Extract course identifiers from req.user
+        if (req.user) {
+          if (Array.isArray(req.user.courseIds)) {
+            req.user.courseIds.forEach(id => {
+              if (id) enrolledIds.add(String(id).toLowerCase().trim());
+            });
+          }
+          if (req.user.courseId) enrolledIds.add(String(req.user.courseId).toLowerCase().trim());
+          if (req.user.course) enrolledIds.add(String(req.user.course).toLowerCase().trim());
+          if (req.user.courseRef) enrolledIds.add(String(req.user.courseRef).toLowerCase().trim());
+        }
+
+        if (enrolledIds.has(targetCourseStr)) {
+          return next();
+        }
+
+        return res.status(403).json({
+          success: false,
+          message: `Forbidden: Access denied. Student is not enrolled in course '${requiredCourseId}'.`,
+        });
+      } catch (err) {
+        return res.status(500).json({
+          success: false,
+          message: 'Error verifying course authorization.',
+          error: err.message,
+        });
+      }
+    };
+
+    if (!req.user) {
+      return requireAuth(req, res, (err) => {
+        if (err) return next(err);
+        return runAccessCheck();
+      });
+    }
+
+    return runAccessCheck();
+  };
+};
+
 module.exports = {
   requireAuth,
   requireRole,
   requireAdmin,
   requireStudent,
+  requireCourseAccess,
   getJwtSecret,
 };
+
