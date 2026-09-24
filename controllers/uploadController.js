@@ -441,20 +441,42 @@ exports.generateVideoSignature = async (req, res) => {
       });
     }
 
-    const timestamp = Math.round(Date.now() / 1000);
-    const folder = (req.body.folder || 'homeopathy-media/videos').trim();
+    const timestamp = req.body && req.body.timestamp
+      ? Number(req.body.timestamp)
+      : Math.round(Date.now() / 1000);
+    const folder = (req.body && req.body.folder ? req.body.folder : 'homeopathy-media/videos').trim();
 
     const paramsToSign = {
-      timestamp: timestamp,
       folder: folder,
+      timestamp: timestamp,
     };
 
-    if (req.body.public_id || req.body.publicId) {
-      paramsToSign.public_id = String(req.body.public_id || req.body.publicId).trim();
+    if (req.body) {
+      if (req.body.public_id || req.body.publicId) {
+        paramsToSign.public_id = String(req.body.public_id || req.body.publicId).trim();
+      }
+      if (req.body.eager) {
+        paramsToSign.eager = String(req.body.eager).trim();
+      }
+      if (req.body.tags) {
+        paramsToSign.tags = String(req.body.tags).trim();
+      }
+      if (req.body.context) {
+        paramsToSign.context = String(req.body.context).trim();
+      }
+      if (req.body.transformation) {
+        paramsToSign.transformation = String(req.body.transformation).trim();
+      }
+      if (req.body.upload_preset || req.body.uploadPreset) {
+        paramsToSign.upload_preset = String(req.body.upload_preset || req.body.uploadPreset).trim();
+      }
     }
 
     const signature = cloudinary.utils.api_sign_request(paramsToSign, apiSecret);
     const uploadUrl = `https://api.cloudinary.com/v1_1/${cloudName}/video/upload`;
+
+    // Safe logging without exposing secret or signature
+    console.log(`[Cloudinary Signature] Generated video signature for cloudName: ${cloudName}, folder: ${folder}, resourceType: video, timestamp: ${timestamp} - Success`);
 
     return res.status(200).json({
       success: true,
@@ -462,15 +484,24 @@ exports.generateVideoSignature = async (req, res) => {
         timestamp: timestamp,
         signature: signature,
         apiKey: apiKey,
+        api_key: apiKey,
         cloudName: cloudName,
+        cloud_name: cloudName,
         folder: folder,
         resourceType: 'video',
+        resource_type: 'video',
         uploadUrl: uploadUrl,
+        upload_url: uploadUrl,
         public_id: paramsToSign.public_id || null,
+        publicId: paramsToSign.public_id || null,
+        chunkSize: 6000000,
+        chunk_size: 6000000,
+        maxChunkSize: 20000000,
+        max_chunk_size: 20000000,
       },
     });
   } catch (error) {
-    console.error('Generate video signature error:', error);
+    console.error('Generate video signature error:', error.message);
     return res.status(500).json({
       success: false,
       message: 'Failed to generate video upload signature',
