@@ -195,6 +195,8 @@ app.use('/api/v1/admin/activities', adminDashboardRoutes);
 
 const adminRoutes = require('./routes/adminRoutes');
 app.use('/api/admin/auth', require('./routes/adminAuthRoutes'));
+app.use('/api/v1/admin/auth', require('./routes/adminAuthRoutes'));
+app.use('/admin/auth', require('./routes/adminAuthRoutes'));
 app.use('/api/v1/admin', adminRoutes);
 app.use('/api/admin', adminRoutes);
 app.use('/api/v1/students', adminRoutes);  // admin student management (list, bulk ops)
