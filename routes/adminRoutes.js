@@ -10,10 +10,23 @@ const {
   rejectStudent,
 } = require('../controllers/adminStudentController');
 const { getDashboardStats, getRecentActivities } = require('../controllers/adminDashboardController');
-const { updateUserRole } = require('../controllers/authController');
+const { updateUserRole, resetPassword } = require('../controllers/authController');
+const { adminLogin, registerAdmin } = require('../controllers/adminAuthController');
 const adminAuthMiddleware = require('../middleware/adminAuthMiddleware');
 
-// Protect all routes in this router with Admin authentication middleware
+// ── Public Admin Auth Endpoints (strictly public, no JWT verification) ───────
+router.post('/login', adminLogin);
+router.post('/auth/login', adminLogin);
+router.post('/register', registerAdmin);
+router.post('/auth/register', registerAdmin);
+router.post('/reset-password', resetPassword);
+router.put('/reset-password', resetPassword);
+router.patch('/reset-password', resetPassword);
+router.post('/update-password', resetPassword);
+router.put('/update-password', resetPassword);
+router.patch('/update-password', resetPassword);
+
+// Protect all remaining routes in this router with Admin authentication middleware
 router.use(adminAuthMiddleware);
 
 // ── Admin Dashboard Statistics & Activities ─────────────────────────────────
