@@ -244,16 +244,16 @@ const studentFacultyRoutes = require('./routes/studentFacultyRoutes');
 app.use('/api/student/faculty', studentFacultyRoutes);
 app.use('/api/v1/student/faculty', studentFacultyRoutes);
 
+// Student curriculum and progress routes
+app.use('/api/student', require('./routes/studentCurriculumRoutes'));
+app.use('/api/v1/student', require('./routes/studentCurriculumRoutes'));
+
 // Student self-service profile and management routes
 const studentProfileRoutes = require('./routes/studentRoutes');
 app.use('/api/students', studentProfileRoutes);
 app.use('/api/v1/students', studentProfileRoutes);
 app.use('/api/student', studentProfileRoutes);
 app.use('/api/v1/student', studentProfileRoutes);
-
-// Student curriculum and progress routes
-app.use('/api/student', require('./routes/studentCurriculumRoutes'));
-app.use('/api/v1/student', require('./routes/studentCurriculumRoutes'));
 app.use('/api/admin/students', require('./routes/adminStudentRoutes'));
 app.use('/api/v1/admin/students', require('./routes/adminStudentRoutes'));
 
