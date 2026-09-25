@@ -13,19 +13,32 @@ const EMAIL_REGEX = /^\w+([\.-]?\w+)*@\w+([\.-]?\w+)*(\.\w{2,3})+$/;
 /**
  * Generate JWT token containing user id, email, and role from database
  */
-const generateToken = (user) => {
+const generateToken = (user, studentDoc = null) => {
   const secret =
     process.env.JWT_SECRET ||
     'white_coat_academy_secret_jwt_key_2026_super_secure';
   const role = (user.role || 'student').toLowerCase().trim();
+
+  let courseRef = (studentDoc && studentDoc.courseRef) || user.courseRef || null;
+  let courseId = (studentDoc && studentDoc.courseId) || user.courseId || (courseRef ? courseRef.toString() : '');
+  const preferredCourse = user.preferredCourse || (studentDoc && studentDoc.preferredCourse) || user.course || (studentDoc && studentDoc.course) || '';
+
+  if (/^unani$/i.test(preferredCourse.trim())) {
+    courseId = courseId || 'CRS-000056';
+    courseRef = courseRef || '6ab505e20047831b14861a8f';
+  }
+
+  const studentId = studentDoc ? studentDoc._id.toString() : (user.studentId || null);
+
   return jwt.sign(
     {
-      id: user._id.toString(),
-      userId: user._id.toString(),
+      id: user._id ? user._id.toString() : user.id,
+      userId: user._id ? user._id.toString() : user.id,
+      studentId: studentId,
       email: user.email,
       role: role,
-      courseId: user.courseId || '',
-      courseRef: user.courseRef ? user.courseRef.toString() : null,
+      courseId: courseId,
+      courseRef: courseRef ? courseRef.toString() : null,
     },
     secret,
     {
@@ -38,9 +51,54 @@ const generateToken = (user) => {
  * Helper to build sanitized user JSON response object with authoritative course progress
  */
 const buildUserResponse = async (user, studentDoc = null) => {
-  const courseRef = (studentDoc && studentDoc.courseRef) || user.courseRef || null;
-  const courseId = (studentDoc && studentDoc.courseId) || user.courseId || (courseRef ? courseRef.toString() : '');
-  const courseTitle = (studentDoc && studentDoc.course) || user.course || user.preferredCourse || '';
+  let courseRef = (studentDoc && studentDoc.courseRef) || user.courseRef || null;
+  let courseId = (studentDoc && studentDoc.courseId) || user.courseId || (courseRef ? courseRef.toString() : '');
+  let courseTitle = (studentDoc && studentDoc.course) || user.course || user.preferredCourse || '';
+  let preferredCourse = user.preferredCourse || (studentDoc && studentDoc.preferredCourse) || courseTitle || '';
+
+  // If UNANI, enforce standard UNANI course identity if missing
+  if (/^unani$/i.test(preferredCourse.trim()) || /^unani$/i.test(courseTitle.trim())) {
+    courseId = courseId || 'CRS-000056';
+    courseTitle = 'UNANI';
+    preferredCourse = 'UNANI';
+  }
+
+  let targetCourse = null;
+  if (courseRef && require('mongoose').Types.ObjectId.isValid(courseRef)) {
+    targetCourse = await Course.findById(courseRef);
+  }
+  if (!targetCourse && courseId) {
+    if (/^[0-9a-fA-F]{24}$/.test(courseId)) {
+      targetCourse = await Course.findById(courseId);
+    }
+    if (!targetCourse) {
+      targetCourse = await Course.findOne({ courseId });
+    }
+  }
+  if (!targetCourse && courseTitle) {
+    targetCourse = await Course.findOne({
+      $or: [
+        { courseTitle: new RegExp(`^${courseTitle.trim()}$`, 'i') },
+        { title: new RegExp(`^${courseTitle.trim()}$`, 'i') },
+        { courseId: courseTitle.trim() },
+      ],
+    });
+  }
+  if (!targetCourse && preferredCourse) {
+    targetCourse = await Course.findOne({
+      $or: [
+        { courseTitle: new RegExp(`^${preferredCourse.trim()}$`, 'i') },
+        { title: new RegExp(`^${preferredCourse.trim()}$`, 'i') },
+        { courseId: preferredCourse.trim() },
+      ],
+    });
+  }
+
+  if (targetCourse) {
+    courseRef = targetCourse._id;
+    courseId = targetCourse.courseId || targetCourse._id.toString();
+    courseTitle = targetCourse.courseTitle || targetCourse.title || courseTitle;
+  }
 
   const response = {
     id: user._id ? user._id.toString() : user.id,
@@ -50,7 +108,7 @@ const buildUserResponse = async (user, studentDoc = null) => {
     phone: user.phone || user.contactNumber || '',
     contactNumber: user.contactNumber || user.phone || '',
     qualification: user.qualification || '',
-    preferredCourse: user.preferredCourse || user.course || '',
+    preferredCourse: preferredCourse,
     course: courseTitle,
     courseId: courseId,
     courseRef: courseRef ? courseRef.toString() : null,
@@ -61,7 +119,7 @@ const buildUserResponse = async (user, studentDoc = null) => {
   if (studentDoc) {
     response.status = studentDoc.status || 'Pending';
     response.accountStatus = studentDoc.accountStatus || 'Pending';
-    response.isApproved = studentDoc.isApproved || false;
+    response.isApproved = studentDoc.isApproved !== undefined ? studentDoc.isApproved : false;
     response.subscription = studentDoc.subscription || 'None';
     response.subscriptionStatus = studentDoc.subscriptionStatus || 'None';
     response.subscriptionExpiresAt = studentDoc.subscriptionExpiresAt || null;
@@ -69,33 +127,12 @@ const buildUserResponse = async (user, studentDoc = null) => {
     // Fallback to User document fields if Student document is not found
     response.status = user.status || 'Pending';
     response.accountStatus = user.accountStatus || 'Pending';
-    response.isApproved = user.isApproved || false;
+    response.isApproved = user.isApproved !== undefined ? user.isApproved : false;
   }
 
   // If student user, look up assigned course details & calculate progress
   if (response.role === 'student') {
     try {
-      let targetCourse = null;
-      if (courseRef && require('mongoose').Types.ObjectId.isValid(courseRef)) {
-        targetCourse = await Course.findById(courseRef);
-      }
-      if (!targetCourse && courseId) {
-        if (/^[0-9a-fA-F]{24}$/.test(courseId)) {
-          targetCourse = await Course.findById(courseId);
-        }
-        if (!targetCourse) {
-          targetCourse = await Course.findOne({ courseId });
-        }
-      }
-      if (!targetCourse && courseTitle) {
-        targetCourse = await Course.findOne({
-          $or: [
-            { courseTitle: courseTitle },
-            { title: courseTitle },
-          ],
-        });
-      }
-
       if (targetCourse) {
         const studentId = studentDoc ? studentDoc._id : user._id;
         const ContentItemProgress = require('../models/ContentItemProgress');
@@ -119,8 +156,8 @@ const buildUserResponse = async (user, studentDoc = null) => {
           id: targetCourse._id.toString(),
           _id: targetCourse._id.toString(),
           courseId: targetCourse.courseId || targetCourse._id.toString(),
-          title: targetCourse.courseTitle || courseTitle || 'Assigned Course',
-          courseTitle: targetCourse.courseTitle || courseTitle || 'Assigned Course',
+          title: targetCourse.courseTitle || targetCourse.title || courseTitle || 'Assigned Course',
+          courseTitle: targetCourse.courseTitle || targetCourse.title || courseTitle || 'Assigned Course',
           thumbnail: targetCourse.thumbnail || targetCourse.bannerUrl || '',
           bannerUrl: targetCourse.bannerUrl || targetCourse.thumbnail || '',
           totalModules: Array.isArray(targetCourse.modules) ? targetCourse.modules.length : 0,
@@ -436,7 +473,7 @@ const universalLogin = async (req, res) => {
       }
     }
 
-    const token = generateToken(user);
+    const token = generateToken(user, studentDocForResponse);
 
     return res.status(200).json({
       success: true,
@@ -539,21 +576,8 @@ const studentLogin = async (req, res) => {
       });
     }
 
-    // 2. Explicitly create the JWT token with the user's actual database ID
-    const secret = process.env.JWT_SECRET || 'white_coat_academy_secret_jwt_key_2026_super_secure';
-    const token = jwt.sign(
-      {
-        id: actualStudentId, // The real Student _id
-        studentId: actualStudentId, 
-        userId: user._id.toString(), // Keep User reference safely
-        email: user.email,
-        role: 'student',
-      },
-      secret,
-      {
-        expiresIn: process.env.JWT_EXPIRES_IN || '30d',
-      }
-    );
+    // 2. Generate standard JWT token with full course identity
+    const token = generateToken(user, studentDocFound);
 
     return res.status(200).json({
       success: true,
@@ -716,19 +740,51 @@ const adminLogin = async (req, res) => {
  */
 const getMe = async (req, res) => {
   try {
-    const userId = req.user.id || req.user.userId;
-    const user = await User.findById(userId).select('-password');
+    const rawUserId = req.user.userId || req.user.id || req.user._id;
+    let user = await User.findById(rawUserId).select('-password');
+
+    // If not found by primary id, fallback to email lookup
+    if (!user && req.user.email) {
+      user = await User.findOne({ email: req.user.email.toLowerCase() }).select('-password');
+    }
+
+    let studentDoc = null;
+    if (Student) {
+      if (user) {
+        studentDoc = await Student.findOne({ userId: user._id }) || await Student.findOne({ email: user.email });
+      } else {
+        studentDoc = await Student.findById(rawUserId) || await Student.findOne({ email: req.user.email });
+        if (studentDoc && studentDoc.userId) {
+          user = await User.findById(studentDoc.userId).select('-password');
+        }
+      }
+    }
+
+    if (!user && studentDoc) {
+      user = {
+        _id: studentDoc.userId || studentDoc._id,
+        id: (studentDoc.userId || studentDoc._id).toString(),
+        name: studentDoc.name,
+        email: studentDoc.email,
+        role: 'student',
+        phone: studentDoc.phone || studentDoc.contactNumber || '',
+        contactNumber: studentDoc.contactNumber || studentDoc.phone || '',
+        qualification: studentDoc.qualification || '',
+        preferredCourse: studentDoc.preferredCourse || studentDoc.course || '',
+        course: studentDoc.course || studentDoc.preferredCourse || '',
+        courseId: studentDoc.courseId || '',
+        courseRef: studentDoc.courseRef || null,
+        status: studentDoc.status || 'Active',
+        accountStatus: studentDoc.accountStatus || 'Approved',
+        isApproved: studentDoc.isApproved !== undefined ? studentDoc.isApproved : true,
+      };
+    }
 
     if (!user) {
       return res.status(404).json({
         success: false,
         message: 'User not found',
       });
-    }
-
-    let studentDoc = null;
-    if (Student && (user.role || 'student').toLowerCase().trim() === 'student') {
-      studentDoc = await Student.findOne({ userId: user._id }) || await Student.findOne({ email: user.email });
     }
 
     return res.status(200).json({
