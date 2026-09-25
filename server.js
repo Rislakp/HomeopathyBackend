@@ -55,11 +55,22 @@ if (process.env.ALLOWED_ORIGINS) {
   });
 }
 
+// Helper to check if origin is localhost or 127.0.0.1 on any port (http or https)
+const isLocalhostOrigin = (origin) => {
+  if (!origin) return false;
+  return /^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/i.test(origin);
+};
+
 const isOriginAllowed = (origin) => {
   if (!origin) return true; // Mobile apps, Postman, curl, server-to-server
 
   // Direct allowlist match
   if (allowedOrigins.includes(origin)) return true;
+
+  // Localhost & 127.0.0.1 dynamic development ports (Flutter Web, Vite, React, etc.)
+  if (isLocalhostOrigin(origin)) {
+    return true;
+  }
 
   // Domain regex checks for official domains & subdomains
   const domainPatterns = [
@@ -69,7 +80,7 @@ const isOriginAllowed = (origin) => {
     /^https?:\/\/([a-zA-Z0-9-]+\.)*onrender\.com$/i,
     /^https?:\/\/([a-zA-Z0-9-]+\.)*vercel\.app$/i,
     /^https?:\/\/([a-zA-Z0-9-]+\.)*netlify\.app$/i,
-    /^https?:\/\/(localhost|127\.0\.0\.1|10\.0\.2\.2|0\.0\.0\.0)(:\d+)?$/i,
+    /^https?:\/\/(10\.0\.2\.2|0\.0\.0\.0)(:\d+)?$/i,
   ];
 
   if (domainPatterns.some((pattern) => pattern.test(origin))) {
@@ -95,44 +106,53 @@ const corsOptions = {
     if (isOriginAllowed(origin)) {
       return callback(null, true);
     }
-    return callback(new Error(`CORS error: Origin ${origin} not allowed by CORS policy`), false);
+    return callback(null, false);
   },
   credentials: true,
-  methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS', 'HEAD'],
+  methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS', 'HEAD'],
   allowedHeaders: [
-    'Content-Type',
     'Authorization',
-    'x-student-id',
-    'x-user-id',
+    'Content-Type',
     'Accept',
     'Origin',
     'X-Requested-With',
-    'Access-Control-Allow-Origin',
-    'Access-Control-Allow-Headers',
+    'x-student-id',
+    'x-user-id',
     'Access-Control-Request-Method',
     'Access-Control-Request-Headers',
   ],
   exposedHeaders: ['Content-Range', 'X-Content-Range', 'ETag', 'Authorization'],
   optionsSuccessStatus: 200,
+  maxAge: 86400,
 };
 
-app.use(cors(corsOptions));
-app.options('*', cors(corsOptions));
-
-// Explicit CORS headers safety net middleware
+// 1. Explicit CORS headers & preflight OPTIONS interceptor (registered first to guarantee preflight responses)
 app.use((req, res, next) => {
   const origin = req.headers.origin;
+
   if (origin && isOriginAllowed(origin)) {
+    // Return exact requesting origin (required when credentials are true; never use "*")
     res.setHeader('Access-Control-Allow-Origin', origin);
     res.setHeader('Access-Control-Allow-Credentials', 'true');
-    res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, PATCH, OPTIONS, HEAD');
-    res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, x-student-id, x-user-id, Accept, Origin, X-Requested-With');
+    res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, PATCH, DELETE, OPTIONS, HEAD');
+
+    const reqHeaders = req.headers['access-control-request-headers'];
+    const standardHeaders = 'Authorization, Content-Type, Accept, Origin, X-Requested-With, x-student-id, x-user-id, Access-Control-Request-Method, Access-Control-Request-Headers';
+    res.setHeader('Access-Control-Allow-Headers', reqHeaders ? `${standardHeaders}, ${reqHeaders}` : standardHeaders);
+    res.setHeader('Access-Control-Max-Age', '86400');
   }
+
+  // Preflight OPTIONS requests return immediately with 200 OK
   if (req.method === 'OPTIONS') {
-    return res.sendStatus(200);
+    return res.status(200).end();
   }
+
   next();
 });
+
+// 2. Standard CORS middleware
+app.use(cors(corsOptions));
+app.options('*', cors(corsOptions));
 
 // Body Parser Middleware (Must be registered before any routes are defined)
 app.use(express.json({ limit: '100mb' }));
