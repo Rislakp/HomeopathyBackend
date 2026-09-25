@@ -332,6 +332,7 @@ async function submitExam(examId, reqUser, submissionData) {
 
   score = Math.max(0, Math.round(score * 100) / 100);
   const percentage = totalMarks > 0 ? Math.max(0, Math.round((score / totalMarks) * 100 * 100) / 100) : 0;
+  const timeTakenSeconds = Number(submissionData.timeTakenSeconds || submissionData.timeTaken || 0);
 
   const result = new UnaniExamResult({
     studentId: studentId,
@@ -346,6 +347,7 @@ async function submitExam(examId, reqUser, submissionData) {
     unanswered: unanswered,
     answers: answersEvaluated,
     status: 'Completed',
+    timeTakenSeconds: timeTakenSeconds,
   });
 
   await result.save();
@@ -398,26 +400,221 @@ async function getResultById(examId, resultId, reqUser) {
 }
 
 /**
- * Get exam leaderboard / ranking
+ * Get all Unani Grand Mock Tests history for Admin Portal with attended count and pagination
+ */
+async function getUnaniTestHistory({ page = 1, limit = 50, search = '' } = {}) {
+  const pageNum = Math.max(1, parseInt(page, 10) || 1);
+  const limitNum = Math.max(1, Math.min(100, parseInt(limit, 10) || 50));
+  const skip = (pageNum - 1) * limitNum;
+
+  const filter = {
+    courseId: 'unani',
+    examType: 'grand_mock_test',
+  };
+
+  if (search && String(search).trim()) {
+    filter.title = { $regex: String(search).trim(), $options: 'i' };
+  }
+
+  const [exams, total] = await Promise.all([
+    UnaniExam.find(filter)
+      .sort({ createdAt: -1 })
+      .skip(skip)
+      .limit(limitNum)
+      .lean(),
+    UnaniExam.countDocuments(filter),
+  ]);
+
+  if (exams.length === 0) {
+    return { tests: [], total: 0, page: pageNum, limit: limitNum };
+  }
+
+  const examIds = exams.map((e) => e._id);
+
+  // Aggregate distinct students who attended each exam
+  const attendanceAgg = await UnaniExamResult.aggregate([
+    {
+      $match: {
+        examId: { $in: examIds },
+        courseId: 'unani',
+        examType: 'grand_mock_test',
+      },
+    },
+    {
+      $group: {
+        _id: '$examId',
+        distinctStudents: { $addToSet: '$studentId' },
+      },
+    },
+    {
+      $project: {
+        _id: 1,
+        attended: { $size: '$distinctStudents' },
+      },
+    },
+  ]);
+
+  const attendanceMap = {};
+  attendanceAgg.forEach((a) => {
+    attendanceMap[a._id.toString()] = a.attended;
+  });
+
+  const formattedTests = exams.map((exam) => ({
+    _id: exam._id.toString(),
+    id: exam._id.toString(),
+    title: exam.title,
+    description: exam.description || '',
+    courseId: 'unani',
+    examType: 'grand_mock_test',
+    totalQuestions: exam.totalQuestions || (Array.isArray(exam.questions) ? exam.questions.length : 0),
+    durationMinutes: exam.durationMinutes,
+    marksPerQuestion: exam.marksPerQuestion,
+    negativeMark: exam.negativeMark || exam.negativeMarkPenalty || 0,
+    negativeMarkPenalty: exam.negativeMarkPenalty || exam.negativeMark || 0,
+    status: exam.status || 'Published',
+    attended: attendanceMap[exam._id.toString()] || 0,
+    createdAt: exam.createdAt,
+    updatedAt: exam.updatedAt,
+  }));
+
+  return {
+    tests: formattedTests,
+    total,
+    page: pageNum,
+    limit: limitNum,
+  };
+}
+
+/**
+ * Get single Unani Grand Mock Test for View page
+ */
+async function getUnaniTestHistoryById(examId) {
+  if (!mongoose.Types.ObjectId.isValid(examId)) return null;
+
+  const exam = await UnaniExam.findOne({
+    _id: examId,
+    courseId: 'unani',
+    examType: 'grand_mock_test',
+  });
+
+  if (!exam) return null;
+
+  const attendedCount = await UnaniExamResult.distinct('studentId', {
+    examId: exam._id,
+    courseId: 'unani',
+    examType: 'grand_mock_test',
+  });
+
+  const examObj = exam.toObject ? exam.toObject() : { ...exam };
+  examObj.id = exam._id.toString();
+  examObj._id = exam._id.toString();
+  examObj.attended = attendedCount ? attendedCount.length : 0;
+  return examObj;
+}
+
+/**
+ * Delete Unani Grand Mock Test and clean up associated Unani results without touching Student data
+ */
+async function deleteUnaniTest(examId) {
+  if (!mongoose.Types.ObjectId.isValid(examId)) return null;
+
+  const exam = await UnaniExam.findOne({
+    _id: examId,
+    courseId: 'unani',
+    examType: 'grand_mock_test',
+  });
+
+  if (!exam) return null;
+
+  // 1. Delete associated exam results in UnaniExamResult collection only
+  await UnaniExamResult.deleteMany({
+    examId: exam._id,
+    courseId: 'unani',
+  });
+
+  // 2. Delete the exam itself
+  await UnaniExam.findByIdAndDelete(exam._id);
+
+  return true;
+}
+
+/**
+ * Get exam leaderboard / ranking for ONE Unani Grand Mock Test
  */
 async function getRank(examId) {
-  if (!mongoose.Types.ObjectId.isValid(examId)) return [];
+  if (!mongoose.Types.ObjectId.isValid(examId)) return null;
 
-  const results = await UnaniExamResult.find({ examId, courseId: 'unani' })
-    .populate('studentId', 'name email')
+  const exam = await UnaniExam.findOne({
+    _id: examId,
+    courseId: 'unani',
+    examType: 'grand_mock_test',
+  });
+
+  if (!exam) return null;
+
+  const results = await UnaniExamResult.find({
+    examId: exam._id,
+    courseId: 'unani',
+    examType: 'grand_mock_test',
+  })
+    .populate('studentId', 'name email phone userId')
     .sort({ score: -1, percentage: -1, createdAt: 1 });
 
-  return results.map((res, index) => ({
-    rank: index + 1,
-    studentId: res.studentId ? (res.studentId._id ? res.studentId._id.toString() : res.studentId.toString()) : null,
-    studentName: res.studentId ? res.studentId.name : 'Student',
-    score: res.score,
-    totalMarks: res.totalMarks,
-    percentage: res.percentage,
-    correctAnswers: res.correctAnswers,
-    wrongAnswers: res.wrongAnswers,
-    submittedAt: res.createdAt,
-  }));
+  let User;
+  try {
+    User = require('../../../../models/User');
+  } catch (e) {}
+
+  const rankings = await Promise.all(
+    results.map(async (res, index) => {
+      let studentName = res.studentId ? res.studentId.name : '';
+      const sId = res.studentId
+        ? (res.studentId._id ? res.studentId._id.toString() : res.studentId.toString())
+        : null;
+
+      if (!studentName && res.studentId && User) {
+        try {
+          const userDoc =
+            (res.studentId.userId && (await User.findById(res.studentId.userId))) ||
+            (res.studentId.email && (await User.findOne({ email: res.studentId.email.toLowerCase().trim() })));
+          if (userDoc) {
+            studentName = userDoc.name || '';
+          }
+        } catch (e) {}
+      }
+
+      if (!studentName) {
+        studentName = 'Student';
+      }
+
+      return {
+        rank: index + 1,
+        studentId: sId,
+        studentName: studentName,
+        score: res.score,
+        totalMarks: res.totalMarks,
+        correct: res.correctAnswers,
+        correctAnswers: res.correctAnswers,
+        wrong: res.wrongAnswers,
+        wrongAnswers: res.wrongAnswers,
+        unanswered: res.unanswered,
+        percentage: res.percentage,
+        timeTakenSeconds: res.timeTakenSeconds || 0,
+        submittedAt: res.createdAt,
+      };
+    })
+  );
+
+  return {
+    exam: {
+      id: exam._id.toString(),
+      _id: exam._id.toString(),
+      title: exam.title,
+      courseId: 'unani',
+      examType: 'grand_mock_test',
+    },
+    rankings,
+  };
 }
 
 /**
@@ -445,4 +642,7 @@ module.exports = {
   getResultById,
   getRank,
   getHistory,
+  getUnaniTestHistory,
+  getUnaniTestHistoryById,
+  deleteUnaniTest,
 };

@@ -447,16 +447,100 @@ async function getResultById(req, res) {
 }
 
 /**
+/**
+ * GET /api/unani-exams/history
+ * Fetch all uploaded/created Unani Grand Mock Tests for the Admin Portal
+ */
+async function getUnaniTestHistory(req, res) {
+  try {
+    const { page, limit, search } = req.query;
+    const historyData = await unaniExamService.getUnaniTestHistory({ page, limit, search });
+    return res.status(200).json({
+      success: true,
+      data: {
+        tests: historyData.tests,
+        total: historyData.total,
+        page: historyData.page,
+        limit: historyData.limit,
+      },
+    });
+  } catch (error) {
+    return res.status(500).json({
+      success: false,
+      message: 'Failed to fetch Unani test history.',
+      error: error.message,
+    });
+  }
+}
+
+/**
+ * GET /api/unani-exams/history/:examId
+ * Open the "View" page for one Unani Grand Mock Test
+ */
+async function getUnaniTestHistoryById(req, res) {
+  try {
+    const exam = await unaniExamService.getUnaniTestHistoryById(req.params.examId);
+    if (!exam) {
+      return res.status(404).json({
+        success: false,
+        message: 'Unani Grand Mock Test not found.',
+      });
+    }
+    return res.status(200).json({
+      success: true,
+      data: exam,
+    });
+  } catch (error) {
+    return res.status(500).json({
+      success: false,
+      message: 'Failed to fetch Unani test details.',
+      error: error.message,
+    });
+  }
+}
+
+/**
+ * DELETE /api/unani-exams/history/:examId
+ * Delete an Unani Grand Mock Test from Admin Test History
+ */
+async function deleteUnaniTest(req, res) {
+  try {
+    const deleted = await unaniExamService.deleteUnaniTest(req.params.examId);
+    if (!deleted) {
+      return res.status(404).json({
+        success: false,
+        message: 'Unani Grand Mock Test not found.',
+      });
+    }
+    return res.status(200).json({
+      success: true,
+      message: 'Unani Grand Mock Test deleted successfully',
+    });
+  } catch (error) {
+    return res.status(500).json({
+      success: false,
+      message: 'Failed to delete Unani test.',
+      error: error.message,
+    });
+  }
+}
+
+/**
  * GET /api/unani-exams/:examId/rank
- * Get Unani exam leaderboard / rank
+ * Return the rank / leaderboard for ONE Unani Grand Mock Test
  */
 async function getRank(req, res) {
   try {
-    const leaderboard = await unaniExamService.getRank(req.params.examId);
+    const rankData = await unaniExamService.getRank(req.params.examId);
+    if (!rankData) {
+      return res.status(404).json({
+        success: false,
+        message: 'Unani Grand Mock Test not found.',
+      });
+    }
     return res.status(200).json({
       success: true,
-      count: leaderboard.length,
-      data: leaderboard,
+      data: rankData,
     });
   } catch (error) {
     return res.status(500).json({
@@ -506,4 +590,7 @@ module.exports = {
   getResultById,
   getRank,
   getHistory,
+  getUnaniTestHistory,
+  getUnaniTestHistoryById,
+  deleteUnaniTest,
 };

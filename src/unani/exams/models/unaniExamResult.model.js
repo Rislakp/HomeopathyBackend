@@ -85,6 +85,10 @@ const unaniExamResultSchema = new mongoose.Schema(
       enum: ['Completed', 'In Progress', 'Attempted'],
       default: 'Completed',
     },
+    timeTakenSeconds: {
+      type: Number,
+      default: 0,
+    },
   },
   {
     timestamps: true,
