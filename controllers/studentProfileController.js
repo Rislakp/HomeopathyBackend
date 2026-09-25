@@ -11,7 +11,10 @@ const EMAIL_REGEX = /^\w+([\.-]?\w+)*@\w+([\.-]?\w+)*(\.\w{2,3})+$/;
 const isAuthorized = (req, targetId) => {
   const role = (req.user?.role || '').toLowerCase().trim();
   if (role === 'admin' || role === 'superadmin') return true;
-  return req.user?.id === targetId || req.user?.userId === targetId;
+  if (!targetId || targetId === 'profile' || targetId === 'me' || targetId === 'self') return true;
+  const userId = req.user?.id || req.user?.userId;
+  const studentId = req.user?.studentId;
+  return userId === targetId || studentId === targetId;
 };
 
 /**
@@ -21,35 +24,41 @@ const buildProfileResponse = async (user, studentDoc = null) => {
   const courseRef = (studentDoc && studentDoc.courseRef) || user.courseRef || null;
   const courseId = (studentDoc && studentDoc.courseId) || user.courseId || (courseRef ? courseRef.toString() : '');
   const courseTitle = (studentDoc && studentDoc.course) || user.course || user.preferredCourse || '';
+  const resolvedPhone = (studentDoc && (studentDoc.phone || studentDoc.contactNumber)) || user.phone || user.contactNumber || '';
+  const canonicalId = (user && user._id) ? user._id.toString() : ((studentDoc && studentDoc._id) ? studentDoc._id.toString() : (user.id || ''));
 
   const base = {
-    id: user._id ? user._id.toString() : user.id,
-    name: user.name,
-    email: user.email,
+    _id: canonicalId,
+    id: canonicalId,
+    name: (studentDoc && studentDoc.name) || user.name || '',
+    email: (studentDoc && studentDoc.email) || user.email || '',
     role: (user.role || 'student').toLowerCase().trim(),
-    contactNumber: user.contactNumber || user.phone || '',
-    phone: user.phone || user.contactNumber || '',
-    dateOfBirth: user.dateOfBirth || '',
-    qualification: user.qualification || '',
-    preferredCourse: user.preferredCourse || '',
+    phone: resolvedPhone,
+    contactNumber: resolvedPhone,
+    registeredCourseId: courseId || '',
+    courseId: courseId || '',
     course: courseTitle,
-    courseId: courseId,
+    preferredCourse: user.preferredCourse || courseTitle,
     courseRef: courseRef ? courseRef.toString() : null,
+    dateOfBirth: (studentDoc && studentDoc.dateOfBirth) || user.dateOfBirth || '',
+    qualification: (studentDoc && studentDoc.qualification) || user.qualification || '',
+    subscription: (studentDoc && studentDoc.subscription) || 'Free',
+    subscriptionStatus: (studentDoc && studentDoc.subscriptionStatus) || user.subscriptionStatus || (studentDoc && studentDoc.subscription ? 'Active' : 'None'),
+    subscriptionExpiresAt: (studentDoc && studentDoc.subscriptionExpiresAt) || null,
+    status: (studentDoc && studentDoc.status) || user.status || 'Active',
+    accountStatus: (studentDoc && studentDoc.accountStatus) || user.accountStatus || 'Approved',
+    isApproved: (studentDoc && studentDoc.isApproved !== undefined) ? studentDoc.isApproved : (user.isApproved !== undefined ? user.isApproved : true),
+    profileImage: (studentDoc && (studentDoc.profileImage || studentDoc.avatar)) || user.profileImage || user.avatar || '',
+    examScores: (studentDoc && studentDoc.examScores) || [],
     courses: [],
-    createdAt: user.createdAt,
-    updatedAt: user.updatedAt,
+    createdAt: (user && user.createdAt) || (studentDoc && studentDoc.createdAt) || new Date(),
+    updatedAt: (user && user.updatedAt) || (studentDoc && studentDoc.updatedAt) || new Date(),
   };
 
   if (studentDoc) {
     base.studentProfileId = studentDoc._id
       ? studentDoc._id.toString()
       : studentDoc.id;
-    base.course = studentDoc.course || courseTitle;
-    base.subscription = studentDoc.subscription || '';
-    base.subscriptionStatus = studentDoc.subscriptionStatus || 'None';
-    base.subscriptionExpiresAt = studentDoc.subscriptionExpiresAt || null;
-    base.status = studentDoc.status || 'Active';
-    base.examScores = studentDoc.examScores || [];
   }
 
   try {
@@ -148,55 +157,140 @@ const buildProfileResponse = async (user, studentDoc = null) => {
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
+// GET /api/students/profile
 // GET /api/students/profile/:id
 // ─────────────────────────────────────────────────────────────────────────────
 /**
+ * @route   GET /api/students/profile
  * @route   GET /api/students/profile/:id
  * @desc    Fetch a student's full profile (User + Student doc merged)
  * @access  Private — student (own profile) or admin
  */
 const getProfile = async (req, res) => {
   try {
-    const { id } = req.params;
+    const mongoose = require('mongoose');
+    let targetId = req.params?.id;
 
-    if (!isAuthorized(req, id)) {
+    // If param is omitted, or matches route keyword aliases, resolve to authenticated caller
+    if (!targetId || targetId === 'profile' || targetId === 'me' || targetId === 'self') {
+      targetId = req.user?.id || req.user?.userId || req.user?.studentId;
+    }
+
+    if (!isAuthorized(req, targetId)) {
       return res.status(403).json({
         success: false,
         message: 'Forbidden: You can only view your own profile.',
       });
     }
 
-    const user = await User.findById(id).select('-password');
-    if (!user) {
+    let user = null;
+    let studentDoc = null;
+
+    if (targetId && mongoose.Types.ObjectId.isValid(targetId)) {
+      user = await User.findById(targetId).select('-password');
+      if (!user && Student) {
+        studentDoc = await Student.findById(targetId);
+        if (studentDoc) {
+          user = await User.findOne({
+            $or: [
+              ...(studentDoc.userId ? [{ _id: studentDoc.userId }] : []),
+              ...(studentDoc.email ? [{ email: studentDoc.email.toLowerCase().trim() }] : [])
+            ]
+          }).select('-password');
+        }
+      }
+    }
+
+    // Fallback: lookup by authenticated user ID if different from targetId
+    if (!user && req.user?.id && mongoose.Types.ObjectId.isValid(req.user.id)) {
+      user = await User.findById(req.user.id).select('-password');
+    }
+
+    // Fallback: lookup by authenticated email
+    if (!user && req.user?.email) {
+      user = await User.findOne({ email: req.user.email.toLowerCase().trim() }).select('-password');
+    }
+
+    // Try to fetch supplementary Student document
+    if (user && !studentDoc && Student) {
+      studentDoc =
+        (await Student.findOne({ userId: user._id })) ||
+        (await Student.findOne({ email: user.email.toLowerCase().trim() }));
+    }
+
+    // Synthesize user wrapper if student document exists alone
+    if (!user && studentDoc) {
+      user = {
+        _id: studentDoc._id,
+        id: studentDoc._id.toString(),
+        name: studentDoc.name || '',
+        email: studentDoc.email || '',
+        role: 'student',
+        phone: studentDoc.phone || studentDoc.contactNumber || '',
+        contactNumber: studentDoc.contactNumber || studentDoc.phone || '',
+        course: studentDoc.course || '',
+        courseId: studentDoc.courseId || '',
+        registeredCourseId: studentDoc.courseId || '',
+        courseRef: studentDoc.courseRef || null,
+        dateOfBirth: studentDoc.dateOfBirth || '',
+        qualification: studentDoc.qualification || '',
+        subscription: studentDoc.subscription || 'Free',
+        subscriptionStatus: studentDoc.subscriptionStatus || 'Active',
+        status: studentDoc.status || 'Active',
+        accountStatus: studentDoc.accountStatus || 'Approved',
+        isApproved: studentDoc.isApproved !== undefined ? studentDoc.isApproved : true,
+        createdAt: studentDoc.createdAt || new Date(),
+        updatedAt: studentDoc.updatedAt || new Date(),
+      };
+    }
+
+    if (!user && !studentDoc) {
       return res.status(404).json({
         success: false,
         message: 'Student profile not found.',
       });
     }
 
-    // Verify the user is actually a student (unless admin is calling)
-    const role = (req.user?.role || '').toLowerCase().trim();
-    const targetRole = (user.role || '').toLowerCase().trim();
-    if (role !== 'admin' && role !== 'superadmin' && targetRole !== 'student') {
-      return res.status(403).json({
-        success: false,
-        message: 'Forbidden: This endpoint is for student profiles only.',
-      });
-    }
+    // Verify caller role and permissions
+    const callerRole = (req.user?.role || '').toLowerCase().trim();
+    const isAdmin = callerRole === 'admin' || callerRole === 'superadmin';
+    if (!isAdmin) {
+      const reqUserId = (req.user?.id || req.user?.userId || '').toString();
+      const reqStudentId = (req.user?.studentId || '').toString();
+      const userDocId = user?._id ? user._id.toString() : '';
+      const studentDocId = studentDoc?._id ? studentDoc._id.toString() : '';
+      const userEmail = (user?.email || '').toLowerCase().trim();
+      const callerEmail = (req.user?.email || '').toLowerCase().trim();
 
-    // Try to fetch the supplementary Student document
-    let studentDoc = null;
-    if (Student) {
-      studentDoc =
-        (await Student.findOne({ userId: user._id })) ||
-        (await Student.findOne({ email: user.email }));
+      const isOwn = (
+        !req.params?.id ||
+        req.params.id === 'profile' ||
+        req.params.id === 'me' ||
+        req.params.id === 'self' ||
+        req.params.id === reqUserId ||
+        req.params.id === reqStudentId ||
+        req.params.id === userDocId ||
+        req.params.id === studentDocId ||
+        (callerEmail && userEmail && callerEmail === userEmail)
+      );
+
+      if (!isOwn) {
+        return res.status(403).json({
+          success: false,
+          message: 'Forbidden: You can only view your own profile.',
+        });
+      }
     }
 
     const profile = await buildProfileResponse(user, studentDoc);
 
     return res.status(200).json({
       success: true,
+      message: 'Student profile fetched successfully',
+      ...profile,
       profile,
+      data: profile,
+      user: profile,
     });
   } catch (error) {
     console.error('[studentProfileController] getProfile Error:', error);
@@ -227,17 +321,46 @@ const getProfile = async (req, res) => {
  */
 const updateProfile = async (req, res) => {
   try {
-    const { id } = req.params;
+    const mongoose = require('mongoose');
+    let targetId = req.params?.id;
 
-    if (!isAuthorized(req, id)) {
+    if (!targetId || targetId === 'profile' || targetId === 'me' || targetId === 'self') {
+      targetId = req.user?.id || req.user?.userId || req.user?.studentId;
+    }
+
+    if (!isAuthorized(req, targetId)) {
       return res.status(403).json({
         success: false,
         message: 'Forbidden: You can only update your own profile.',
       });
     }
 
-    const user = await User.findById(id);
-    if (!user) {
+    let user = null;
+    let studentDoc = null;
+
+    if (targetId && mongoose.Types.ObjectId.isValid(targetId)) {
+      user = await User.findById(targetId);
+      if (!user && Student) {
+        studentDoc = await Student.findById(targetId);
+        if (studentDoc) {
+          user = await User.findOne({
+            $or: [
+              ...(studentDoc.userId ? [{ _id: studentDoc.userId }] : []),
+              ...(studentDoc.email ? [{ email: studentDoc.email.toLowerCase().trim() }] : [])
+            ]
+          });
+        }
+      }
+    }
+
+    if (!user && req.user?.id && mongoose.Types.ObjectId.isValid(req.user.id)) {
+      user = await User.findById(req.user.id);
+    }
+    if (!user && req.user?.email) {
+      user = await User.findOne({ email: req.user.email.toLowerCase().trim() });
+    }
+
+    if (!user && !studentDoc) {
       return res.status(404).json({
         success: false,
         message: 'Student profile not found.',
@@ -253,6 +376,7 @@ const updateProfile = async (req, res) => {
       'dob',
       'qualification',
       'preferredCourse',
+      'course',
     ];
 
     const updates = {};
@@ -290,8 +414,10 @@ const updateProfile = async (req, res) => {
       updates.qualification = req.body.qualification.toString().trim();
     }
 
-    if (req.body.preferredCourse !== undefined) {
-      updates.preferredCourse = req.body.preferredCourse.toString().trim();
+    if (req.body.preferredCourse !== undefined || req.body.course !== undefined) {
+      const prefCourse = (req.body.preferredCourse || req.body.course || '').toString().trim();
+      updates.preferredCourse = prefCourse;
+      updates.course = prefCourse;
     }
 
     // Block any attempt to update disallowed fields
@@ -320,14 +446,18 @@ const updateProfile = async (req, res) => {
     }
 
     // Apply updates to User document
-    Object.assign(user, updates);
-    await user.save();
+    if (user) {
+      Object.assign(user, updates);
+      await user.save();
+    }
 
     // Mirror the same updates to the Student document (if it exists)
     if (Student) {
-      const studentDoc =
-        (await Student.findOne({ userId: user._id })) ||
-        (await Student.findOne({ email: user.email }));
+      if (!studentDoc && user) {
+        studentDoc =
+          (await Student.findOne({ userId: user._id })) ||
+          (await Student.findOne({ email: user.email }));
+      }
 
       if (studentDoc) {
         const studentUpdates = {};
@@ -340,8 +470,10 @@ const updateProfile = async (req, res) => {
           studentUpdates.dateOfBirth = updates.dateOfBirth;
         if (updates.qualification !== undefined)
           studentUpdates.qualification = updates.qualification;
-        if (updates.preferredCourse !== undefined)
+        if (updates.preferredCourse !== undefined) {
           studentUpdates.preferredCourse = updates.preferredCourse;
+          studentUpdates.course = updates.preferredCourse;
+        }
 
         Object.assign(studentDoc, studentUpdates);
         await studentDoc.save();
@@ -349,19 +481,24 @@ const updateProfile = async (req, res) => {
     }
 
     // Re-fetch updated user (without password) for the response
-    const updatedUser = await User.findById(id).select('-password');
+    const resolvedId = (user && user._id) || (studentDoc && studentDoc._id);
+    const updatedUser = user ? await User.findById(user._id).select('-password') : null;
 
-    let studentDoc = null;
-    if (Student) {
+    if (Student && !studentDoc && updatedUser) {
       studentDoc =
         (await Student.findOne({ userId: updatedUser._id })) ||
         (await Student.findOne({ email: updatedUser.email }));
     }
 
+    const finalProfile = await buildProfileResponse(updatedUser || user || studentDoc, studentDoc);
+
     return res.status(200).json({
       success: true,
       message: 'Profile updated successfully.',
-      profile: await buildProfileResponse(updatedUser, studentDoc),
+      ...finalProfile,
+      profile: finalProfile,
+      data: finalProfile,
+      user: finalProfile,
     });
   } catch (error) {
     console.error('[studentProfileController] updateProfile Error:', error);
@@ -397,12 +534,16 @@ const updateProfile = async (req, res) => {
  */
 const deleteAccount = async (req, res) => {
   try {
-    const { id } = req.params;
+    const mongoose = require('mongoose');
+    let targetId = req.params?.id;
+    if (!targetId || targetId === 'profile' || targetId === 'me' || targetId === 'self') {
+      targetId = req.user?.id || req.user?.userId || req.user?.studentId;
+    }
     const hardDelete = req.query.hard === 'true';
     const callerRole = (req.user?.role || '').toLowerCase().trim();
     const isAdmin = callerRole === 'admin' || callerRole === 'superadmin';
 
-    if (!isAuthorized(req, id)) {
+    if (!isAuthorized(req, targetId)) {
       return res.status(403).json({
         success: false,
         message: 'Forbidden: You can only delete your own account.',
@@ -417,8 +558,29 @@ const deleteAccount = async (req, res) => {
       });
     }
 
-    const user = await User.findById(id);
-    if (!user) {
+    let user = null;
+    let studentDoc = null;
+
+    if (targetId && mongoose.Types.ObjectId.isValid(targetId)) {
+      user = await User.findById(targetId);
+      if (!user && Student) {
+        studentDoc = await Student.findById(targetId);
+        if (studentDoc) {
+          user = await User.findOne({
+            $or: [
+              ...(studentDoc.userId ? [{ _id: studentDoc.userId }] : []),
+              ...(studentDoc.email ? [{ email: studentDoc.email.toLowerCase().trim() }] : [])
+            ]
+          });
+        }
+      }
+    }
+
+    if (!user && req.user?.id && mongoose.Types.ObjectId.isValid(req.user.id)) {
+      user = await User.findById(req.user.id);
+    }
+
+    if (!user && !studentDoc) {
       return res.status(404).json({
         success: false,
         message: 'Student account not found.',

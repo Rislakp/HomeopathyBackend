@@ -28,6 +28,14 @@ const demoVideoController = require('../../controllers/demoVideoController');
 router.use('/api/student', requireStudent);
 
 /**
+ * @route   GET /api/student/profile
+ * @route   GET /api/student/me
+ * @desc    Fetch authenticated student's profile details
+ */
+router.get('/api/student/profile', getStudentProfile);
+router.get('/api/student/me', getStudentProfile);
+
+/**
  * @route   GET /api/student/demo-videos
  * @desc    Fetch available demo videos for the student portal
  */

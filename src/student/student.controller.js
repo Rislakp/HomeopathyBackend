@@ -133,23 +133,36 @@ async function getStudentProfile(req, res) {
     const courseRef = (studentDoc && studentDoc.courseRef) || (userDoc && userDoc.courseRef) || req.user?.courseRef || null;
     const courseId = (studentDoc && studentDoc.courseId) || (userDoc && userDoc.courseId) || req.user?.courseId || (courseRef ? courseRef.toString() : '');
 
+    const resolvedSubscriptionStatus = (studentDoc && (studentDoc.subscriptionStatus || studentDoc.subscription)) ||
+                                       (userDoc && (userDoc.subscriptionStatus || userDoc.subscription)) ||
+                                       subscription || 'Active';
+
+    const profileData = {
+      _id: profileId,
+      id: profileId,
+      name,
+      email: studentEmail,
+      phone: contactNumber,
+      contactNumber,
+      registeredCourseId: courseId,
+      courseId,
+      courseRef: courseRef ? courseRef.toString() : null,
+      course,
+      subscription,
+      subscriptionStatus: resolvedSubscriptionStatus,
+      status,
+      dateOfBirth,
+      qualification,
+      profileImage
+    };
+
     return res.status(200).json({
       success: true,
       message: 'Student profile fetched successfully',
-      data: {
-        id: profileId,
-        name,
-        email: studentEmail,
-        contactNumber,
-        dateOfBirth,
-        qualification,
-        course,
-        courseId,
-        courseRef: courseRef ? courseRef.toString() : null,
-        subscription,
-        status,
-        profileImage
-      }
+      ...profileData,
+      data: profileData,
+      profile: profileData,
+      user: profileData
     });
   } catch (error) {
     console.error('Error fetching student profile:', error);

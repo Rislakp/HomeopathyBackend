@@ -36,6 +36,14 @@ const allowedOrigins = [
   'https://admin.whitecoat.academy',
   'https://student.whitecoat.academy',
   'https://student-portal.whitecoat.academy',
+  'https://whitecoatacademy.com',
+  'https://www.whitecoatacademy.com',
+  'https://admin.whitecoatacademy.com',
+  'https://student.whitecoatacademy.com',
+  'https://whitecodeacademy.com',
+  'https://www.whitecodeacademy.com',
+  'https://admin.whitecodeacademy.com',
+  'https://student.whitecodeacademy.com',
 ];
 
 if (process.env.ALLOWED_ORIGINS) {
@@ -47,37 +55,84 @@ if (process.env.ALLOWED_ORIGINS) {
   });
 }
 
+const isOriginAllowed = (origin) => {
+  if (!origin) return true; // Mobile apps, Postman, curl, server-to-server
+
+  // Direct allowlist match
+  if (allowedOrigins.includes(origin)) return true;
+
+  // Domain regex checks for official domains & subdomains
+  const domainPatterns = [
+    /^https?:\/\/([a-zA-Z0-9-]+\.)*whitecoat\.academy$/i,
+    /^https?:\/\/([a-zA-Z0-9-]+\.)*whitecoatacademy\.com$/i,
+    /^https?:\/\/([a-zA-Z0-9-]+\.)*whitecodeacademy\.com$/i,
+    /^https?:\/\/([a-zA-Z0-9-]+\.)*onrender\.com$/i,
+    /^https?:\/\/([a-zA-Z0-9-]+\.)*vercel\.app$/i,
+    /^https?:\/\/([a-zA-Z0-9-]+\.)*netlify\.app$/i,
+    /^https?:\/\/(localhost|127\.0\.0\.1|10\.0\.2\.2|0\.0\.0\.0)(:\d+)?$/i,
+  ];
+
+  if (domainPatterns.some((pattern) => pattern.test(origin))) {
+    return true;
+  }
+
+  // Mobile WebViews and hybrid app schemes
+  if (
+    origin.startsWith('file://') ||
+    origin.startsWith('capacitor://') ||
+    origin.startsWith('ionic://') ||
+    origin.startsWith('tauri://') ||
+    origin.startsWith('app://')
+  ) {
+    return true;
+  }
+
+  return false;
+};
+
 const corsOptions = {
   origin: (origin, callback) => {
-    // Allow non-browser clients (mobile apps, Postman, curl, server-to-server) where origin is undefined
-    if (!origin) {
+    if (isOriginAllowed(origin)) {
       return callback(null, true);
     }
-
-    // Check allowlist
-    if (allowedOrigins.includes(origin)) {
-      return callback(null, true);
-    }
-
-    // Allow mobile WebViews & emulator origins (file://, capacitor://, ionic://, 10.0.2.2, localhost)
-    const isMobileAppScheme = /^https?:\/\/(localhost|127\.0\.0\.1|10\.0\.2\.2)(:\d+)?$/.test(origin) ||
-                              origin.startsWith('file://') ||
-                              origin.startsWith('capacitor://') ||
-                              origin.startsWith('ionic://');
-    if (isMobileAppScheme) {
-      return callback(null, true);
-    }
-
     return callback(new Error(`CORS error: Origin ${origin} not allowed by CORS policy`), false);
   },
   credentials: true,
-  methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization', 'x-student-id', 'x-user-id', 'Accept', 'Origin', 'X-Requested-With'],
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS', 'HEAD'],
+  allowedHeaders: [
+    'Content-Type',
+    'Authorization',
+    'x-student-id',
+    'x-user-id',
+    'Accept',
+    'Origin',
+    'X-Requested-With',
+    'Access-Control-Allow-Origin',
+    'Access-Control-Allow-Headers',
+    'Access-Control-Request-Method',
+    'Access-Control-Request-Headers',
+  ],
+  exposedHeaders: ['Content-Range', 'X-Content-Range', 'ETag', 'Authorization'],
   optionsSuccessStatus: 200,
 };
 
 app.use(cors(corsOptions));
 app.options('*', cors(corsOptions));
+
+// Explicit CORS headers safety net middleware
+app.use((req, res, next) => {
+  const origin = req.headers.origin;
+  if (origin && isOriginAllowed(origin)) {
+    res.setHeader('Access-Control-Allow-Origin', origin);
+    res.setHeader('Access-Control-Allow-Credentials', 'true');
+    res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, PATCH, OPTIONS, HEAD');
+    res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, x-student-id, x-user-id, Accept, Origin, X-Requested-With');
+  }
+  if (req.method === 'OPTIONS') {
+    return res.sendStatus(200);
+  }
+  next();
+});
 
 // Body Parser Middleware (Must be registered before any routes are defined)
 app.use(express.json({ limit: '100mb' }));
@@ -173,19 +228,24 @@ app.use('/api/v1', require('./routes/recordingRoutes'));
 const studentFacultyRoutes = require('./routes/studentFacultyRoutes');
 app.use('/api/student/faculty', studentFacultyRoutes);
 app.use('/api/v1/student/faculty', studentFacultyRoutes);
+
+// Student self-service profile and management routes
+const studentProfileRoutes = require('./routes/studentRoutes');
+app.use('/api/students', studentProfileRoutes);
+app.use('/api/v1/students', studentProfileRoutes);
+app.use('/api/student', studentProfileRoutes);
+app.use('/api/v1/student', studentProfileRoutes);
+
+// Student curriculum and progress routes
 app.use('/api/student', require('./routes/studentCurriculumRoutes'));
 app.use('/api/v1/student', require('./routes/studentCurriculumRoutes'));
-app.use('/api/student_new', require('./routes/studentRoutes'));
-// Student self-service profile CRUD (must be registered BEFORE the /api/students admin catch-all below)
-app.use('/api/students/self', require('./routes/studentRoutes'));
-app.use('/api/v1/students/self', require('./routes/studentRoutes'));
-app.use('/api/faculty_new', require('./routes/facultyRoutes'));
 app.use('/api/admin/students', require('./routes/adminStudentRoutes'));
+app.use('/api/v1/admin/students', require('./routes/adminStudentRoutes'));
 
 const examRoutes = require('./routes/exam.routes');
 app.use(examRoutes);
-const studentRoutes = require('./src/student/student.routes');
-app.use(studentRoutes);
+const studentExamRoutes = require('./src/student/student.routes');
+app.use(studentExamRoutes);
 const adminExamRoutes = require('./src/admin/admin.routes');
 app.use(adminExamRoutes);
 const unaniExamRoutes = require('./src/unani/exams/routes/unaniExam.routes');
@@ -202,8 +262,6 @@ app.use('/api/v1/admin/activities', adminDashboardRoutes);
 const adminRoutes = require('./routes/adminRoutes');
 app.use('/api/v1/admin', adminRoutes);
 app.use('/api/admin', adminRoutes);
-app.use('/api/v1/students', adminRoutes);  // admin student management (list, bulk ops)
-app.use('/api/students', adminRoutes);       // admin student management (list, bulk ops)
 
 
 // ── Health / Wake-up endpoint ──────────────────────────────────────────────
@@ -244,7 +302,7 @@ app.use((req, res, next) => {
 
 // 500 Global Error Handler Middleware
 app.use((err, req, res, next) => {
-  if (err.message && err.message.startswith('CORS error')) {
+  if (err.message && err.message.startsWith('CORS error')) {
     return res.status(403).json({ success: false, message: err.message });
   }
   console.error('Express Error Handler:', err);
@@ -276,4 +334,8 @@ const startServer = async () => {
   }
 };
 
-startServer();
+if (require.main === module) {
+  startServer();
+}
+
+module.exports = { app, startServer };
