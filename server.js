@@ -101,16 +101,22 @@ const isOriginAllowed = (origin) => {
   return false;
 };
 
-const corsOptions = {
-  origin: (origin, callback) => {
-    if (isOriginAllowed(origin)) {
-      return callback(null, true);
-    }
-    return callback(null, false);
-  },
-  credentials: true,
-  methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS', 'HEAD'],
-  allowedHeaders: [
+// Single, unified CORS configuration delegate
+const corsOptionsDelegate = (req, callback) => {
+  const origin = req.headers.origin;
+
+  // Mobile apps, Postman, curl, server-to-server (no Origin header)
+  if (!origin) {
+    return callback(null, { origin: true });
+  }
+
+  // Validate allowed origin (dynamic localhost/127.0.0.1 ports or production whitelist)
+  if (!isOriginAllowed(origin)) {
+    return callback(null, { origin: false });
+  }
+
+  const requestedHeaders = req.headers['access-control-request-headers'];
+  const standardHeaders = [
     'Authorization',
     'Content-Type',
     'Accept',
@@ -120,39 +126,28 @@ const corsOptions = {
     'x-user-id',
     'Access-Control-Request-Method',
     'Access-Control-Request-Headers',
-  ],
-  exposedHeaders: ['Content-Range', 'X-Content-Range', 'ETag', 'Authorization'],
-  optionsSuccessStatus: 200,
-  maxAge: 86400,
+  ];
+
+  let allowedHeaders = standardHeaders;
+  if (requestedHeaders) {
+    const customList = requestedHeaders.split(',').map((h) => h.trim()).filter(Boolean);
+    allowedHeaders = Array.from(new Set([...standardHeaders, ...customList]));
+  }
+
+  callback(null, {
+    origin: true, // Returns exact requesting origin (required when credentials are true; never '*')
+    credentials: true,
+    methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS', 'HEAD'],
+    allowedHeaders: allowedHeaders,
+    exposedHeaders: ['Content-Range', 'X-Content-Range', 'ETag', 'Authorization'],
+    optionsSuccessStatus: 200,
+    maxAge: 86400,
+  });
 };
 
-// 1. Explicit CORS headers & preflight OPTIONS interceptor (registered first to guarantee preflight responses)
-app.use((req, res, next) => {
-  const origin = req.headers.origin;
-
-  if (origin && isOriginAllowed(origin)) {
-    // Return exact requesting origin (required when credentials are true; never use "*")
-    res.setHeader('Access-Control-Allow-Origin', origin);
-    res.setHeader('Access-Control-Allow-Credentials', 'true');
-    res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, PATCH, DELETE, OPTIONS, HEAD');
-
-    const reqHeaders = req.headers['access-control-request-headers'];
-    const standardHeaders = 'Authorization, Content-Type, Accept, Origin, X-Requested-With, x-student-id, x-user-id, Access-Control-Request-Method, Access-Control-Request-Headers';
-    res.setHeader('Access-Control-Allow-Headers', reqHeaders ? `${standardHeaders}, ${reqHeaders}` : standardHeaders);
-    res.setHeader('Access-Control-Max-Age', '86400');
-  }
-
-  // Preflight OPTIONS requests return immediately with 200 OK
-  if (req.method === 'OPTIONS') {
-    return res.status(200).end();
-  }
-
-  next();
-});
-
-// 2. Standard CORS middleware
-app.use(cors(corsOptions));
-app.options('*', cors(corsOptions));
+// Single, unified CORS middleware handling all requests and preflights
+app.use(cors(corsOptionsDelegate));
+app.options('*', cors(corsOptionsDelegate));
 
 // Body Parser Middleware (Must be registered before any routes are defined)
 app.use(express.json({ limit: '100mb' }));
