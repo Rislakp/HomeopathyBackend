@@ -161,7 +161,7 @@ app.use(requestLogger);
 app.use((req, res, next) => {
   const url = (req.originalUrl || req.url || '').toLowerCase();
   const isUploadRoute = url.includes('/upload') || url.includes('/recordings') || url.includes('/media');
-  const timeoutMs = isUploadRoute ? 120000 : 60000;
+  const timeoutMs = isUploadRoute ? 60000 : 30000;
 
   res.setTimeout(timeoutMs, () => {
     if (!res.headersSent) {
@@ -210,18 +210,23 @@ app.use('/uploads', express.static(uploadsDir, {
 app.use(express.static(uploadsDir));
 app.use(express.static(path.join(__dirname, 'public')));
 
-// Production-ready structured request & timing logger middleware
+// Production-ready structured request performance & timing logger middleware
 app.use((req, res, next) => {
   const start = Date.now();
   const cleanPath = (req.originalUrl || req.url || '').split('?')[0];
 
   res.on('finish', () => {
     const duration = Date.now() - start;
-    const isSlow = duration > 1000;
-    const logMsg = `[HTTP] ${req.method} ${cleanPath} ${res.statusCode} - ${duration}ms`;
+    let severity = '';
+    if (duration > 2000) {
+      severity = ' [CRITICAL SLOW >2000ms]';
+    } else if (duration > 500) {
+      severity = ' [SLOW >500ms]';
+    }
+    const logMsg = `[PERF] ${req.method} ${cleanPath} ${res.statusCode} - ${duration}ms${severity}`;
 
-    if (isSlow) {
-      console.warn(`⚠️ [SLOW API WARNING] ${logMsg}`);
+    if (severity) {
+      console.warn(logMsg);
     } else if (process.env.NODE_ENV !== 'production' || process.env.ENABLE_API_TIMING === 'true') {
       console.log(logMsg);
     }
@@ -292,6 +297,8 @@ const unaniExamRoutes = require('./src/unani/exams/routes/unaniExam.routes');
 app.use(unaniExamRoutes);
 
 const facultyRoutes = require('./routes/facultyRoutes');
+app.use('/api/faculty', facultyRoutes);
+app.use('/api/v1/faculty', facultyRoutes);
 app.use('/api/admin/faculty', facultyRoutes);
 app.use('/api/v1/admin/faculty', facultyRoutes);
 const adminDashboardRoutes = require('./routes/adminDashboardRoutes');
