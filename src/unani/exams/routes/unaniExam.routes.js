@@ -7,6 +7,26 @@ const { requireAuth, requireAdmin, requireCourseAccess } = require('../../../../
 router.use(requireAuth);
 
 // ─────────────────────────────────────────────────────────────────────────────
+// 0. STUDENT UNANI EXAM ROUTES (Declared BEFORE /:id dynamic routes)
+// ─────────────────────────────────────────────────────────────────────────────
+
+// GET available Unani exams for student
+router.get('/api/unani-exams/student', requireCourseAccess('unani'), unaniExamController.getStudentAvailableExams);
+router.get('/api/v1/unani-exams/student', requireCourseAccess('unani'), unaniExamController.getStudentAvailableExams);
+
+// GET specific Unani exam details & questions (NO answer keys) for student
+router.get('/api/unani-exams/student/:examId', requireCourseAccess('unani'), unaniExamController.getStudentExamById);
+router.get('/api/v1/unani-exams/student/:examId', requireCourseAccess('unani'), unaniExamController.getStudentExamById);
+
+// POST submit Unani exam answers (Student)
+router.post('/api/unani-exams/student/:examId/submit', requireCourseAccess('unani'), unaniExamController.submitStudentExam);
+router.post('/api/v1/unani-exams/student/:examId/submit', requireCourseAccess('unani'), unaniExamController.submitStudentExam);
+
+// GET student's own exam result
+router.get('/api/unani-exams/student/:examId/result', requireCourseAccess('unani'), unaniExamController.getStudentResultByExam);
+router.get('/api/v1/unani-exams/student/:examId/result', requireCourseAccess('unani'), unaniExamController.getStudentResultByExam);
+
+// ─────────────────────────────────────────────────────────────────────────────
 // 1. ADMIN UNANI TEST HISTORY & RANK (MUST be declared BEFORE /:id dynamic routes)
 // ─────────────────────────────────────────────────────────────────────────────
 

@@ -624,6 +624,272 @@ async function getHistory(examId, reqUser) {
   return await getResults(examId, reqUser);
 }
 
+/**
+ * Get available Unani exams for student
+ */
+async function getStudentAvailableExams(reqUser) {
+  const exams = await UnaniExam.find({
+    courseId: 'unani',
+    examType: 'grand_mock_test',
+    status: 'Published',
+  })
+    .sort({ createdAt: -1 })
+    .lean();
+
+  return exams.map((exam) => ({
+    _id: exam._id.toString(),
+    id: exam._id.toString(),
+    title: exam.title,
+    description: exam.description || '',
+    courseId: 'unani',
+    examType: 'grand_mock_test',
+    totalQuestions: exam.totalQuestions || (Array.isArray(exam.questions) ? exam.questions.length : 0),
+    duration: exam.durationMinutes,
+    durationMinutes: exam.durationMinutes,
+    marksPerQuestion: exam.marksPerQuestion,
+    negativeMark: exam.negativeMark || exam.negativeMarkPenalty || 0,
+    status: exam.status || 'Published',
+    createdAt: exam.createdAt,
+    updatedAt: exam.updatedAt,
+  }));
+}
+
+/**
+ * Get Unani exam details & questions for student (with NO answer key/correctOption)
+ */
+async function getStudentExamById(examId, reqUser) {
+  if (!examId || typeof examId !== 'string' || !mongoose.Types.ObjectId.isValid(examId)) {
+    return { notFound: true };
+  }
+
+  const exam = await UnaniExam.findOne({
+    _id: examId,
+    courseId: 'unani',
+    status: 'Published',
+  });
+
+  if (!exam) {
+    return { notFound: true };
+  }
+
+  const sanitizedQuestions = (exam.questions || []).map((q) => {
+    const qObj = q.toObject ? q.toObject() : { ...q };
+    const qIdStr = qObj._id ? qObj._id.toString() : qObj.id;
+
+    // SECURITY: CRITICAL - DO NOT expose answer key or correct options
+    delete qObj.correctOption;
+    delete qObj.correctAnswer;
+    delete qObj.explanation;
+    delete qObj.__v;
+
+    return {
+      _id: qIdStr,
+      id: qIdStr,
+      question: qObj.questionText || '',
+      questionText: qObj.questionText || '',
+      options: qObj.options || { A: '', B: '', C: '', D: '' },
+      passage: qObj.passage || null,
+      imageUrl: qObj.imageUrl || null,
+      tableData: qObj.tableData || null,
+    };
+  });
+
+  return {
+    exam: {
+      _id: exam._id.toString(),
+      id: exam._id.toString(),
+      title: exam.title,
+      description: exam.description || '',
+      courseId: 'unani',
+      examType: 'grand_mock_test',
+      totalQuestions: sanitizedQuestions.length,
+      duration: exam.durationMinutes,
+      durationMinutes: exam.durationMinutes,
+      marksPerQuestion: exam.marksPerQuestion,
+      negativeMark: exam.negativeMark || exam.negativeMarkPenalty || 0,
+    },
+    questions: sanitizedQuestions,
+  };
+}
+
+/**
+ * Submit Unani exam answers for student with 100% server-side evaluation & duplicate prevention
+ */
+async function submitStudentExam(examId, reqUser, submissionData = {}) {
+  if (!examId || typeof examId !== 'string' || !mongoose.Types.ObjectId.isValid(examId)) {
+    return { notFound: true };
+  }
+
+  const exam = await UnaniExam.findOne({ _id: examId, courseId: 'unani' });
+  if (!exam) {
+    return { notFound: true };
+  }
+
+  const studentId = await resolveStudentId(reqUser);
+  if (!studentId) {
+    return { unauthenticated: true };
+  }
+
+  // Prevent duplicate submission: check if student has already submitted this exam
+  const existingResult = await UnaniExamResult.findOne({
+    examId: exam._id,
+    studentId: studentId,
+    courseId: 'unani',
+  });
+
+  if (existingResult) {
+    return { conflict: true };
+  }
+
+  // Normalize submitted answers input (supports map format and array format)
+  const rawAnswers = submissionData.answers || submissionData.responses || {};
+  const answersMap = {};
+
+  if (Array.isArray(rawAnswers)) {
+    rawAnswers.forEach((item) => {
+      const qId = item.questionId || item.id || item._id;
+      const ans = item.answer || item.selectedOption || item.option || item.val;
+      if (qId && ans) {
+        answersMap[qId.toString()] = String(ans).toUpperCase().trim();
+      }
+    });
+  } else if (typeof rawAnswers === 'object' && rawAnswers !== null) {
+    Object.keys(rawAnswers).forEach((qId) => {
+      const val = rawAnswers[qId];
+      if (typeof val === 'string') {
+        answersMap[qId.toString()] = val.toUpperCase().trim();
+      } else if (typeof val === 'object' && val !== null) {
+        const ans = val.answer || val.selectedOption || val.option;
+        if (ans) {
+          answersMap[qId.toString()] = String(ans).toUpperCase().trim();
+        }
+      }
+    });
+  }
+
+  const marksPerQuestion = Number(exam.marksPerQuestion) || 1;
+  const penalty = Number(exam.negativeMark || exam.negativeMarkPenalty || 0);
+  const totalQuestions = exam.questions ? exam.questions.length : 0;
+  const totalMarks = totalQuestions * marksPerQuestion;
+
+  let correctAnswers = 0;
+  let wrongAnswers = 0;
+  let unanswered = 0;
+  let score = 0;
+
+  const evaluatedAnswers = (exam.questions || []).map((question) => {
+    const qIdStr = question._id.toString();
+    const userAnsOption = answersMap[qIdStr] || null;
+    const correctOption = String(question.correctOption || '').toUpperCase().trim();
+
+    let isCorrect = false;
+    let selectedOption = null;
+
+    if (userAnsOption && ['A', 'B', 'C', 'D'].includes(userAnsOption)) {
+      selectedOption = userAnsOption;
+      if (userAnsOption === correctOption) {
+        isCorrect = true;
+        correctAnswers++;
+        score += marksPerQuestion;
+      } else {
+        wrongAnswers++;
+        score -= penalty;
+      }
+    } else {
+      unanswered++;
+    }
+
+    return {
+      questionId: question._id,
+      selectedOption,
+      correctOption,
+      isCorrect,
+    };
+  });
+
+  score = Math.max(0, Math.round(score * 100) / 100);
+  const percentage = totalMarks > 0 ? Math.max(0, Math.round((score / totalMarks) * 100 * 100) / 100) : 0;
+
+  let timeTakenSeconds = Number(submissionData.timeTakenSeconds ?? submissionData.timeTaken ?? 0);
+  if (isNaN(timeTakenSeconds) || timeTakenSeconds < 0) {
+    timeTakenSeconds = 0;
+  }
+
+  const newResult = new UnaniExamResult({
+    studentId: studentId,
+    examId: exam._id,
+    courseId: 'unani',
+    examType: 'grand_mock_test',
+    score: score,
+    totalMarks: totalMarks,
+    percentage: percentage,
+    correctAnswers: correctAnswers,
+    wrongAnswers: wrongAnswers,
+    unanswered: unanswered,
+    answers: evaluatedAnswers,
+    status: 'Completed',
+    timeTakenSeconds: timeTakenSeconds,
+  });
+
+  await newResult.save();
+
+  return {
+    resultId: newResult._id.toString(),
+    examId: exam._id.toString(),
+    studentId: studentId.toString(),
+    score: score,
+    correct: correctAnswers,
+    correctAnswers: correctAnswers,
+    wrong: wrongAnswers,
+    wrongAnswers: wrongAnswers,
+    unanswered: unanswered,
+    totalMarks: totalMarks,
+    percentage: percentage,
+    timeTakenSeconds: timeTakenSeconds,
+    submittedAt: newResult.createdAt,
+  };
+}
+
+/**
+ * Get student's own calculated result after submission
+ */
+async function getStudentResultByExam(examId, reqUser) {
+  if (!examId || typeof examId !== 'string' || !mongoose.Types.ObjectId.isValid(examId)) {
+    return { notFound: true };
+  }
+
+  const studentId = await resolveStudentId(reqUser);
+  if (!studentId) {
+    return { unauthenticated: true };
+  }
+
+  const result = await UnaniExamResult.findOne({
+    examId: examId,
+    studentId: studentId,
+    courseId: 'unani',
+  }).sort({ createdAt: -1 });
+
+  if (!result) {
+    return { notFound: true };
+  }
+
+  return {
+    resultId: result._id.toString(),
+    examId: result.examId.toString(),
+    studentId: studentId.toString(),
+    score: result.score,
+    correct: result.correctAnswers,
+    correctAnswers: result.correctAnswers,
+    wrong: result.wrongAnswers,
+    wrongAnswers: result.wrongAnswers,
+    unanswered: result.unanswered,
+    totalMarks: result.totalMarks,
+    percentage: result.percentage,
+    timeTakenSeconds: result.timeTakenSeconds || 0,
+    submittedAt: result.createdAt,
+  };
+}
+
 module.exports = {
   createExam,
   getAllExams,
@@ -645,4 +911,8 @@ module.exports = {
   getUnaniTestHistory,
   getUnaniTestHistoryById,
   deleteUnaniTest,
+  getStudentAvailableExams,
+  getStudentExamById,
+  submitStudentExam,
+  getStudentResultByExam,
 };

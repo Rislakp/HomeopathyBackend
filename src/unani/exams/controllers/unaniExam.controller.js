@@ -572,6 +572,130 @@ async function getHistory(req, res) {
   }
 }
 
+/**
+ * GET /api/unani-exams/student
+ * Fetch available Unani exams for student
+ */
+async function getStudentAvailableExams(req, res) {
+  try {
+    const exams = await unaniExamService.getStudentAvailableExams(req.user);
+    return res.status(200).json({
+      success: true,
+      count: exams.length,
+      data: exams,
+    });
+  } catch (error) {
+    return res.status(500).json({
+      success: false,
+      message: 'Failed to fetch available Unani exams.',
+      error: error.message,
+    });
+  }
+}
+
+/**
+ * GET /api/unani-exams/student/:examId
+ * Fetch Unani exam details & questions for student (with NO answer keys)
+ */
+async function getStudentExamById(req, res) {
+  try {
+    const result = await unaniExamService.getStudentExamById(req.params.examId, req.user);
+    if (result.notFound) {
+      return res.status(404).json({
+        success: false,
+        message: 'Unani exam not found',
+      });
+    }
+
+    return res.status(200).json({
+      success: true,
+      data: result,
+    });
+  } catch (error) {
+    return res.status(500).json({
+      success: false,
+      message: 'Failed to fetch Unani exam details.',
+      error: error.message,
+    });
+  }
+}
+
+/**
+ * POST /api/unani-exams/student/:examId/submit
+ * Submit student Unani exam answers
+ */
+async function submitStudentExam(req, res) {
+  try {
+    const result = await unaniExamService.submitStudentExam(req.params.examId, req.user, req.body);
+    if (result.notFound) {
+      return res.status(404).json({
+        success: false,
+        message: 'Unani exam not found',
+      });
+    }
+
+    if (result.unauthenticated) {
+      return res.status(401).json({
+        success: false,
+        message: 'Authentication required',
+      });
+    }
+
+    if (result.conflict) {
+      return res.status(409).json({
+        success: false,
+        message: 'You have already submitted this exam',
+      });
+    }
+
+    return res.status(201).json({
+      success: true,
+      message: 'Unani exam submitted successfully',
+      data: result,
+    });
+  } catch (error) {
+    return res.status(500).json({
+      success: false,
+      message: 'Failed to submit Unani exam',
+      error: error.message,
+    });
+  }
+}
+
+/**
+ * GET /api/unani-exams/student/:examId/result
+ * Fetch student's own exam result after submission
+ */
+async function getStudentResultByExam(req, res) {
+  try {
+    const result = await unaniExamService.getStudentResultByExam(req.params.examId, req.user);
+    if (result.notFound) {
+      return res.status(404).json({
+        success: false,
+        message: 'Unani exam result not found',
+      });
+    }
+
+    if (result.unauthenticated) {
+      return res.status(401).json({
+        success: false,
+        message: 'Authentication required',
+      });
+    }
+
+    return res.status(200).json({
+      success: true,
+      data: result,
+    });
+  } catch (error) {
+    return res.status(500).json({
+      success: false,
+      message: 'Failed to fetch Unani exam result.',
+      error: error.message,
+    });
+  }
+}
+
 module.exports = {
   createExam,
   getAllExams,
@@ -593,4 +717,8 @@ module.exports = {
   getUnaniTestHistory,
   getUnaniTestHistoryById,
   deleteUnaniTest,
+  getStudentAvailableExams,
+  getStudentExamById,
+  submitStudentExam,
+  getStudentResultByExam,
 };

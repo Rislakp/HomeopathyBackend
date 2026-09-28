@@ -276,6 +276,10 @@ app.use('/api/v1/student', studentProfileRoutes);
 app.use('/api/admin/students', require('./routes/adminStudentRoutes'));
 app.use('/api/v1/admin/students', require('./routes/adminStudentRoutes'));
 
+const rankImageRoutes = require('./routes/academicExamRankImage.routes');
+app.use('/api/exams', rankImageRoutes);
+app.use('/api/v1/exams', rankImageRoutes);
+
 const examRoutes = require('./routes/exam.routes');
 app.use(examRoutes);
 const studentExamRoutes = require('./src/student/student.routes');
@@ -284,6 +288,7 @@ const adminExamRoutes = require('./src/admin/admin.routes');
 app.use(adminExamRoutes);
 const unaniExamRoutes = require('./src/unani/exams/routes/unaniExam.routes');
 app.use(unaniExamRoutes);
+
 const facultyRoutes = require('./routes/facultyRoutes');
 app.use('/api/admin/faculty', facultyRoutes);
 app.use('/api/v1/admin/faculty', facultyRoutes);
