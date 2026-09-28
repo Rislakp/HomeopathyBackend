@@ -18,6 +18,7 @@ process.on('uncaughtException', (err) => {
 const express = require('express');
 const cors = require('cors');
 const connectDB = require('./config/db');
+const requestLogger = require('./utils/requestLogger');
 const path = require('path');
 const fs = require('fs');
 
@@ -36,6 +37,7 @@ const allowedOrigins = [
   'https://admin.whitecoat.academy',
   'https://student.whitecoat.academy',
   'https://student-portal.whitecoat.academy',
+  'https://unani.whitecoat.academy',
   'https://whitecoatacademy.com',
   'https://www.whitecoatacademy.com',
   'https://admin.whitecoatacademy.com',
@@ -44,6 +46,11 @@ const allowedOrigins = [
   'https://www.whitecodeacademy.com',
   'https://admin.whitecodeacademy.com',
   'https://student.whitecodeacademy.com',
+  'http://localhost:50079',
+  'http://localhost:5000',
+  'http://localhost:5001',
+  'http://localhost:3000',
+  'http://localhost:5173',
 ];
 
 if (process.env.ALLOWED_ORIGINS) {
@@ -210,29 +217,7 @@ app.use('/uploads', express.static(uploadsDir, {
 app.use(express.static(uploadsDir));
 app.use(express.static(path.join(__dirname, 'public')));
 
-// Production-ready structured request performance & timing logger middleware
-app.use((req, res, next) => {
-  const start = Date.now();
-  const cleanPath = (req.originalUrl || req.url || '').split('?')[0];
 
-  res.on('finish', () => {
-    const duration = Date.now() - start;
-    let severity = '';
-    if (duration > 2000) {
-      severity = ' [CRITICAL SLOW >2000ms]';
-    } else if (duration > 500) {
-      severity = ' [SLOW >500ms]';
-    }
-    const logMsg = `[PERF] ${req.method} ${cleanPath} ${res.statusCode} - ${duration}ms${severity}`;
-
-    if (severity) {
-      console.warn(logMsg);
-    } else if (process.env.NODE_ENV !== 'production' || process.env.ENABLE_API_TIMING === 'true') {
-      console.log(logMsg);
-    }
-  });
-  next();
-});
 
 // Routes
 const authRoutes = require('./routes/authRoutes');
