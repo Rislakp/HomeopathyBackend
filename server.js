@@ -154,6 +154,8 @@ app.use(express.json({ limit: '100mb' }));
 app.use(express.urlencoded({ limit: '100mb', extended: true }));
 
 
+app.use(requestLogger);
+
 // ── Request timeout middleware ─────────────────────────────────────────────
 // Uses 120s timeout for video uploads/recordings, 30s for general REST endpoints.
 app.use((req, res, next) => {

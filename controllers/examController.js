@@ -11,10 +11,12 @@ const {
   getStudentExamAttemptMap,
   computeExamAttemptMetrics
 } = require('../utils/examAttemptHelper');
+const { parsePaginationParams, buildPaginationResponse } = require('../utils/pagination');
 try { require('../models/Course'); } catch (e) {}
 
 /**
  * Helper to resolve courseName and moduleName for an exam object (populated or plain).
+ * Used for single-exam endpoints where batch resolution is not practical.
  */
 async function resolveCourseAndModuleNames(exam) {
   if (!exam) return { courseName: null, moduleName: null };
@@ -68,6 +70,46 @@ async function resolveCourseAndModuleNames(exam) {
   }
 
   return { courseName, moduleName };
+}
+
+/**
+ * Batch-resolve courseName and moduleName for a list of exams in ONE query.
+ * Eliminates the N+1 per-exam resolveCourseAndModuleNames pattern for listing endpoints.
+ * @param {Array} exams - lean exam documents
+ * @returns {Map<string, { courseName: string|null, moduleName: string|null }>} courseMap keyed by courseId string
+ */
+async function batchResolveCourseNames(exams) {
+  const courseIdsToFetch = new Set();
+  for (const exam of exams) {
+    if (exam.courseId && !exam.courseName) {
+      const raw = (typeof exam.courseId === 'object' && exam.courseId._id) ? exam.courseId._id.toString() : exam.courseId.toString();
+      if (raw && raw !== 'null' && raw !== 'undefined') courseIdsToFetch.add(raw.trim());
+    }
+  }
+
+  const courseMap = new Map();
+  if (courseIdsToFetch.size === 0) return courseMap;
+
+  try {
+    const CourseModel = mongoose.models.Course || require('../models/Course');
+    const ids = [...courseIdsToFetch];
+    const objIds = ids.filter(id => mongoose.Types.ObjectId.isValid(id)).map(id => new mongoose.Types.ObjectId(id));
+    const foundCourses = await CourseModel.find({
+      $or: [
+        ...(objIds.length > 0 ? [{ _id: { $in: objIds } }] : []),
+        { courseId: { $in: ids } }
+      ]
+    }).select('courseId courseTitle title name modules').lean();
+
+    for (const fc of foundCourses) {
+      if (fc._id) courseMap.set(fc._id.toString(), fc);
+      if (fc.courseId) courseMap.set(fc.courseId, fc);
+    }
+  } catch (err) {
+    // Batch course lookup failed gracefully
+  }
+
+  return courseMap;
 }
 
 /**
@@ -702,19 +744,41 @@ async function getAllGrandMocks(req, res) {
       // For Admins / Staff: no testType restriction, so all tests are returned!
     }
 
-    const exams = await Exam.find(filter)
-      .select('-questions')
-      .sort({ createdAt: -1 })
-      .lean();
+    // ── Pagination ──
+    let page, limit, skip;
+    try {
+      ({ page, limit, skip } = parsePaginationParams(reqQuery, { defaultLimit: 20 }));
+    } catch (pErr) {
+      return res.status(pErr.statusCode || 400).json({ success: false, message: pErr.message });
+    }
 
-    const TestResult = mongoose.models.TestResult || require('../src/common/models/testResult.model');
+    // Run count + paginated find concurrently
+    const [total, exams] = await Promise.all([
+      Exam.countDocuments(filter),
+      Exam.find(filter)
+        .select('-questions')
+        .sort({ createdAt: -1 })
+        .skip(skip)
+        .limit(limit)
+        .lean()
+    ]);
+
     const examIds = exams.map(e => e._id);
 
-    // Aggregate unique students per exam for staff/admin views
-    const attendanceCounts = await TestResult.aggregate([
-      { $match: { examId: { $in: examIds } } },
-      { $group: { _id: { examId: '$examId', studentId: '$studentId' } } },
-      { $group: { _id: '$_id.examId', studentsAttended: { $sum: 1 } } }
+    // Run attendance aggregation, attempt map, and batch course resolution concurrently
+    const TestResult = mongoose.models.TestResult || require('../src/common/models/testResult.model');
+    const candidateIds = req.user ? await getStudentCandidateIds(req.user) : [];
+
+    const [attendanceCounts, attemptMap, courseMap] = await Promise.all([
+      TestResult.aggregate([
+        { $match: { examId: { $in: examIds } } },
+        { $group: { _id: { examId: '$examId', studentId: '$studentId' } } },
+        { $group: { _id: '$_id.examId', studentsAttended: { $sum: 1 } } }
+      ]),
+      candidateIds.length > 0
+        ? getStudentExamAttemptMap(candidateIds, examIds)
+        : Promise.resolve(new Map()),
+      batchResolveCourseNames(exams)
     ]);
 
     const countMap = {};
@@ -722,18 +786,27 @@ async function getAllGrandMocks(req, res) {
       countMap[item._id.toString()] = item.studentsAttended;
     });
 
-    // Resolve student attempt map if called by an authenticated student
-    const candidateIds = req.user ? await getStudentCandidateIds(req.user) : [];
-    const attemptMap = candidateIds.length > 0
-      ? await getStudentExamAttemptMap(candidateIds, examIds)
-      : new Map();
-
-    const formattedExams = await Promise.all(exams.map(async (exam) => {
-      const { courseName, moduleName } = await resolveCourseAndModuleNames(exam);
+    const formattedExams = exams.map((exam) => {
+      let courseName = exam.courseName || null;
+      let moduleName = exam.moduleName || null;
       const rawCourseId = exam.courseId ? (typeof exam.courseId === 'object' && exam.courseId._id ? exam.courseId._id.toString() : exam.courseId.toString()).trim() : '';
       const courseIdStr = (rawCourseId && rawCourseId !== 'null' && rawCourseId !== 'undefined') ? rawCourseId : null;
       const rawModuleId = exam.moduleId ? (typeof exam.moduleId === 'object' && exam.moduleId._id ? exam.moduleId._id.toString() : exam.moduleId.toString()).trim() : '';
       const moduleIdStr = (rawModuleId && rawModuleId !== 'null' && rawModuleId !== 'undefined') ? rawModuleId : null;
+
+      // Resolve from batch map instead of N+1 query
+      if (courseIdStr && (!courseName || !moduleName)) {
+        const foundCourse = courseMap.get(courseIdStr);
+        if (foundCourse) {
+          if (!courseName) courseName = foundCourse.courseTitle || foundCourse.title || foundCourse.name || null;
+          if (moduleIdStr && !moduleName && Array.isArray(foundCourse.modules)) {
+            const modObj = foundCourse.modules.find(
+              (m) => m && ((m._id && m._id.toString() === moduleIdStr) || m.moduleName === moduleIdStr)
+            );
+            if (modObj) moduleName = modObj.moduleName || null;
+          }
+        }
+      }
 
       let normalizedType = exam.testType ? normalizeTestType(exam.testType) : null;
       if (!normalizedType || normalizedType === 'grand_mock') {
@@ -789,11 +862,15 @@ async function getAllGrandMocks(req, res) {
         } : null,
         studentsAttended: countMap[exam._id.toString()] || 0
       };
-    }));
+    });
+
+    const pagination = buildPaginationResponse(total, page, limit);
 
     return res.status(200).json({
       success: true,
-      data: formattedExams
+      count: formattedExams.length,
+      data: formattedExams,
+      pagination
     });
   } catch (error) {
     console.error('Error fetching Grand Mock exams:', error);
@@ -804,6 +881,7 @@ async function getAllGrandMocks(req, res) {
     });
   }
 }
+
 
 /**
  * GET /api/exams/grand-mock/:id

@@ -207,6 +207,8 @@ studentSchema.index({ createdAt: -1 });
 studentSchema.index({ status: 1, createdAt: -1 });
 studentSchema.index({ accountStatus: 1, createdAt: -1 });
 studentSchema.index({ name: 1 });
+studentSchema.index({ phone: 1 });
+studentSchema.index({ contactNumber: 1 });
 studentSchema.index({ courseRef: 1 });
 studentSchema.index({ courseId: 1 });
 studentSchema.index({ subscriptionStatus: 1, createdAt: -1 });

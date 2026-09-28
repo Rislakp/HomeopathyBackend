@@ -68,7 +68,7 @@ async function createExam(examData) {
  */
 async function getAllExams(queryFilter = {}) {
   const filter = { courseId: 'unani', examType: 'grand_mock_test', ...queryFilter };
-  return await UnaniExam.find(filter).sort({ createdAt: -1 });
+  return await UnaniExam.find(filter).select('-questions').sort({ createdAt: -1 }).lean();
 }
 
 /**
@@ -558,52 +558,78 @@ async function getRank(examId) {
     examType: 'grand_mock_test',
   })
     .populate('studentId', 'name email phone userId')
-    .sort({ score: -1, percentage: -1, createdAt: 1 });
+    .sort({ score: -1, percentage: -1, createdAt: 1 })
+    .lean();
 
+  // Batch-resolve missing student names from User model (replaces N+1 per-result lookup)
   let User;
   try {
     User = require('../../../../models/User');
   } catch (e) {}
 
-  const rankings = await Promise.all(
-    results.map(async (res, index) => {
-      let studentName = res.studentId ? res.studentId.name : '';
-      const sId = res.studentId
-        ? (res.studentId._id ? res.studentId._id.toString() : res.studentId.toString())
-        : null;
+  let userNameMap = new Map();
+  if (User) {
+    const missingNameStudents = results.filter(r => r.studentId && !r.studentId.name);
+    const userIdSet = new Set();
+    const emailSet = new Set();
+    for (const r of missingNameStudents) {
+      if (r.studentId.userId) userIdSet.add(r.studentId.userId.toString());
+      if (r.studentId.email) emailSet.add(r.studentId.email.toLowerCase().trim());
+    }
 
-      if (!studentName && res.studentId && User) {
-        try {
-          const userDoc =
-            (res.studentId.userId && (await User.findById(res.studentId.userId))) ||
-            (res.studentId.email && (await User.findOne({ email: res.studentId.email.toLowerCase().trim() })));
-          if (userDoc) {
-            studentName = userDoc.name || '';
-          }
-        } catch (e) {}
+    if (userIdSet.size > 0 || emailSet.size > 0) {
+      try {
+        const userOrFilter = [];
+        if (userIdSet.size > 0) {
+          userOrFilter.push({ _id: { $in: [...userIdSet].filter(id => mongoose.Types.ObjectId.isValid(id)).map(id => new mongoose.Types.ObjectId(id)) } });
+        }
+        if (emailSet.size > 0) {
+          userOrFilter.push({ email: { $in: [...emailSet] } });
+        }
+        const users = await User.find({ $or: userOrFilter }).select('name email').lean();
+        for (const u of users) {
+          if (u._id) userNameMap.set(u._id.toString(), u.name || '');
+          if (u.email) userNameMap.set(u.email.toLowerCase().trim(), u.name || '');
+        }
+      } catch (e) {}
+    }
+  }
+
+  const rankings = results.map((res, index) => {
+    let studentName = res.studentId ? res.studentId.name : '';
+    const sId = res.studentId
+      ? (res.studentId._id ? res.studentId._id.toString() : res.studentId.toString())
+      : null;
+
+    if (!studentName && res.studentId) {
+      if (res.studentId.userId) {
+        studentName = userNameMap.get(res.studentId.userId.toString()) || '';
       }
-
-      if (!studentName) {
-        studentName = 'Student';
+      if (!studentName && res.studentId.email) {
+        studentName = userNameMap.get(res.studentId.email.toLowerCase().trim()) || '';
       }
+    }
 
-      return {
-        rank: index + 1,
-        studentId: sId,
-        studentName: studentName,
-        score: res.score,
-        totalMarks: res.totalMarks,
-        correct: res.correctAnswers,
-        correctAnswers: res.correctAnswers,
-        wrong: res.wrongAnswers,
-        wrongAnswers: res.wrongAnswers,
-        unanswered: res.unanswered,
-        percentage: res.percentage,
-        timeTakenSeconds: res.timeTakenSeconds || 0,
-        submittedAt: res.createdAt,
-      };
-    })
-  );
+    if (!studentName) {
+      studentName = 'Student';
+    }
+
+    return {
+      rank: index + 1,
+      studentId: sId,
+      studentName: studentName,
+      score: res.score,
+      totalMarks: res.totalMarks,
+      correct: res.correctAnswers,
+      correctAnswers: res.correctAnswers,
+      wrong: res.wrongAnswers,
+      wrongAnswers: res.wrongAnswers,
+      unanswered: res.unanswered,
+      percentage: res.percentage,
+      timeTakenSeconds: res.timeTakenSeconds || 0,
+      submittedAt: res.createdAt,
+    };
+  });
 
   return {
     exam: {

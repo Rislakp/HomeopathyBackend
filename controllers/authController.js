@@ -50,7 +50,7 @@ const generateToken = (user, studentDoc = null) => {
 /**
  * Helper to build sanitized user JSON response object with authoritative course progress
  */
-const buildUserResponse = async (user, studentDoc = null) => {
+const buildUserResponse = async (user, studentDoc = null, options = {}) => {
   let courseRef = (studentDoc && studentDoc.courseRef) || user.courseRef || null;
   let courseId = (studentDoc && studentDoc.courseId) || user.courseId || (courseRef ? courseRef.toString() : '');
   let courseTitle = (studentDoc && studentDoc.course) || user.course || user.preferredCourse || '';
@@ -63,35 +63,29 @@ const buildUserResponse = async (user, studentDoc = null) => {
     preferredCourse = 'UNANI';
   }
 
+  // Fast single-roundtrip course resolution using $or query
   let targetCourse = null;
+  const courseConditions = [];
   if (courseRef && require('mongoose').Types.ObjectId.isValid(courseRef)) {
-    targetCourse = await Course.findById(courseRef);
+    courseConditions.push({ _id: new require('mongoose').Types.ObjectId(courseRef) });
   }
-  if (!targetCourse && courseId) {
+  if (courseId) {
+    courseConditions.push({ courseId });
     if (/^[0-9a-fA-F]{24}$/.test(courseId)) {
-      targetCourse = await Course.findById(courseId);
-    }
-    if (!targetCourse) {
-      targetCourse = await Course.findOne({ courseId });
+      courseConditions.push({ _id: new require('mongoose').Types.ObjectId(courseId) });
     }
   }
-  if (!targetCourse && courseTitle) {
-    targetCourse = await Course.findOne({
-      $or: [
-        { courseTitle: new RegExp(`^${courseTitle.trim()}$`, 'i') },
-        { title: new RegExp(`^${courseTitle.trim()}$`, 'i') },
-        { courseId: courseTitle.trim() },
-      ],
-    });
+  if (courseTitle) {
+    courseConditions.push({ courseTitle: new RegExp(`^${courseTitle.trim()}$`, 'i') });
+    courseConditions.push({ title: new RegExp(`^${courseTitle.trim()}$`, 'i') });
   }
-  if (!targetCourse && preferredCourse) {
-    targetCourse = await Course.findOne({
-      $or: [
-        { courseTitle: new RegExp(`^${preferredCourse.trim()}$`, 'i') },
-        { title: new RegExp(`^${preferredCourse.trim()}$`, 'i') },
-        { courseId: preferredCourse.trim() },
-      ],
-    });
+  if (preferredCourse && preferredCourse !== courseTitle) {
+    courseConditions.push({ courseTitle: new RegExp(`^${preferredCourse.trim()}$`, 'i') });
+    courseConditions.push({ title: new RegExp(`^${preferredCourse.trim()}$`, 'i') });
+  }
+
+  if (courseConditions.length > 0) {
+    targetCourse = await Course.findOne({ $or: courseConditions }).lean();
   }
 
   if (targetCourse) {
@@ -130,60 +124,88 @@ const buildUserResponse = async (user, studentDoc = null) => {
     response.isApproved = user.isApproved !== undefined ? user.isApproved : false;
   }
 
-  // If student user, look up assigned course details & calculate progress
+  // If student user, format assigned course details
   if (response.role === 'student') {
     try {
       if (targetCourse) {
         const studentId = studentDoc ? studentDoc._id : user._id;
-        const ContentItemProgress = require('../models/ContentItemProgress');
-        const CourseProgress = require('../models/CourseProgress');
-        const { buildProgressSummary } = require('./studentCurriculumController');
 
-        const contentProgressDocs = await ContentItemProgress.find({
-          studentId: studentId,
-          courseId: targetCourse._id,
-        }).lean();
+        // In login mode, return lean course structure fast without querying all ContentItemProgress
+        if (options.isLogin) {
+          const courseItem = {
+            id: targetCourse._id.toString(),
+            _id: targetCourse._id.toString(),
+            courseId: targetCourse.courseId || targetCourse._id.toString(),
+            title: targetCourse.courseTitle || targetCourse.title || courseTitle || 'Assigned Course',
+            courseTitle: targetCourse.courseTitle || targetCourse.title || courseTitle || 'Assigned Course',
+            thumbnail: targetCourse.thumbnail || targetCourse.bannerUrl || '',
+            bannerUrl: targetCourse.bannerUrl || targetCourse.thumbnail || '',
+            totalModules: Array.isArray(targetCourse.modules) ? targetCourse.modules.length : 0,
+            totalLessons: 0,
+            completedLessons: 0,
+            completedLessonIds: [],
+            completedItemIds: [],
+            completionPercentage: 0,
+            progressPercentage: 0,
+            percentage: 0,
+            progress: 0,
+            status: 'Active',
+            studyTimeSeconds: 0,
+            studyTimeHours: 0,
+          };
+          response.courses.push(courseItem);
+        } else {
+          const ContentItemProgress = require('../models/ContentItemProgress');
+          const CourseProgress = require('../models/CourseProgress');
+          const { buildProgressSummary } = require('./studentCurriculumController');
 
-        const storedCourseProgress = await CourseProgress.findOne({
-          studentId: studentId,
-          courseId: targetCourse._id,
-        }).lean();
+          const [contentProgressDocs, storedCourseProgress] = await Promise.all([
+            ContentItemProgress.find({
+              studentId: studentId,
+              courseId: targetCourse._id,
+            }).lean(),
+            CourseProgress.findOne({
+              studentId: studentId,
+              courseId: targetCourse._id,
+            }).lean()
+          ]);
 
-        const studyTimeSec = storedCourseProgress?.studyTimeSeconds || 0;
-        const summary = buildProgressSummary(targetCourse, contentProgressDocs, studyTimeSec);
+          const studyTimeSec = storedCourseProgress?.studyTimeSeconds || 0;
+          const summary = buildProgressSummary(targetCourse, contentProgressDocs, studyTimeSec);
 
-        const courseItem = {
-          id: targetCourse._id.toString(),
-          _id: targetCourse._id.toString(),
-          courseId: targetCourse.courseId || targetCourse._id.toString(),
-          title: targetCourse.courseTitle || targetCourse.title || courseTitle || 'Assigned Course',
-          courseTitle: targetCourse.courseTitle || targetCourse.title || courseTitle || 'Assigned Course',
-          thumbnail: targetCourse.thumbnail || targetCourse.bannerUrl || '',
-          bannerUrl: targetCourse.bannerUrl || targetCourse.thumbnail || '',
-          totalModules: Array.isArray(targetCourse.modules) ? targetCourse.modules.length : 0,
-          totalLessons: summary.totalLessons,
-          completedLessons: summary.completedLessons,
-          completedLessonIds: summary.completedLessonIds,
-          completedItemIds: summary.completedItemIds,
-          completionPercentage: summary.completionPercentage,
-          progressPercentage: summary.completionPercentage,
-          percentage: summary.percentage,
-          progress: summary.progress,
-          status: summary.status,
-          studyTimeSeconds: summary.studyTimeSeconds,
-          studyTimeHours: summary.studyTimeHours,
-          summary: summary,
-          progressSummary: summary,
-        };
+          const courseItem = {
+            id: targetCourse._id.toString(),
+            _id: targetCourse._id.toString(),
+            courseId: targetCourse.courseId || targetCourse._id.toString(),
+            title: targetCourse.courseTitle || targetCourse.title || courseTitle || 'Assigned Course',
+            courseTitle: targetCourse.courseTitle || targetCourse.title || courseTitle || 'Assigned Course',
+            thumbnail: targetCourse.thumbnail || targetCourse.bannerUrl || '',
+            bannerUrl: targetCourse.bannerUrl || targetCourse.thumbnail || '',
+            totalModules: Array.isArray(targetCourse.modules) ? targetCourse.modules.length : 0,
+            totalLessons: summary.totalLessons,
+            completedLessons: summary.completedLessons,
+            completedLessonIds: summary.completedLessonIds,
+            completedItemIds: summary.completedItemIds,
+            completionPercentage: summary.completionPercentage,
+            progressPercentage: summary.completionPercentage,
+            percentage: summary.percentage,
+            progress: summary.progress,
+            status: summary.status,
+            studyTimeSeconds: summary.studyTimeSeconds,
+            studyTimeHours: summary.studyTimeHours,
+            summary: summary,
+            progressSummary: summary,
+          };
 
-        response.courses.push(courseItem);
-        response.courseProgress = summary;
-        response.progress = summary;
-        response.completedLessonIds = summary.completedLessonIds;
-        response.totalLessons = summary.totalLessons;
-        response.completedLessons = summary.completedLessons;
-        response.completionPercentage = summary.completionPercentage;
-        response.progressPercentage = summary.completionPercentage;
+          response.courses.push(courseItem);
+          response.courseProgress = summary;
+          response.progress = summary;
+          response.completedLessonIds = summary.completedLessonIds;
+          response.totalLessons = summary.totalLessons;
+          response.completedLessons = summary.completedLessons;
+          response.completionPercentage = summary.completionPercentage;
+          response.progressPercentage = summary.completionPercentage;
+        }
       } else if (courseRef || courseId) {
         response.courses.push({
           id: courseRef ? courseRef.toString() : courseId,
@@ -449,7 +471,12 @@ const universalLogin = async (req, res) => {
     if (userRole === 'student') {
       let studentDoc = null;
       if (Student) {
-        studentDoc = await Student.findOne({ userId: user._id }) || await Student.findOne({ email: cleanEmail });
+        studentDoc = await Student.findOne({
+          $or: [
+            { userId: user._id },
+            { email: cleanEmail }
+          ]
+        }).lean();
       }
       studentDocForResponse = studentDoc;
       
@@ -480,7 +507,7 @@ const universalLogin = async (req, res) => {
       message: 'Login successful',
       token,
       role: userRole,
-      user: await buildUserResponse(user, studentDocForResponse),
+      user: await buildUserResponse(user, studentDocForResponse, { isLogin: true }),
     });
   } catch (error) {
     console.error('Universal Login Error:', error);
@@ -540,17 +567,14 @@ const studentLogin = async (req, res) => {
     let actualStudentId = user._id.toString(); // Fallback
     let studentDocFound = null;
     if (Student) {
-      const studentDoc = await Student.findOne({ email: cleanEmail });
-      if (studentDoc) {
-        actualStudentId = studentDoc._id.toString();
-        studentDocFound = studentDoc;
-      } else {
-        // Secondary lookup just in case email was updated or out of sync
-        const studentRefDoc = await Student.findOne({ userId: user._id });
-        if (studentRefDoc) {
-          actualStudentId = studentRefDoc._id.toString();
-          studentDocFound = studentRefDoc;
-        }
+      studentDocFound = await Student.findOne({
+        $or: [
+          { userId: user._id },
+          { email: cleanEmail }
+        ]
+      }).lean();
+      if (studentDocFound) {
+        actualStudentId = studentDocFound._id.toString();
       }
     }
 
@@ -584,7 +608,7 @@ const studentLogin = async (req, res) => {
       message: 'Login successful',
       token,
       role: 'student',
-      user: await buildUserResponse(user, studentDocFound),
+      user: await buildUserResponse(user, studentDocFound, { isLogin: true }),
     });
   } catch (error) {
     console.error('Student Login Error:', error);

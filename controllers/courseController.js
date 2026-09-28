@@ -487,16 +487,59 @@ const findCourseByIdOrCustomId = async (id) => {
 
 exports.getCourses = async (req, res) => {
   try {
-    const cacheKey = 'public_courses_list';
+    const { parsePaginationParams, buildPaginationResponse } = require('../utils/pagination');
+
+    let page, limit, skip;
+    try {
+      const parsed = parsePaginationParams(req.query, { defaultLimit: 20, maxLimit: 100 });
+      page = parsed.page;
+      limit = parsed.limit;
+      skip = parsed.skip;
+    } catch (pagErr) {
+      return res.status(pagErr.statusCode || 400).json({
+        success: false,
+        message: pagErr.message,
+      });
+    }
+
+    const { search, status, category } = req.query;
+    const filter = {};
+
+    if (status && status.trim() && status.toLowerCase() !== 'all') {
+      filter.status = new RegExp(`^${status.trim()}$`, 'i');
+    }
+
+    if (category && category.trim() && category.toLowerCase() !== 'all') {
+      filter.category = new RegExp(`^${category.trim()}$`, 'i');
+    }
+
+    if (search && search.trim()) {
+      const escaped = search.trim().replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      const searchRegex = new RegExp(escaped, 'i');
+      filter.$or = [
+        { courseTitle: searchRegex },
+        { title: searchRegex },
+        { courseId: searchRegex },
+        { category: searchRegex },
+        { instructor: searchRegex },
+      ];
+    }
+
+    const cacheKey = `courses_list_${page}_${limit}_${search || ''}_${status || ''}_${category || ''}`;
     const cachedData = memoryCache.get(cacheKey);
     if (cachedData) {
       return res.status(200).json(cachedData);
     }
 
-    const courses = await Course.find()
-      .select('courseId courseTitle instructor price shortDescription duration status thumbnail bannerUrl courseBanner category totalModules createdAt updatedAt')
-      .sort({ createdAt: -1 })
-      .lean();
+    const [total, courses] = await Promise.all([
+      Course.countDocuments(filter),
+      Course.find(filter)
+        .select('courseId courseTitle instructor price shortDescription duration status thumbnail bannerUrl courseBanner category totalModules createdAt updatedAt')
+        .sort({ createdAt: -1 })
+        .skip(skip)
+        .limit(limit)
+        .lean(),
+    ]);
 
     const serialized = courses.map((course) => {
       const extractRawUrl = (val) => {
@@ -509,7 +552,7 @@ exports.getCourses = async (req, res) => {
       };
       const rawBanner = extractRawUrl(course.courseBanner) || extractRawUrl(course.thumbnail) || extractRawUrl(course.bannerUrl) || extractRawUrl(course.banner) || extractRawUrl(course.thumbnailUrl) || extractRawUrl(course.image) || extractRawUrl(course.imageUrl);
       const absoluteBanner = optimizeCloudinaryUrl(toAbsoluteUrl(rawBanner, req));
-      const totalModules = Array.isArray(course.modules) ? course.modules.length : 0;
+      const totalModules = Array.isArray(course.modules) ? course.modules.length : (course.totalModules || 0);
       return {
         ...course,
         id: course.courseId || (course._id ? course._id.toString() : ''),
@@ -522,11 +565,20 @@ exports.getCourses = async (req, res) => {
       };
     });
 
+    const pagination = buildPaginationResponse(total, page, limit);
+
     const responsePayload = {
       success: true,
-      count: serialized.length,
       data: serialized,
       courses: serialized,
+      pagination: pagination,
+      count: serialized.length,
+      total: pagination.total,
+      page: pagination.page,
+      limit: pagination.limit,
+      totalPages: pagination.totalPages,
+      hasNextPage: pagination.hasNextPage,
+      hasPreviousPage: pagination.hasPreviousPage,
     };
 
     memoryCache.set(cacheKey, responsePayload, 30);

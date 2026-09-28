@@ -6,6 +6,7 @@ const {
   uploadBufferToCloudinary,
 } = require('../config/cloudinary');
 const { verifyStudentCourseAccess } = require('../utils/courseAccessHelper');
+const { parsePaginationParams, buildPaginationResponse } = require('../utils/pagination');
 
 const findCourseByIdOrCustomId = async (id) => {
   if (!id) return null;
@@ -340,8 +341,9 @@ exports.getRecordings = async (req, res) => {
     }
 
     const recordings = await Recording.find(filter)
-      .populate('courseId', 'courseId courseTitle thumbnail category modules')
-      .sort({ createdAt: -1 });
+      .populate('courseId', 'courseId courseTitle thumbnail category')
+      .sort({ createdAt: -1 })
+      .lean();
 
     const formattedList = recordings.map((rec) => formatRecordingDocument(rec));
 

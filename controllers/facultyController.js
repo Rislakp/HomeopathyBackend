@@ -36,7 +36,22 @@ const formatFacultyDoc = (doc) => {
  */
 exports.getStudentFaculty = async (req, res) => {
   try {
-    const { search, department, all, paginate, pagination } = req.query;
+    const { parsePaginationParams, buildPaginationResponse } = require('../utils/pagination');
+
+    let page, limit, skip;
+    try {
+      const parsed = parsePaginationParams(req.query, { defaultLimit: 20, maxLimit: 100 });
+      page = parsed.page;
+      limit = parsed.limit;
+      skip = parsed.skip;
+    } catch (pagErr) {
+      return res.status(pagErr.statusCode || 400).json({
+        success: false,
+        message: pagErr.message,
+      });
+    }
+
+    const { search, department } = req.query;
 
     // Only fetch active faculty for students/public (case-insensitive for safety)
     const filter = {
@@ -48,9 +63,10 @@ exports.getStudentFaculty = async (req, res) => {
       filter.department = { $regex: new RegExp(`^${department.trim()}$`, 'i') };
     }
 
-    // Search by full name, email, department, role, or qualification
+    // Search by full name, email, department, role, or qualification in MongoDB
     if (search && search.trim()) {
-      const searchRegex = new RegExp(search.trim(), 'i');
+      const escaped = search.trim().replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      const searchRegex = new RegExp(escaped, 'i');
       filter.$or = [
         { fullName: searchRegex },
         { email: searchRegex },
@@ -60,80 +76,33 @@ exports.getStudentFaculty = async (req, res) => {
       ];
     }
 
-    // Total count of matching faculty
-    const total = await Faculty.countDocuments(filter);
+    // Execute count and paginated query concurrently
+    const [total, rawFacultyList] = await Promise.all([
+      Faculty.countDocuments(filter),
+      Faculty.find(filter)
+        .select('_id fullName email department role qualification phone bio avatarUrl profileImage avatar experience status createdAt updatedAt')
+        .sort({ fullName: 1 })
+        .skip(skip)
+        .limit(limit)
+        .lean(),
+    ]);
 
-    // Determine pagination:
-    // 1. Explicit all requested (all=true, limit=all, limit=0, limit=-1) -> return all records
-    // 2. Default call (no limit or legacy landing default limit=10 without explicit paginate flag) -> return all records
-    // 3. Explicit pagination (paginate=true, pagination=true, page > 1, or custom numeric limit != 10) -> paginate
-    const rawLimit = req.query.limit;
-    const rawPage = req.query.page;
-    const parsedPage = parseInt(rawPage, 10);
-    const parsedLimit = parseInt(rawLimit, 10);
-
-    const isAllRequested =
-      all === 'true' ||
-      all === '1' ||
-      rawLimit === 'all' ||
-      rawLimit === '0' ||
-      rawLimit === '-1';
-
-    const isExplicitPagination =
-      paginate === 'true' ||
-      pagination === 'true' ||
-      (Number.isInteger(parsedPage) && parsedPage > 1);
-
-    const isCustomLimit =
-      Number.isInteger(parsedLimit) && parsedLimit > 0 && parsedLimit !== 10;
-
-    const shouldPaginate = !isAllRequested && (isExplicitPagination || isCustomLimit);
-
-    let page = 1;
-    let limit = total;
-    let skip = 0;
-    let pages = 1;
-    let totalPages = 1;
-    let hasNextPage = false;
-    let hasPrevPage = false;
-
-    let query = Faculty.find(filter)
-      .select('_id fullName email department role qualification phone bio avatarUrl experience createdAt status')
-      .sort({ fullName: 1 })
-      .lean();
-
-    if (shouldPaginate) {
-      page = Math.max(1, parsedPage || 1);
-      limit = Math.min(1000, Math.max(1, parsedLimit || 10));
-      skip = (page - 1) * limit;
-      pages = total > 0 ? Math.ceil(total / limit) : 1;
-      totalPages = pages;
-      hasNextPage = page < pages;
-      hasPrevPage = page > 1;
-
-      query = query.skip(skip).limit(limit);
-    } else {
-      limit = total;
-      pages = 1;
-      totalPages = 1;
-      hasNextPage = false;
-      hasPrevPage = false;
-    }
-
-    const rawFacultyList = await query;
     const facultyList = rawFacultyList.map(formatFacultyDoc);
+    const pagination = buildPaginationResponse(total, page, limit);
 
     return res.status(200).json({
       success: true,
-      count: facultyList.length,
-      total,
-      page,
-      pages,
-      totalPages,
-      limit,
-      hasNextPage,
-      hasPrevPage,
       data: facultyList,
+      faculty: facultyList,
+      pagination: pagination,
+      count: facultyList.length,
+      total: pagination.total,
+      page: pagination.page,
+      limit: pagination.limit,
+      totalPages: pagination.totalPages,
+      pages: pagination.totalPages,
+      hasNextPage: pagination.hasNextPage,
+      hasPrevPage: pagination.hasPreviousPage,
     });
   } catch (error) {
     console.error('Get Student Faculty Error:', error);
@@ -186,7 +155,22 @@ exports.getStudentFacultyById = async (req, res) => {
  */
 exports.getAllFacultyAdmin = async (req, res) => {
   try {
-    const { search, department, status, all, paginate, pagination } = req.query;
+    const { parsePaginationParams, buildPaginationResponse } = require('../utils/pagination');
+
+    let page, limit, skip;
+    try {
+      const parsed = parsePaginationParams(req.query, { defaultLimit: 20, maxLimit: 100 });
+      page = parsed.page;
+      limit = parsed.limit;
+      skip = parsed.skip;
+    } catch (pagErr) {
+      return res.status(pagErr.statusCode || 400).json({
+        success: false,
+        message: pagErr.message,
+      });
+    }
+
+    const { search, department, status } = req.query;
     const filter = {};
 
     if (status && status.toLowerCase() !== 'all') {
@@ -198,7 +182,8 @@ exports.getAllFacultyAdmin = async (req, res) => {
     }
 
     if (search && search.trim()) {
-      const searchRegex = new RegExp(search.trim(), 'i');
+      const escaped = search.trim().replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      const searchRegex = new RegExp(escaped, 'i');
       filter.$or = [
         { fullName: searchRegex },
         { email: searchRegex },
@@ -208,74 +193,33 @@ exports.getAllFacultyAdmin = async (req, res) => {
       ];
     }
 
-    const total = await Faculty.countDocuments(filter);
+    // Execute count and paginated query concurrently with projection
+    const [total, rawFacultyList] = await Promise.all([
+      Faculty.countDocuments(filter),
+      Faculty.find(filter)
+        .select('_id fullName email department role qualification phone bio avatarUrl profileImage avatar experience status createdAt updatedAt')
+        .sort({ createdAt: -1 })
+        .skip(skip)
+        .limit(limit)
+        .lean(),
+    ]);
 
-    const rawLimit = req.query.limit;
-    const rawPage = req.query.page;
-    const parsedPage = parseInt(rawPage, 10);
-    const parsedLimit = parseInt(rawLimit, 10);
-
-    const isAllRequested =
-      all === 'true' ||
-      all === '1' ||
-      rawLimit === 'all' ||
-      rawLimit === '0' ||
-      rawLimit === '-1';
-
-    const isExplicitPagination =
-      paginate === 'true' ||
-      pagination === 'true' ||
-      (Number.isInteger(parsedPage) && parsedPage > 1);
-
-    const isCustomLimit =
-      Number.isInteger(parsedLimit) && parsedLimit > 0 && parsedLimit !== 20;
-
-    const shouldPaginate = !isAllRequested && (isExplicitPagination || isCustomLimit);
-
-    let page = 1;
-    let limit = total;
-    let skip = 0;
-    let pages = 1;
-    let totalPages = 1;
-    let hasNextPage = false;
-    let hasPrevPage = false;
-
-    let query = Faculty.find(filter)
-      .sort({ createdAt: -1 })
-      .lean();
-
-    if (shouldPaginate) {
-      page = Math.max(1, parsedPage || 1);
-      limit = Math.min(1000, Math.max(1, parsedLimit || 20));
-      skip = (page - 1) * limit;
-      pages = total > 0 ? Math.ceil(total / limit) : 1;
-      totalPages = pages;
-      hasNextPage = page < pages;
-      hasPrevPage = page > 1;
-
-      query = query.skip(skip).limit(limit);
-    } else {
-      limit = total;
-      pages = 1;
-      totalPages = 1;
-      hasNextPage = false;
-      hasPrevPage = false;
-    }
-
-    const rawFacultyList = await query;
     const facultyList = rawFacultyList.map(formatFacultyDoc);
+    const pagination = buildPaginationResponse(total, page, limit);
 
     return res.status(200).json({
       success: true,
-      count: facultyList.length,
-      total,
-      page,
-      pages,
-      totalPages,
-      limit,
-      hasNextPage,
-      hasPrevPage,
       data: facultyList,
+      faculty: facultyList,
+      pagination: pagination,
+      count: facultyList.length,
+      total: pagination.total,
+      page: pagination.page,
+      limit: pagination.limit,
+      totalPages: pagination.totalPages,
+      pages: pagination.totalPages,
+      hasNextPage: pagination.hasNextPage,
+      hasPrevPage: pagination.hasPreviousPage,
     });
   } catch (error) {
     console.error('Admin Get All Faculty Error:', error);

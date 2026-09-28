@@ -65,15 +65,21 @@ async function syncStudentUsers() {
  */
 async function getAdminStudents(req, res) {
   try {
-    // 1. Parse Pagination Parameters
-    let page = parseInt(req.query.page, 10);
-    let limit = parseInt(req.query.limit, 10);
+    const { parsePaginationParams, buildPaginationResponse } = require('../utils/pagination');
 
-    if (isNaN(page) || page < 1) page = 1;
-    if (isNaN(limit) || limit < 1) limit = 10;
-    if (limit > 100) limit = 100; // Cap page limit at 100
-
-    const skip = (page - 1) * limit;
+    // 1. Parse & Validate Pagination Parameters (default: 20, max: 100)
+    let page, limit, skip;
+    try {
+      const parsed = parsePaginationParams(req.query, { defaultLimit: 20, maxLimit: 100 });
+      page = parsed.page;
+      limit = parsed.limit;
+      skip = parsed.skip;
+    } catch (pagErr) {
+      return res.status(pagErr.statusCode || 400).json({
+        success: false,
+        message: pagErr.message,
+      });
+    }
 
     // Optional background sync to ensure data consistency
     syncStudentUsers().catch(() => { });
@@ -423,30 +429,14 @@ async function getAdminStudents(req, res) {
     const metadata = (result[0] && result[0].metadata[0]) || { total: 0 };
     const students = (result[0] && result[0].data) || [];
     const total = metadata.total;
-    const totalPages = Math.ceil(total / limit) || (total > 0 ? 1 : 0);
+    const pagination = buildPaginationResponse(total, page, limit);
 
     return res.status(200).json({
       success: true,
       message: 'Students retrieved successfully',
-      data: {
-        students,
-        pagination: {
-          total,
-          page,
-          limit,
-          total_pages: totalPages,
-          has_next: page < totalPages,
-          has_prev: page > 1
-        }
-      },
-      pagination: {
-        total,
-        page,
-        limit,
-        total_pages: totalPages,
-        has_next: page < totalPages,
-        has_prev: page > 1
-      },
+      data: students,
+      students: students,
+      pagination: pagination,
       count: students.length
     });
   } catch (error) {

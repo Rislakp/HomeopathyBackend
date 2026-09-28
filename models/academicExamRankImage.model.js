@@ -12,7 +12,6 @@ const academicExamRankImageSchema = new mongoose.Schema(
       ref: 'Exam',
       required: [true, 'Academic examId is required'],
       unique: true,
-      index: true,
     },
     imageUrl: {
       type: String,
