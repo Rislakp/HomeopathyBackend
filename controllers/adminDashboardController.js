@@ -3,9 +3,9 @@ const Student = require('../models/Student');
 const Course = require('../models/Course');
 const Recording = require('../models/Recording');
 const Activity = require('../models/Activity');
+const memoryCache = require('../utils/cache');
 let SubscriptionPlan;
 try { SubscriptionPlan = require('../models/SubscriptionPlan'); } catch (e) {}
-
 
 /**
  * Helper to compute start and end dates for current month and previous month
@@ -49,6 +49,12 @@ function calculatePercentageGrowth(current, previous) {
  */
 exports.getDashboardStats = async (req, res) => {
   try {
+    const cacheKey = 'admin_dashboard_stats';
+    const cachedStats = memoryCache.get(cacheKey);
+    if (cachedStats) {
+      return res.status(200).json(cachedStats);
+    }
+
     const {
       startOfCurrentMonth,
       endOfCurrentMonth,
@@ -56,117 +62,62 @@ exports.getDashboardStats = async (req, res) => {
       endOfPreviousMonth
     } = getMonthDateRanges();
 
-    // 1. Enrolled Students Metrics
+
+    const completedStatusFilter = { $in: ['Completed', 'completed', 'recorded', 'stopped'] };
+
+    const currentMonthSubPipeline = [
+      { $match: { createdAt: { $gte: startOfCurrentMonth, $lte: endOfCurrentMonth } } },
+      { $lookup: { from: 'subscriptionplans', localField: 'subscriptionPlanId', foreignField: '_id', as: 'plan' } },
+      { $unwind: { path: '$plan', preserveNullAndEmptyArrays: true } },
+      { $group: { _id: null, totalRevenue: { $sum: { $ifNull: ['$plan.price', 0] } } } }
+    ];
+
+    const prevMonthSubPipeline = [
+      { $match: { createdAt: { $gte: startOfPreviousMonth, $lte: endOfPreviousMonth } } },
+      { $lookup: { from: 'subscriptionplans', localField: 'subscriptionPlanId', foreignField: '_id', as: 'plan' } },
+      { $unwind: { path: '$plan', preserveNullAndEmptyArrays: true } },
+      { $group: { _id: null, totalRevenue: { $sum: { $ifNull: ['$plan.price', 0] } } } }
+    ];
+
+    // Execute all independent DB queries concurrently in ONE Promise.all call
     const [
       totalEnrolledStudents,
       studentsCurrentMonth,
-      studentsPreviousMonth
+      studentsPreviousMonth,
+      activeMedicalCourses,
+      coursesCurrentMonth,
+      coursesPreviousMonth,
+      totalCourses,
+      liveWebinarsCompleted,
+      webinarsCurrentMonth,
+      webinarsPreviousMonth,
+      totalRecordings,
+      curRevRes,
+      prevRevRes
     ] = await Promise.all([
       Student.countDocuments(),
       Student.countDocuments({ createdAt: { $gte: startOfCurrentMonth, $lte: endOfCurrentMonth } }),
-      Student.countDocuments({ createdAt: { $gte: startOfPreviousMonth, $lte: endOfPreviousMonth } })
+      Student.countDocuments({ createdAt: { $gte: startOfPreviousMonth, $lte: endOfPreviousMonth } }),
+      Course.countDocuments({ status: { $in: ['Published', 'Active', 'published', 'active'] } }),
+      Course.countDocuments({ createdAt: { $gte: startOfCurrentMonth, $lte: endOfCurrentMonth } }),
+      Course.countDocuments({ createdAt: { $gte: startOfPreviousMonth, $lte: endOfPreviousMonth } }),
+      Course.countDocuments(),
+      Recording.countDocuments({ status: completedStatusFilter }),
+      Recording.countDocuments({ status: completedStatusFilter, createdAt: { $gte: startOfCurrentMonth, $lte: endOfCurrentMonth } }),
+      Recording.countDocuments({ status: completedStatusFilter, createdAt: { $gte: startOfPreviousMonth, $lte: endOfPreviousMonth } }),
+      Recording.countDocuments(),
+      Student.aggregate(currentMonthSubPipeline).catch(() => []),
+      Student.aggregate(prevMonthSubPipeline).catch(() => [])
     ]);
 
     const totalEnrolledStudentsGrowth = calculatePercentageGrowth(studentsCurrentMonth, studentsPreviousMonth);
-
-    // 2. Active Medical Courses Metrics
-    const [
-      activeMedicalCourses,
-      coursesCurrentMonth,
-      coursesPreviousMonth
-    ] = await Promise.all([
-      Course.countDocuments({ status: { $in: ['Published', 'Active', 'published', 'active'] } }),
-      Course.countDocuments({ createdAt: { $gte: startOfCurrentMonth, $lte: endOfCurrentMonth } }),
-      Course.countDocuments({ createdAt: { $gte: startOfPreviousMonth, $lte: endOfPreviousMonth } })
-    ]);
-
-    // Fallback if status filter returns 0 but total courses exist
-    const totalCourses = await Course.countDocuments();
     const finalActiveCoursesCount = activeMedicalCourses > 0 ? activeMedicalCourses : totalCourses;
     const activeMedicalCoursesGrowth = calculatePercentageGrowth(coursesCurrentMonth, coursesPreviousMonth);
-
-    // 3. Live Webinars / Recordings Completed Metrics
-    const completedStatusFilter = { $in: ['Completed', 'completed', 'recorded', 'stopped'] };
-    const [
-      liveWebinarsCompleted,
-      webinarsCurrentMonth,
-      webinarsPreviousMonth
-    ] = await Promise.all([
-      Recording.countDocuments({ status: completedStatusFilter }),
-      Recording.countDocuments({ status: completedStatusFilter, createdAt: { $gte: startOfCurrentMonth, $lte: endOfCurrentMonth } }),
-      Recording.countDocuments({ status: completedStatusFilter, createdAt: { $gte: startOfPreviousMonth, $lte: endOfPreviousMonth } })
-    ]);
-
-    // Fallback if status filter is non-standard
-    const totalRecordings = await Recording.countDocuments();
     const finalWebinarsCount = liveWebinarsCompleted > 0 ? liveWebinarsCompleted : totalRecordings;
     const liveWebinarsCompletedGrowth = calculatePercentageGrowth(webinarsCurrentMonth, webinarsPreviousMonth);
 
-    // 4. Monthly Revenue Metrics
-    let monthlyRevenue = 0;
-    let previousMonthRevenue = 0;
-
-    try {
-      const currentMonthSubPipeline = [
-        {
-          $match: {
-            createdAt: { $gte: startOfCurrentMonth, $lte: endOfCurrentMonth }
-          }
-        },
-        {
-          $lookup: {
-            from: 'subscriptionplans',
-            localField: 'subscriptionPlanId',
-            foreignField: '_id',
-            as: 'plan'
-          }
-        },
-        {
-          $unwind: { path: '$plan', preserveNullAndEmptyArrays: true }
-        },
-        {
-          $group: {
-            _id: null,
-            totalRevenue: { $sum: { $ifNull: ['$plan.price', 0] } }
-          }
-        }
-      ];
-
-      const prevMonthSubPipeline = [
-        {
-          $match: {
-            createdAt: { $gte: startOfPreviousMonth, $lte: endOfPreviousMonth }
-          }
-        },
-        {
-          $lookup: {
-            from: 'subscriptionplans',
-            localField: 'subscriptionPlanId',
-            foreignField: '_id',
-            as: 'plan'
-          }
-        },
-        {
-          $unwind: { path: '$plan', preserveNullAndEmptyArrays: true }
-        },
-        {
-          $group: {
-            _id: null,
-            totalRevenue: { $sum: { $ifNull: ['$plan.price', 0] } }
-          }
-        }
-      ];
-
-      const [curRevRes, prevRevRes] = await Promise.all([
-        Student.aggregate(currentMonthSubPipeline),
-        Student.aggregate(prevMonthSubPipeline)
-      ]);
-
-      monthlyRevenue = (curRevRes[0] && curRevRes[0].totalRevenue) || 0;
-      previousMonthRevenue = (prevRevRes[0] && prevRevRes[0].totalRevenue) || 0;
-    } catch (err) {
-      console.warn('[DashboardStats] Revenue aggregation warning:', err.message);
-    }
+    let monthlyRevenue = (curRevRes[0] && curRevRes[0].totalRevenue) || 0;
+    let previousMonthRevenue = (prevRevRes[0] && prevRevRes[0].totalRevenue) || 0;
 
     if (monthlyRevenue === 0) {
       const activeStudentsWithSub = await Student.countDocuments({
@@ -213,7 +164,11 @@ exports.getDashboardStats = async (req, res) => {
       liveWebinarsCompletedGrowth
     };
 
+
+    memoryCache.set(cacheKey, responsePayload, 30);
     return res.status(200).json(responsePayload);
+
+
   } catch (error) {
     console.error('Error fetching dashboard stats:', error);
     return res.status(500).json({

@@ -3,32 +3,55 @@ const Student = require('../models/Student');
 const User = require('../models/User');
 const TestResult = require('../src/common/models/testResult.model');
 const Course = require('../models/Course');
+const memoryCache = require('../utils/cache');
 
 /**
  * Sync registered student users from User collection into Student collection if missing
  */
 async function syncStudentUsers() {
   try {
-    const studentUsers = await User.find({ role: 'student' }).lean();
+    const lastSync = memoryCache.get('last_student_sync');
+    if (lastSync) return; // Throttled: sync at most once every 5 minutes
+
+    memoryCache.set('last_student_sync', true, 300); // 5 min TTL
+
+    const studentUsers = await User.find({ role: 'student' })
+      .select('_id email name phone contactNumber dateOfBirth qualification createdAt')
+      .lean();
+    if (!studentUsers || studentUsers.length === 0) return;
+
+
+    const [existingUserIdsRaw, existingEmailsRaw] = await Promise.all([
+      Student.distinct('userId'),
+      Student.distinct('email'),
+    ]);
+
+    const existingUserIds = new Set(existingUserIdsRaw.filter(Boolean).map(id => id.toString()));
+    const existingEmails = new Set(existingEmailsRaw.filter(Boolean).map(e => e.toLowerCase().trim()));
+
+    const toCreate = [];
     for (const u of studentUsers) {
-      const exists = await Student.findOne({
-        $or: [{ userId: u._id }, { email: u.email }]
-      });
-      if (!exists) {
-        await Student.create({
+      const uId = u._id.toString();
+      const uEmail = u.email ? u.email.toLowerCase().trim() : '';
+      if (!existingUserIds.has(uId) && !existingEmails.has(uEmail)) {
+        toCreate.push({
           userId: u._id,
-          name: u.name,
-          email: u.email,
-          phone: u.phone || u.contactNumber,
-          contactNumber: u.contactNumber || u.phone,
-          dateOfBirth: u.dateOfBirth,
-          qualification: u.qualification,
+          name: u.name || '',
+          email: u.email || '',
+          phone: u.phone || u.contactNumber || '',
+          contactNumber: u.contactNumber || u.phone || '',
+          dateOfBirth: u.dateOfBirth || '',
+          qualification: u.qualification || '',
           course: 'General',
           subscription: 'Free',
           status: 'Active',
           joinedDate: u.createdAt || new Date()
         });
       }
+    }
+
+    if (toCreate.length > 0) {
+      await Student.insertMany(toCreate, { ordered: false });
     }
   } catch (err) {
     console.warn('Sync student users notice:', err.message);
@@ -116,165 +139,8 @@ async function getAdminStudents(req, res) {
 
     // 3. High-Performance MongoDB Aggregation Pipeline
     const pipeline = [
-      // Step A: Apply Initial Filtering
       { $match: matchConditions },
 
-      // Step B: Lookup User Details for additional metadata / avatar
-      {
-        $lookup: {
-          from: 'users',
-          let: { uId: '$userId', sEmail: '$email' },
-          pipeline: [
-            {
-              $match: {
-                $expr: {
-                  $or: [
-                    { $eq: ['$_id', '$$uId'] },
-                    { $eq: ['$email', '$$sEmail'] }
-                  ]
-                }
-              }
-            },
-            { $limit: 1 }
-          ],
-          as: 'userDetails'
-        }
-      },
-      {
-        $addFields: {
-          userObj: { $arrayElemAt: ['$userDetails', 0] }
-        }
-      },
-
-      // Step C: Lookup Enrolled Course Details
-      {
-        $lookup: {
-          from: 'courses',
-          let: { studentCourse: '$course', studentCourseRef: '$courseRef' },
-          pipeline: [
-            {
-              $match: {
-                $expr: {
-                  $or: [
-                    { $eq: ['$_id', '$$studentCourseRef'] },
-                    { $eq: ['$courseId', '$$studentCourse'] },
-                    { $eq: ['$courseTitle', '$$studentCourse'] }
-                  ]
-                }
-              }
-            },
-            { $limit: 1 }
-          ],
-          as: 'courseDetails'
-        }
-      },
-      {
-        $addFields: {
-          courseObj: { $arrayElemAt: ['$courseDetails', 0] }
-        }
-      },
-
-      // Step D: Lookup Test Results and Resolve Exam Names & Scores
-      {
-        $lookup: {
-          from: 'testresults',
-          let: { studentDocId: '$_id', userDocId: '$userId' },
-          pipeline: [
-            {
-              $match: {
-                $expr: {
-                  $or: [
-                    { $eq: ['$studentId', '$$studentDocId'] },
-                    {
-                      $and: [
-                        { $ne: ['$$userDocId', null] },
-                        { $eq: ['$studentId', '$$userDocId'] }
-                      ]
-                    }
-                  ]
-                }
-              }
-            },
-            { $sort: { createdAt: -1 } },
-            {
-              $lookup: {
-                from: 'exams',
-                localField: 'examId',
-                foreignField: '_id',
-                as: 'examInfo'
-              }
-            },
-            {
-              $unwind: {
-                path: '$examInfo',
-                preserveNullAndEmptyArrays: true
-              }
-            },
-            {
-              $project: {
-                exam_id: '$examId',
-                title: { $ifNull: ['$examInfo.title', 'Mock Exam'] },
-                score: { $ifNull: ['$score', 0] },
-                total_marks: { $ifNull: ['$totalMarks', 0] },
-                total_attempted: { $ifNull: ['$totalAttempted', 0] },
-                total_correct: { $ifNull: ['$totalCorrect', 0] },
-                total_wrong: { $ifNull: ['$totalWrong', 0] },
-                percentage: {
-                  $cond: {
-                    if: { $gt: ['$totalMarks', 0] },
-                    then: {
-                      $round: [
-                        { $multiply: [{ $divide: ['$score', '$totalMarks'] }, 100] },
-                        2
-                      ]
-                    },
-                    else: 0
-                  }
-                },
-                status: {
-                  $cond: {
-                    if: {
-                      $and: [
-                        { $gt: ['$totalMarks', 0] },
-                        { $gte: [{ $divide: ['$score', '$totalMarks'] }, 0.5] }
-                      ]
-                    },
-                    then: 'Passed',
-                    else: 'Failed'
-                  }
-                },
-                submitted_at: '$createdAt'
-              }
-            }
-          ],
-          as: 'attended_exams'
-        }
-      },
-
-      // Step E: Compute Summary Metrics
-      {
-        $addFields: {
-          total_exams_attended: { $size: '$attended_exams' },
-          average_score: {
-            $cond: {
-              if: { $gt: [{ $size: '$attended_exams' }, 0] },
-              then: { $round: [{ $avg: '$attended_exams.percentage' }, 2] },
-              else: 0
-            }
-          },
-          passed_exams: {
-            $size: {
-              $filter: {
-                input: '$attended_exams',
-                as: 'exam',
-                cond: { $eq: ['$$exam.status', 'Passed'] }
-              }
-            }
-          }
-        }
-      },
-
-      // Step F: Facet for Single-Trip Pagination and Count
       {
         $facet: {
           metadata: [{ $count: 'total' }],
@@ -282,6 +148,157 @@ async function getAdminStudents(req, res) {
             { $sort: { createdAt: -1 } },
             { $skip: skip },
             { $limit: limit },
+
+            // Step B: Lookup User Details for additional metadata / avatar
+            {
+              $lookup: {
+                from: 'users',
+                let: { uId: '$userId', sEmail: '$email' },
+                pipeline: [
+                  {
+                    $match: {
+                      $expr: {
+                        $or: [
+                          { $and: [{ $ne: ['$$uId', null] }, { $eq: ['$_id', '$$uId'] }] },
+                          { $and: [{ $ne: ['$$sEmail', null] }, { $ne: ['$$sEmail', ''] }, { $eq: ['$email', '$$sEmail'] }] }
+                        ]
+                      }
+                    }
+                  },
+                  { $limit: 1 }
+                ],
+                as: 'userDetails'
+              }
+            },
+            {
+              $addFields: {
+                userObj: { $arrayElemAt: ['$userDetails', 0] }
+              }
+            },
+
+            // Step C: Lookup Enrolled Course Details
+            {
+              $lookup: {
+                from: 'courses',
+                let: { studentCourse: '$course', studentCourseRef: '$courseRef' },
+                pipeline: [
+                  {
+                    $match: {
+                      $expr: {
+                        $or: [
+                          { $and: [{ $ne: ['$$studentCourseRef', null] }, { $eq: ['$_id', '$$studentCourseRef'] }] },
+                          { $and: [{ $ne: ['$$studentCourse', null] }, { $ne: ['$$studentCourse', ''] }, { $eq: ['$courseId', '$$studentCourse'] }] },
+                          { $and: [{ $ne: ['$$studentCourse', null] }, { $ne: ['$$studentCourse', ''] }, { $eq: ['$courseTitle', '$$studentCourse'] }] }
+                        ]
+                      }
+                    }
+                  },
+                  { $limit: 1 }
+                ],
+                as: 'courseDetails'
+              }
+            },
+
+            {
+              $addFields: {
+                courseObj: { $arrayElemAt: ['$courseDetails', 0] }
+              }
+            },
+
+            // Step D: Lookup Test Results and Resolve Exam Names & Scores
+            {
+              $lookup: {
+                from: 'testresults',
+                let: { studentDocId: '$_id', userDocId: '$userId' },
+                pipeline: [
+                  {
+                    $match: {
+                      $expr: {
+                        $in: ['$studentId', ['$$studentDocId', '$$userDocId']]
+                      }
+                    }
+                  },
+                  { $sort: { createdAt: -1 } },
+
+                  {
+                    $lookup: {
+                      from: 'exams',
+                      localField: 'examId',
+                      foreignField: '_id',
+                      as: 'examInfo'
+                    }
+                  },
+                  {
+                    $unwind: {
+                      path: '$examInfo',
+                      preserveNullAndEmptyArrays: true
+                    }
+                  },
+                  {
+                    $project: {
+                      exam_id: '$examId',
+                      title: { $ifNull: ['$examInfo.title', 'Mock Exam'] },
+                      score: { $ifNull: ['$score', 0] },
+                      total_marks: { $ifNull: ['$totalMarks', 0] },
+                      total_attempted: { $ifNull: ['$totalAttempted', 0] },
+                      total_correct: { $ifNull: ['$totalCorrect', 0] },
+                      total_wrong: { $ifNull: ['$totalWrong', 0] },
+                      percentage: {
+                        $cond: {
+                          if: { $gt: ['$totalMarks', 0] },
+                          then: {
+                            $round: [
+                              { $multiply: [{ $divide: ['$score', '$totalMarks'] }, 100] },
+                              2
+                            ]
+                          },
+                          else: 0
+                        }
+                      },
+                      status: {
+                        $cond: {
+                          if: {
+                            $and: [
+                              { $gt: ['$totalMarks', 0] },
+                              { $gte: [{ $divide: ['$score', '$totalMarks'] }, 0.5] }
+                            ]
+                          },
+                          then: 'Passed',
+                          else: 'Failed'
+                        }
+                      },
+                      submitted_at: '$createdAt'
+                    }
+                  }
+                ],
+                as: 'attended_exams'
+              }
+            },
+
+            // Step E: Compute Summary Metrics
+            {
+              $addFields: {
+                total_exams_attended: { $size: '$attended_exams' },
+                average_score: {
+                  $cond: {
+                    if: { $gt: [{ $size: '$attended_exams' }, 0] },
+                    then: { $round: [{ $avg: '$attended_exams.percentage' }, 2] },
+                    else: 0
+                  }
+                },
+                passed_exams: {
+                  $size: {
+                    $filter: {
+                      input: '$attended_exams',
+                      as: 'exam',
+                      cond: { $eq: ['$$exam.status', 'Passed'] }
+                    }
+                  }
+                }
+              }
+            },
+
+            // Step F: Project Output Format
             {
               $project: {
                 _id: 0,
@@ -1273,14 +1290,19 @@ async function createAdminStudent(req, res) {
  */
 async function exportStudentsScores(req, res) {
   try {
-    const students = await Student.find().lean();
+    const students = await Student.find()
+      .select('_id userId name email phone contactNumber course subscription status joinedDate createdAt')
+      .lean();
     
     const acceptHeader = req.headers.accept || '';
     const format = req.query.format || (acceptHeader.includes('text/csv') ? 'csv' : 'json');
 
-    const testResults = await TestResult.find().populate('examId', 'title totalMarks').lean();
+    const testResults = await TestResult.find()
+      .select('studentId score')
+      .lean();
 
     const resultsMap = new Map();
+
     testResults.forEach(tr => {
       const sId = tr.studentId ? tr.studentId.toString() : null;
       if (sId) {

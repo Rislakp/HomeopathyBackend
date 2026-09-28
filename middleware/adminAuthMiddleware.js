@@ -95,31 +95,39 @@ const adminAuthMiddleware = async (req, res, next) => {
       });
     }
 
-    // 4. Lookup Admin in the database (Admin collection first, fallback to User collection)
-    let admin = null;
-    if (Admin) {
-      try {
-        admin = await Admin.findById(adminId);
-      } catch (dbErr) {
-        console.warn('[adminAuthMiddleware] Admin collection query error:', dbErr.message);
-      }
-    }
-    if (!admin && User) {
-      try {
-        const userDoc = await User.findById(adminId);
-        if (userDoc) {
-          const userRole = (userDoc.role || '').toUpperCase().trim();
-          if (userRole === 'ADMIN' || userRole === 'SUPERADMIN') {
-            admin = userDoc;
-          } else {
-            return res.status(403).json({
-              success: false,
-              message: 'Forbidden: Admin access only.',
-            });
-          }
+    // 4. Lookup Admin in memory cache or database
+    const memoryCache = require('../utils/cache');
+    const cacheKey = `admin_auth_${adminId}`;
+    let admin = memoryCache.get(cacheKey);
+
+    if (!admin) {
+      if (Admin) {
+        try {
+          admin = await Admin.findById(adminId).lean();
+        } catch (dbErr) {
+          console.warn('[adminAuthMiddleware] Admin collection query error:', dbErr.message);
         }
-      } catch (dbErr) {
-        console.warn('[adminAuthMiddleware] User collection query error:', dbErr.message);
+      }
+      if (!admin && User) {
+        try {
+          const userDoc = await User.findById(adminId).lean();
+          if (userDoc) {
+            const userRole = (userDoc.role || '').toUpperCase().trim();
+            if (userRole === 'ADMIN' || userRole === 'SUPERADMIN') {
+              admin = userDoc;
+            } else {
+              return res.status(403).json({
+                success: false,
+                message: 'Forbidden: Admin access only.',
+              });
+            }
+          }
+        } catch (dbErr) {
+          console.warn('[adminAuthMiddleware] User collection query error:', dbErr.message);
+        }
+      }
+      if (admin) {
+        memoryCache.set(cacheKey, admin, 60);
       }
     }
 
@@ -129,6 +137,7 @@ const adminAuthMiddleware = async (req, res, next) => {
         message: 'Admin account not found.',
       });
     }
+
 
     // 5. Check if account is active
     if (admin.isActive === false) {

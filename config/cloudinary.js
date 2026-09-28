@@ -258,6 +258,36 @@ const deleteCloudinaryByUrl = async (url) => {
   return null;
 };
 
+/**
+ * Automatically injects Cloudinary dynamic delivery transformation flags (f_auto, q_auto)
+ * into image/video URLs to optimize payload bandwidth and client rendering speed.
+ *
+ * @param {string} url - Original Cloudinary URL
+ * @param {Object} [options] - Options (e.g. width, quality)
+ * @returns {string} Optimized URL with f_auto,q_auto transformations applied
+ */
+const optimizeCloudinaryUrl = (url, options = {}) => {
+  if (!url || typeof url !== 'string' || !url.includes('cloudinary.com')) {
+    return url || '';
+  }
+
+  // If transformations are already present in URL, return as is
+  if (url.includes('/f_auto') || url.includes('/q_auto')) {
+    return url;
+  }
+
+  const { width, quality = 'auto', format = 'auto' } = options;
+  const transforms = [`f_${format}`, `q_${quality}`];
+  if (width && Number(width) > 0) {
+    transforms.push(`w_${width}`, 'c_limit');
+  }
+
+  const transformString = transforms.join(',');
+
+  // Inject transform string into upload path: /upload/ -> /upload/f_auto,q_auto/
+  return url.replace(/\/upload\//i, `/upload/${transformString}/`);
+};
+
 module.exports = {
   cloudinary,
   isCloudinaryConfigured,
@@ -266,5 +296,7 @@ module.exports = {
   deleteCloudinaryByUrl,
   getPublicIdFromUrl,
   parseCloudinaryUrl,
+  optimizeCloudinaryUrl,
 };
+
 

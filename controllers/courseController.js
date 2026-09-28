@@ -3,8 +3,10 @@ const Course = require('../models/Course');
 const mongoose = require('mongoose');
 const fs = require('fs');
 const path = require('path');
-const { deleteCloudinaryByUrl, getPublicIdFromUrl, parseCloudinaryUrl, uploadBufferToCloudinary, isCloudinaryConfigured } = require('../config/cloudinary');
+const { deleteCloudinaryByUrl, getPublicIdFromUrl, parseCloudinaryUrl, uploadBufferToCloudinary, isCloudinaryConfigured, optimizeCloudinaryUrl } = require('../config/cloudinary');
 const { extractCleanNameAndExt } = require('../middleware/upload');
+const memoryCache = require('../utils/cache');
+
 
 const ALLOWED_VIDEO_FORMATS = ['mp4', 'mov', 'avi', 'mkv', 'webm', 'flv', 'wmv', 'm4v'];
 const ALLOWED_DOC_FORMATS = ['pdf', 'doc', 'docx', 'ppt', 'pptx', 'xls', 'xlsx', 'txt', 'csv', 'zip', 'rar'];
@@ -350,11 +352,16 @@ const toAbsoluteUrl = (urlStr, req) => {
  * Serialize a lesson subdocument into a plain object with absolute file URLs.
  */
 const serializeLesson = (lesson, req) => {
+  if (!lesson) return null;
   const sanitizeResource = (items) => {
-    const list = sanitizeFiles(items);
+    const list = Array.isArray(items) ? items : (items ? [items] : []);
     return list.map((item) => {
-      const canonicalUrl = item.secure_url || item.url || item.fileUrl || item.documentUrl || item.path || '';
+      if (!item) return null;
+      const canonicalUrl = typeof item === 'string' ? item : (item.secure_url || item.url || item.fileUrl || item.documentUrl || item.path || '');
       const absUrl = toAbsoluteUrl(canonicalUrl, req);
+      if (typeof item === 'string') {
+        return { title: 'Resource', url: absUrl, secure_url: absUrl, fileUrl: absUrl, documentUrl: absUrl, path: absUrl };
+      }
       return {
         ...item,
         url: absUrl,
@@ -363,7 +370,7 @@ const serializeLesson = (lesson, req) => {
         documentUrl: absUrl,
         path: absUrl,
       };
-    });
+    }).filter(Boolean);
   };
 
   const rawVideoParts = sanitizeResource(lesson.videoParts);
@@ -371,16 +378,18 @@ const serializeLesson = (lesson, req) => {
   const rawAssignments = sanitizeResource(lesson.assignments);
   const rawAttachments = sanitizeResource(lesson.attachments);
 
-  const isolated = sanitizeAndIsolateResourceArrays({
-    videoParts: rawVideoParts,
-    pdfNotes: rawPdfNotes,
-    assignments: rawAssignments,
-    attachments: rawAttachments,
-  });
+  const isolated = {
+    videoParts: rawVideoParts || [],
+    pdfNotes: rawPdfNotes || [],
+    assignments: rawAssignments || [],
+    attachments: rawAttachments || [],
+  };
 
-  const primaryDoc = (isolated.pdfNotes && isolated.pdfNotes[0]) || (isolated.attachments && isolated.attachments[0]) || (isolated.assignments && isolated.assignments[0]) || null;
+  const primaryDoc = (isolated.pdfNotes && isolated.pdfNotes.length > 0 ? isolated.pdfNotes[0] : null) || (isolated.attachments && isolated.attachments.length > 0 ? isolated.attachments[0] : null) || (isolated.assignments && isolated.assignments.length > 0 ? isolated.assignments[0] : null);
   const primaryDocUrl = primaryDoc ? (primaryDoc.url || primaryDoc.secure_url || '') : '';
-  const primaryVideoUrl = toAbsoluteUrl(lesson.videoUrl || (isolated.videoParts[0] && isolated.videoParts[0].url) || '', req);
+  const firstVideo = (isolated.videoParts && isolated.videoParts.length > 0) ? isolated.videoParts[0] : null;
+  const firstVideoUrl = firstVideo ? (firstVideo.url || firstVideo.secure_url || '') : '';
+  const primaryVideoUrl = toAbsoluteUrl(lesson.videoUrl || firstVideoUrl, req);
   const primaryLessonUrl = primaryDocUrl || primaryVideoUrl || '';
 
   return {
@@ -417,19 +426,23 @@ const serializeLesson = (lesson, req) => {
 /**
  * Serialize a module subdocument, mapping each lesson through serializeLesson.
  */
-const serializeModule = (mod, req) => ({
-  ...mod.toObject ? mod.toObject({ virtuals: true }) : mod,
-  lessons: Array.isArray(mod.lessons)
-    ? mod.lessons.map((l) => serializeLesson(l, req))
-    : [],
-});
+const serializeModule = (mod, req) => {
+  if (!mod) return null;
+  const modObj = (typeof mod.toObject === 'function') ? mod.toObject({ virtuals: true }) : { ...mod };
+  return {
+    ...modObj,
+    lessons: Array.isArray(modObj.lessons)
+      ? modObj.lessons.map((l) => serializeLesson(l, req))
+      : [],
+  };
+};
 
 /**
  * Serialize a course document with standardized absolute banner URLs and module trees.
  */
 const serializeCourse = (courseDoc, req) => {
   if (!courseDoc) return null;
-  const obj = courseDoc.toObject ? courseDoc.toObject({ virtuals: true }) : { ...courseDoc };
+  const obj = (typeof courseDoc.toObject === 'function') ? courseDoc.toObject({ virtuals: true }) : { ...courseDoc };
 
   const rawBanner = obj.courseBanner || obj.thumbnail || obj.bannerUrl || obj.banner || obj.thumbnailUrl || obj.image || obj.imageUrl || '';
   const absoluteBanner = toAbsoluteUrl(rawBanner, req);
@@ -474,14 +487,51 @@ const findCourseByIdOrCustomId = async (id) => {
 
 exports.getCourses = async (req, res) => {
   try {
-    const courses = await Course.find();
-    const serialized = courses.map((course) => serializeCourse(course, req));
-    return res.status(200).json({
+    const cacheKey = 'public_courses_list';
+    const cachedData = memoryCache.get(cacheKey);
+    if (cachedData) {
+      return res.status(200).json(cachedData);
+    }
+
+    const courses = await Course.find()
+      .select('courseId courseTitle instructor price shortDescription duration status thumbnail bannerUrl courseBanner category totalModules createdAt updatedAt')
+      .sort({ createdAt: -1 })
+      .lean();
+
+    const serialized = courses.map((course) => {
+      const extractRawUrl = (val) => {
+        if (!val) return '';
+        if (typeof val === 'string') return val;
+        if (typeof val === 'object') {
+          return val.secure_url || val.url || val.fileUrl || val.documentUrl || val.path || '';
+        }
+        return '';
+      };
+      const rawBanner = extractRawUrl(course.courseBanner) || extractRawUrl(course.thumbnail) || extractRawUrl(course.bannerUrl) || extractRawUrl(course.banner) || extractRawUrl(course.thumbnailUrl) || extractRawUrl(course.image) || extractRawUrl(course.imageUrl);
+      const absoluteBanner = optimizeCloudinaryUrl(toAbsoluteUrl(rawBanner, req));
+      const totalModules = Array.isArray(course.modules) ? course.modules.length : 0;
+      return {
+        ...course,
+        id: course.courseId || (course._id ? course._id.toString() : ''),
+        thumbnail: absoluteBanner,
+        bannerUrl: absoluteBanner,
+        courseBanner: absoluteBanner,
+        banner: absoluteBanner,
+        thumbnailUrl: absoluteBanner,
+        totalModules,
+      };
+    });
+
+    const responsePayload = {
       success: true,
       count: serialized.length,
       data: serialized,
       courses: serialized,
-    });
+    };
+
+    memoryCache.set(cacheKey, responsePayload, 30);
+    return res.status(200).json(responsePayload);
+
   } catch (error) {
     console.error('Get Courses Error:', error);
     return res.status(500).json({

@@ -471,17 +471,58 @@ async function getAllGrandMocks(req, res) {
       console.warn('[admin.controller.js] Failed to aggregate attendance counts:', aggErr.message);
     }
 
-    const candidateIds = req.user ? await getStudentCandidateIds(req.user) : [];
-    const attemptMap = candidateIds.length > 0
-      ? await getStudentExamAttemptMap(candidateIds, exams.map(e => e._id))
-      : new Map();
+    // Batch resolve missing course and module metadata for all exams in ONE query
+    const courseIdsToFetch = new Set();
+    for (const exam of exams) {
+      if (exam.courseId && !exam.courseName) {
+        const raw = (typeof exam.courseId === 'object' && exam.courseId._id) ? exam.courseId._id.toString() : exam.courseId.toString();
+        if (raw && raw !== 'null' && raw !== 'undefined') courseIdsToFetch.add(raw.trim());
+      }
+    }
+
+    const courseMap = new Map();
+    if (courseIdsToFetch.size > 0) {
+      try {
+        const CourseModel = mongoose.models.Course || require('../../models/Course');
+        const objIds = [...courseIdsToFetch].filter(id => mongoose.Types.ObjectId.isValid(id)).map(id => new mongoose.Types.ObjectId(id));
+        const strIds = [...courseIdsToFetch];
+        const foundCourses = await CourseModel.find({
+          $or: [
+            ...(objIds.length > 0 ? [{ _id: { $in: objIds } }] : []),
+            { courseId: { $in: strIds } }
+          ]
+        }).select('courseId courseTitle title name modules').lean();
+
+        for (const fc of foundCourses) {
+          if (fc._id) courseMap.set(fc._id.toString(), fc);
+          if (fc.courseId) courseMap.set(fc.courseId, fc);
+        }
+      } catch (err) {
+        console.warn('[admin.controller.js] Batch course lookup notice:', err.message);
+      }
+    }
 
     const formattedExams = await Promise.all(exams.map(async (exam) => {
-      const { courseName, moduleName } = await resolveCourseAndModuleNames(exam);
+      let courseName = exam.courseName || null;
+      let moduleName = exam.moduleName || null;
+
       const rawCourseId = exam.courseId ? (typeof exam.courseId === 'object' && exam.courseId._id ? exam.courseId._id.toString() : exam.courseId.toString()).trim() : '';
       const courseIdStr = (rawCourseId && rawCourseId !== 'null' && rawCourseId !== 'undefined') ? rawCourseId : null;
       const rawModuleId = exam.moduleId ? (typeof exam.moduleId === 'object' && exam.moduleId._id ? exam.moduleId._id.toString() : exam.moduleId.toString()).trim() : '';
       const moduleIdStr = (rawModuleId && rawModuleId !== 'null' && rawModuleId !== 'undefined') ? rawModuleId : null;
+
+      if (courseIdStr && (!courseName || !moduleName)) {
+        const foundCourse = courseMap.get(courseIdStr);
+        if (foundCourse) {
+          if (!courseName) courseName = foundCourse.courseTitle || foundCourse.title || foundCourse.name || null;
+          if (moduleIdStr && !moduleName && Array.isArray(foundCourse.modules)) {
+            const modObj = foundCourse.modules.find(
+              (m) => m && ((m._id && m._id.toString() === moduleIdStr) || m.moduleName === moduleIdStr)
+            );
+            if (modObj) moduleName = modObj.moduleName || null;
+          }
+        }
+      }
 
       let normalizedType = exam.testType ? normalizeTestType(exam.testType) : null;
       if (!normalizedType || normalizedType === 'grand_mock') {

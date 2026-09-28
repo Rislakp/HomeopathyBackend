@@ -860,9 +860,10 @@ async function getStudentResults(req, res) {
     }
 
     let results = await TestResult.find({ studentId: { $in: candidateIds } })
-      .populate('examId', 'title testType courseId moduleId courseName moduleName marksPerQuestion negativeMark negativeMarkPenalty durationMinutes totalQuestions questions')
+      .populate('examId', 'title testType courseId moduleId courseName moduleName marksPerQuestion negativeMark negativeMarkPenalty durationMinutes totalQuestions')
       .sort({ createdAt: -1 })
       .lean();
+
 
     if (matchingExamIds !== null) {
       results = results.filter(r => r.examId && matchingExamIds.includes(r.examId._id ? r.examId._id.toString() : r.examId.toString()));

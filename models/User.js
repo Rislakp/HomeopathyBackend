@@ -112,4 +112,7 @@ userSchema.methods.matchPassword = async function (enteredPassword) {
   return await bcrypt.compare(enteredPassword, this.password);
 };
 
-module.exports = mongoose.models.User || mongoose.model('User', userSchema);
+// MongoDB performance indexes
+userSchema.index({ role: 1, createdAt: -1 });
+
+module.exports = mongoose.models.User || mongoose.model('User', userSchema);

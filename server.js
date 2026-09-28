@@ -208,6 +208,25 @@ app.use('/uploads', express.static(uploadsDir, {
 app.use(express.static(uploadsDir));
 app.use(express.static(path.join(__dirname, 'public')));
 
+// Production-ready structured request & timing logger middleware
+app.use((req, res, next) => {
+  const start = Date.now();
+  const cleanPath = (req.originalUrl || req.url || '').split('?')[0];
+
+  res.on('finish', () => {
+    const duration = Date.now() - start;
+    const isSlow = duration > 1000;
+    const logMsg = `[HTTP] ${req.method} ${cleanPath} ${res.statusCode} - ${duration}ms`;
+
+    if (isSlow) {
+      console.warn(`⚠️ [SLOW API WARNING] ${logMsg}`);
+    } else if (process.env.NODE_ENV !== 'production' || process.env.ENABLE_API_TIMING === 'true') {
+      console.log(logMsg);
+    }
+  });
+  next();
+});
+
 // Routes
 const authRoutes = require('./routes/authRoutes');
 const adminAuthRoutes = require('./routes/adminAuthRoutes');
@@ -279,13 +298,16 @@ app.use('/api/v1/admin', adminRoutes);
 app.use('/api/admin', adminRoutes);
 
 
-// ── Health / Wake-up endpoint ──────────────────────────────────────────────
-// Zero-latency ping for the Flutter frontend to pre-warm the Render server
-// from its cold start. No DB queries — responds as soon as the Node process
-// is alive. The Flutter app fires this when the login screen loads so the
-// server is already awake by the time the user taps "Login".
+// ── Health Check Endpoints (Lightweight, stateless, Render load balancer compatible) ──
+app.get('/health', (req, res) => {
+  res.status(200).json({
+    status: 'ok',
+  });
+});
+
 app.get('/api/health', (req, res) => {
   res.status(200).json({
+    status: 'ok',
     success: true,
     message: 'Server is awake',
     timestamp: Date.now(),
@@ -293,6 +315,7 @@ app.get('/api/health', (req, res) => {
 });
 app.get('/api/v1/health', (req, res) => {
   res.status(200).json({
+    status: 'ok',
     success: true,
     message: 'Server is awake',
     timestamp: Date.now(),
@@ -343,6 +366,32 @@ const startServer = async () => {
     server.timeout = 600000;
     server.keepAliveTimeout = 65000;
     server.headersTimeout = 66000;
+
+    // Graceful Shutdown Handler for Render horizontal scaling
+    const mongoose = require('mongoose');
+    const handleGracefulShutdown = (signal) => {
+      console.log(`\n🛑 [${signal}] Graceful shutdown initiated. Closing HTTP server...`);
+      server.close(async () => {
+        console.log(`✅ [${signal}] HTTP server closed. Closing MongoDB connection pool...`);
+        try {
+          await mongoose.connection.close(false);
+          console.log(`✅ [${signal}] MongoDB connection closed cleanly.`);
+          process.exit(0);
+        } catch (err) {
+          console.error(`❌ [${signal}] Error closing MongoDB connection:`, err.message);
+          process.exit(1);
+        }
+      });
+
+      // Force exit after 10s if connections refuse to close in time
+      setTimeout(() => {
+        console.error(`⚠️ [${signal}] Forced shutdown after 10s timeout.`);
+        process.exit(1);
+      }, 10000).unref();
+    };
+
+    process.on('SIGTERM', () => handleGracefulShutdown('SIGTERM'));
+    process.on('SIGINT', () => handleGracefulShutdown('SIGINT'));
   } catch (error) {
     console.error('❌ Server startup failed:', error.message);
     process.exit(1);
@@ -353,4 +402,4 @@ if (require.main === module) {
   startServer();
 }
 
-module.exports = { app, startServer };
+module.exports = { app, startServer };
