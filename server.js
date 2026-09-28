@@ -1,4 +1,4 @@
-require('dotenv').config();
+require('dotenv').config({ path: require('path').join(__dirname, '.env') });
 
 // ── Process-level safety net ──────────────────────────────────────────────────
 // Catches any async promise rejection that escapes a try/catch.

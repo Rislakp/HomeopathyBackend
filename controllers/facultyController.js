@@ -9,7 +9,6 @@ const formatFacultyDoc = (doc) => {
   const idStr = doc._id ? doc._id.toString() : (doc.id ? doc.id.toString() : '');
   const imageVal = doc.avatarUrl || doc.profileImage || doc.avatar || doc.image || '';
   return {
-    ...doc,
     _id: idStr,
     id: idStr,
     fullName: doc.fullName || doc.name || '',
@@ -20,8 +19,6 @@ const formatFacultyDoc = (doc) => {
     phone: doc.phone || '',
     bio: doc.bio || '',
     avatarUrl: imageVal,
-    profileImage: imageVal,
-    avatar: imageVal,
     experience: doc.experience || '',
     status: doc.status || 'Active',
     createdAt: doc.createdAt,
