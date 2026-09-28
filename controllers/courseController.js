@@ -534,7 +534,7 @@ exports.getCourses = async (req, res) => {
     const [total, courses] = await Promise.all([
       Course.countDocuments(filter),
       Course.find(filter)
-        .select('courseId courseTitle instructor price shortDescription duration status thumbnail bannerUrl courseBanner category totalModules createdAt updatedAt')
+        .select('courseId courseTitle instructor price shortDescription duration status thumbnail bannerUrl courseBanner category modules._id createdAt updatedAt')
         .sort({ createdAt: -1 })
         .skip(skip)
         .limit(limit)
@@ -552,9 +552,11 @@ exports.getCourses = async (req, res) => {
       };
       const rawBanner = extractRawUrl(course.courseBanner) || extractRawUrl(course.thumbnail) || extractRawUrl(course.bannerUrl) || extractRawUrl(course.banner) || extractRawUrl(course.thumbnailUrl) || extractRawUrl(course.image) || extractRawUrl(course.imageUrl);
       const absoluteBanner = optimizeCloudinaryUrl(toAbsoluteUrl(rawBanner, req));
-      const totalModules = Array.isArray(course.modules) ? course.modules.length : (course.totalModules || 0);
+      const totalModules = Array.isArray(course.modules) ? course.modules.length : 0;
+      // The list endpoint needs a count, never the curriculum array itself.
+      const { modules, ...courseListFields } = course;
       return {
-        ...course,
+        ...courseListFields,
         id: course.courseId || (course._id ? course._id.toString() : ''),
         thumbnail: absoluteBanner,
         bannerUrl: absoluteBanner,
@@ -570,7 +572,6 @@ exports.getCourses = async (req, res) => {
     const responsePayload = {
       success: true,
       data: serialized,
-      courses: serialized,
       pagination: pagination,
       count: serialized.length,
       total: pagination.total,
@@ -693,6 +694,7 @@ exports.createCourse = async (req, res) => {
     });
 
     await newCourse.save();
+    memoryCache.del('courses_list_');
     const serialized = serializeCourse(newCourse, req);
 
     return res.status(201).json({
@@ -777,6 +779,7 @@ exports.updateCourse = async (req, res) => {
     }
 
     const updatedCourse = await Course.findOneAndUpdate(query, updateData, { new: true, runValidators: true });
+    memoryCache.del('courses_list_');
 
     const serialized = serializeCourse(updatedCourse, req);
 
@@ -807,6 +810,7 @@ exports.deleteCourse = async (req, res) => {
     if (!deletedCourse) {
       return res.status(404).json({ success: false, message: 'Course not found' });
     }
+    memoryCache.del('courses_list_');
 
     const bannerUrl = deletedCourse.courseBanner || deletedCourse.thumbnail || deletedCourse.bannerUrl;
     if (bannerUrl) {

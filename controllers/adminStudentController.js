@@ -81,9 +81,6 @@ async function getAdminStudents(req, res) {
       });
     }
 
-    // Optional background sync to ensure data consistency
-    syncStudentUsers().catch(() => { });
-
     // 2. Build Search and Filter Match Conditions
     const matchConditions = {};
 
@@ -143,301 +140,197 @@ async function getAdminStudents(req, res) {
       }
     }
 
-    // 3. High-Performance MongoDB Aggregation Pipeline
-    const pipeline = [
-      { $match: matchConditions },
+    // 3. Fast Parallel Count & Paginated Find using Lean Projections
+    const [total, rawStudents] = await Promise.all([
+      Student.countDocuments(matchConditions),
+      Student.find(matchConditions)
+        .select('_id userId name email phone contactNumber dateOfBirth qualification profileImage avatar course courseRef courseId status accountStatus isApproved subscription joinedDate createdAt updatedAt')
+        .sort({ createdAt: -1 })
+        .skip(skip)
+        .limit(limit)
+        .lean(),
+    ]);
 
-      {
-        $facet: {
-          metadata: [{ $count: 'total' }],
-          data: [
-            { $sort: { createdAt: -1 } },
-            { $skip: skip },
-            { $limit: limit },
+    if (!rawStudents || rawStudents.length === 0) {
+      const pagination = buildPaginationResponse(total, page, limit);
+      return res.status(200).json({
+        success: true,
+        message: 'Students retrieved successfully',
+        data: [],
+        pagination: pagination,
+        count: 0,
+      });
+    }
 
-            // Step B: Lookup User Details for additional metadata / avatar
-            {
-              $lookup: {
-                from: 'users',
-                let: { uId: '$userId', sEmail: '$email' },
-                pipeline: [
-                  {
-                    $match: {
-                      $expr: {
-                        $or: [
-                          { $and: [{ $ne: ['$$uId', null] }, { $eq: ['$_id', '$$uId'] }] },
-                          { $and: [{ $ne: ['$$sEmail', null] }, { $ne: ['$$sEmail', ''] }, { $eq: ['$email', '$$sEmail'] }] }
-                        ]
-                      }
-                    }
-                  },
-                  { $limit: 1 }
-                ],
-                as: 'userDetails'
-              }
-            },
-            {
-              $addFields: {
-                userObj: { $arrayElemAt: ['$userDetails', 0] }
-              }
-            },
+    // 4. Batch resolve supplementary User and Course data in ONE roundtrip (no N+1)
+    const userIdsToFetch = new Set();
+    const emailsToFetch = new Set();
+    const courseRefsToFetch = new Set();
+    const courseIdsToFetch = new Set();
+    const courseTitlesToFetch = new Set();
+    const studentDocIds = [];
 
-            // Step C: Lookup Enrolled Course Details
-            {
-              $lookup: {
-                from: 'courses',
-                let: { studentCourse: '$course', studentCourseRef: '$courseRef' },
-                pipeline: [
-                  {
-                    $match: {
-                      $expr: {
-                        $or: [
-                          { $and: [{ $ne: ['$$studentCourseRef', null] }, { $eq: ['$_id', '$$studentCourseRef'] }] },
-                          { $and: [{ $ne: ['$$studentCourse', null] }, { $ne: ['$$studentCourse', ''] }, { $eq: ['$courseId', '$$studentCourse'] }] },
-                          { $and: [{ $ne: ['$$studentCourse', null] }, { $ne: ['$$studentCourse', ''] }, { $eq: ['$courseTitle', '$$studentCourse'] }] }
-                        ]
-                      }
-                    }
-                  },
-                  { $limit: 1 }
-                ],
-                as: 'courseDetails'
-              }
-            },
-
-            {
-              $addFields: {
-                courseObj: { $arrayElemAt: ['$courseDetails', 0] }
-              }
-            },
-
-            // Step D: Lookup Test Results and Resolve Exam Names & Scores
-            {
-              $lookup: {
-                from: 'testresults',
-                let: { studentDocId: '$_id', userDocId: '$userId' },
-                pipeline: [
-                  {
-                    $match: {
-                      $expr: {
-                        $in: ['$studentId', ['$$studentDocId', '$$userDocId']]
-                      }
-                    }
-                  },
-                  { $sort: { createdAt: -1 } },
-
-                  {
-                    $lookup: {
-                      from: 'exams',
-                      localField: 'examId',
-                      foreignField: '_id',
-                      as: 'examInfo'
-                    }
-                  },
-                  {
-                    $unwind: {
-                      path: '$examInfo',
-                      preserveNullAndEmptyArrays: true
-                    }
-                  },
-                  {
-                    $project: {
-                      exam_id: '$examId',
-                      title: { $ifNull: ['$examInfo.title', 'Mock Exam'] },
-                      score: { $ifNull: ['$score', 0] },
-                      total_marks: { $ifNull: ['$totalMarks', 0] },
-                      total_attempted: { $ifNull: ['$totalAttempted', 0] },
-                      total_correct: { $ifNull: ['$totalCorrect', 0] },
-                      total_wrong: { $ifNull: ['$totalWrong', 0] },
-                      percentage: {
-                        $cond: {
-                          if: { $gt: ['$totalMarks', 0] },
-                          then: {
-                            $round: [
-                              { $multiply: [{ $divide: ['$score', '$totalMarks'] }, 100] },
-                              2
-                            ]
-                          },
-                          else: 0
-                        }
-                      },
-                      status: {
-                        $cond: {
-                          if: {
-                            $and: [
-                              { $gt: ['$totalMarks', 0] },
-                              { $gte: [{ $divide: ['$score', '$totalMarks'] }, 0.5] }
-                            ]
-                          },
-                          then: 'Passed',
-                          else: 'Failed'
-                        }
-                      },
-                      submitted_at: '$createdAt'
-                    }
-                  }
-                ],
-                as: 'attended_exams'
-              }
-            },
-
-            // Step E: Compute Summary Metrics
-            {
-              $addFields: {
-                total_exams_attended: { $size: '$attended_exams' },
-                average_score: {
-                  $cond: {
-                    if: { $gt: [{ $size: '$attended_exams' }, 0] },
-                    then: { $round: [{ $avg: '$attended_exams.percentage' }, 2] },
-                    else: 0
-                  }
-                },
-                passed_exams: {
-                  $size: {
-                    $filter: {
-                      input: '$attended_exams',
-                      as: 'exam',
-                      cond: { $eq: ['$$exam.status', 'Passed'] }
-                    }
-                  }
-                }
-              }
-            },
-
-            // Step F: Project Output Format
-            {
-              $project: {
-                _id: 0,
-                id: { $toString: '$_id' },
-                student_id: { $toString: '$_id' },
-                name: '$name',
-                email: '$email',
-                phone: {
-                  $ifNull: [
-                    '$phone',
-                    {
-                      $ifNull: [
-                        '$contactNumber',
-                        {
-                          $ifNull: [
-                            '$userObj.phone',
-                            { $ifNull: ['$userObj.contactNumber', ''] }
-                          ]
-                        }
-                      ]
-                    }
-                  ]
-                },
-                contact_number: {
-                  $ifNull: [
-                    '$contactNumber',
-                    {
-                      $ifNull: [
-                        '$phone',
-                        {
-                          $ifNull: [
-                            '$userObj.contactNumber',
-                            { $ifNull: ['$userObj.phone', ''] }
-                          ]
-                        }
-                      ]
-                    }
-                  ]
-                },
-                date_of_birth: {
-                  $ifNull: ['$dateOfBirth', { $ifNull: ['$userObj.dateOfBirth', ''] }]
-                },
-                qualification: {
-                  $ifNull: ['$qualification', { $ifNull: ['$userObj.qualification', ''] }]
-                },
-                profile_image: {
-                  $ifNull: [
-                    '$profileImage',
-                    {
-                      $ifNull: [
-                        '$avatar',
-                        {
-                          $ifNull: [
-                            '$userObj.profileImage',
-                            { $ifNull: ['$userObj.avatar', ''] }
-                          ]
-                        }
-                      ]
-                    }
-                  ]
-                },
-                avatar: {
-                  $ifNull: [
-                    '$avatar',
-                    {
-                      $ifNull: [
-                        '$profileImage',
-                        {
-                          $ifNull: [
-                            '$userObj.avatar',
-                            { $ifNull: ['$userObj.profileImage', ''] }
-                          ]
-                        }
-                      ]
-                    }
-                  ]
-                },
-                enrolled_course: {
-                  id: {
-                    $ifNull: [
-                      '$courseObj.courseId',
-                      {
-                        $ifNull: [
-                          { $toString: '$courseObj._id' },
-                          { $ifNull: ['$course', 'General'] }
-                        ]
-                      }
-                    ]
-                  },
-                  title: {
-                    $ifNull: ['$courseObj.courseTitle', { $ifNull: ['$course', 'General'] }]
-                  },
-                  category: {
-                    $ifNull: ['$courseObj.category', 'General']
-                  },
-                  price: {
-                    $ifNull: ['$courseObj.price', 0]
-                  }
-                },
-                subscription: {
-                  status: { $ifNull: ['$status', 'Active'] },
-                  type: { $ifNull: ['$subscription', 'Free'] },
-                  joined_date: { $ifNull: ['$joinedDate', '$createdAt'] }
-                },
-                stats: {
-                  total_exams_attended: '$total_exams_attended',
-                  average_score: '$average_score',
-                  passed_exams: '$passed_exams'
-                },
-                attended_exams: '$attended_exams',
-                created_at: '$createdAt',
-                updated_at: '$updatedAt'
-              }
-            }
-          ]
-        }
+    rawStudents.forEach((s) => {
+      studentDocIds.push(s._id);
+      if (s.userId && mongoose.Types.ObjectId.isValid(s.userId)) {
+        userIdsToFetch.add(s.userId.toString());
       }
-    ];
+      if (s.email) {
+        emailsToFetch.add(s.email.toLowerCase().trim());
+      }
+      if (s.courseRef && mongoose.Types.ObjectId.isValid(s.courseRef)) {
+        courseRefsToFetch.add(s.courseRef.toString());
+      }
+      if (s.courseId) {
+        courseIdsToFetch.add(s.courseId.toString().trim());
+      }
+      if (s.course) {
+        courseTitlesToFetch.add(s.course.toString().trim());
+      }
+    });
 
-    const result = await Student.aggregate(pipeline);
+    const userQueryConditions = [];
+    if (userIdsToFetch.size > 0) {
+      userQueryConditions.push({
+        _id: { $in: [...userIdsToFetch].map((id) => new mongoose.Types.ObjectId(id)) },
+      });
+    }
+    if (emailsToFetch.size > 0) {
+      userQueryConditions.push({ email: { $in: [...emailsToFetch] } });
+    }
 
-    const metadata = (result[0] && result[0].metadata[0]) || { total: 0 };
-    const students = (result[0] && result[0].data) || [];
-    const total = metadata.total;
+    const courseQueryConditions = [];
+    if (courseRefsToFetch.size > 0) {
+      courseQueryConditions.push({
+        _id: { $in: [...courseRefsToFetch].map((id) => new mongoose.Types.ObjectId(id)) },
+      });
+    }
+    if (courseIdsToFetch.size > 0) {
+      courseQueryConditions.push({ courseId: { $in: [...courseIdsToFetch] } });
+    }
+    if (courseTitlesToFetch.size > 0) {
+      courseQueryConditions.push({ courseTitle: { $in: [...courseTitlesToFetch] } });
+    }
+
+    // Run user lookup, course lookup, and test stats concurrently
+    const [matchedUsers, matchedCourses, testStatsAgg] = await Promise.all([
+      userQueryConditions.length > 0
+        ? User.find({ $or: userQueryConditions })
+            .select('_id email phone contactNumber dateOfBirth qualification profileImage avatar')
+            .lean()
+        : Promise.resolve([]),
+      courseQueryConditions.length > 0
+        ? Course.find({ $or: courseQueryConditions })
+            .select('_id courseId courseTitle category price')
+            .lean()
+        : Promise.resolve([]),
+      TestResult.aggregate([
+        { $match: { studentId: { $in: studentDocIds } } },
+        {
+          $group: {
+            _id: '$studentId',
+            total_exams_attended: { $sum: 1 },
+            average_score: { $avg: '$percentage' },
+            passed_exams: {
+              $sum: {
+                $cond: [
+                  {
+                    $and: [
+                      { $gt: ['$totalMarks', 0] },
+                      { $gte: [{ $divide: ['$score', '$totalMarks'] }, 0.5] },
+                    ],
+                  },
+                  1,
+                  0,
+                ],
+              },
+            },
+          },
+        },
+      ]),
+    ]);
+
+    const userMap = new Map();
+    matchedUsers.forEach((u) => {
+      if (u._id) userMap.set(u._id.toString(), u);
+      if (u.email) userMap.set(u.email.toLowerCase().trim(), u);
+    });
+
+    const courseMap = new Map();
+    matchedCourses.forEach((c) => {
+      if (c._id) courseMap.set(c._id.toString(), c);
+      if (c.courseId) courseMap.set(c.courseId.toString().trim(), c);
+      if (c.courseTitle) courseMap.set(c.courseTitle.toString().toLowerCase().trim(), c);
+    });
+
+    const statsMap = new Map();
+    testStatsAgg.forEach((stat) => {
+      if (stat._id) statsMap.set(stat._id.toString(), stat);
+    });
+
+    // 5. Format student response objects
+    const formattedStudents = rawStudents.map((s) => {
+      const uId = s.userId ? s.userId.toString() : '';
+      const uEmail = s.email ? s.email.toLowerCase().trim() : '';
+      const userObj = userMap.get(uId) || userMap.get(uEmail) || null;
+
+      const cRef = s.courseRef ? s.courseRef.toString() : '';
+      const cId = s.courseId ? s.courseId.toString().trim() : '';
+      const cTitle = s.course ? s.course.toString().toLowerCase().trim() : '';
+      const courseObj = courseMap.get(cRef) || courseMap.get(cId) || courseMap.get(cTitle) || null;
+
+      const statObj = statsMap.get(s._id.toString()) || null;
+
+      const profileImage =
+        s.profileImage ||
+        s.avatar ||
+        userObj?.profileImage ||
+        userObj?.avatar ||
+        '';
+
+      return {
+        id: s._id.toString(),
+        student_id: s._id.toString(),
+        name: s.name || '',
+        email: s.email || '',
+        phone: s.phone || s.contactNumber || userObj?.phone || userObj?.contactNumber || '',
+        contact_number: s.contactNumber || s.phone || userObj?.contactNumber || userObj?.phone || '',
+        date_of_birth: s.dateOfBirth || userObj?.dateOfBirth || '',
+        qualification: s.qualification || userObj?.qualification || '',
+        profile_image: profileImage,
+        avatar: profileImage,
+        enrolled_course: {
+          id: courseObj?.courseId || (courseObj?._id ? courseObj._id.toString() : (s.course || 'General')),
+          title: courseObj?.courseTitle || s.course || 'General',
+          category: courseObj?.category || 'General',
+          price: courseObj?.price || 0,
+        },
+        subscription: {
+          status: s.status || 'Active',
+          type: s.subscription || 'Free',
+          joined_date: s.joinedDate || s.createdAt,
+        },
+        account_status: s.accountStatus || 'Pending',
+        is_approved: s.isApproved !== undefined ? s.isApproved : false,
+        stats: {
+          total_exams_attended: statObj?.total_exams_attended || 0,
+          average_score: statObj ? Math.round((statObj.average_score || 0) * 100) / 100 : 0,
+          passed_exams: statObj?.passed_exams || 0,
+        },
+        attended_exams: [],
+        created_at: s.createdAt,
+        updated_at: s.updatedAt,
+      };
+    });
+
     const pagination = buildPaginationResponse(total, page, limit);
 
     return res.status(200).json({
       success: true,
       message: 'Students retrieved successfully',
-      data: students,
-      students: students,
+      data: formattedStudents,
       pagination: pagination,
-      count: students.length
+      count: formattedStudents.length,
     });
   } catch (error) {
     console.error('Error fetching admin students list:', error);

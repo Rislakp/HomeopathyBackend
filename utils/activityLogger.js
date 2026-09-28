@@ -1,4 +1,5 @@
 const Activity = require('../models/Activity');
+const memoryCache = require('./cache');
 
 /**
  * Helper utility function to log platform activities into MongoDB.
@@ -43,6 +44,10 @@ const logActivity = async ({
       metadata,
       createdAt: new Date(),
     });
+
+    // The activity feed is short-lived cached data; invalidate all variants so
+    // a newly persisted student action is immediately visible on the next load.
+    memoryCache.del('recent_activities_');
 
     return activity;
   } catch (error) {

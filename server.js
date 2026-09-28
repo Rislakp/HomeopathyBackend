@@ -84,9 +84,6 @@ const isOriginAllowed = (origin) => {
     /^https?:\/\/([a-zA-Z0-9-]+\.)*whitecoat\.academy$/i,
     /^https?:\/\/([a-zA-Z0-9-]+\.)*whitecoatacademy\.com$/i,
     /^https?:\/\/([a-zA-Z0-9-]+\.)*whitecodeacademy\.com$/i,
-    /^https?:\/\/([a-zA-Z0-9-]+\.)*onrender\.com$/i,
-    /^https?:\/\/([a-zA-Z0-9-]+\.)*vercel\.app$/i,
-    /^https?:\/\/([a-zA-Z0-9-]+\.)*netlify\.app$/i,
     /^https?:\/\/(10\.0\.2\.2|0\.0\.0\.0)(:\d+)?$/i,
   ];
 
@@ -157,8 +154,10 @@ app.use(cors(corsOptionsDelegate));
 app.options('*', cors(corsOptionsDelegate));
 
 // Body Parser Middleware (Must be registered before any routes are defined)
-app.use(express.json({ limit: '100mb' }));
-app.use(express.urlencoded({ limit: '100mb', extended: true }));
+// JSON is for metadata and answers, not media. Multipart uploads are handled
+// by multer and retain their own route-specific file-size limits.
+app.use(express.json({ limit: '2mb' }));
+app.use(express.urlencoded({ limit: '1mb', extended: true }));
 
 
 app.use(requestLogger);
@@ -217,6 +216,39 @@ app.use('/uploads', express.static(uploadsDir, {
 app.use(express.static(uploadsDir));
 app.use(express.static(path.join(__dirname, 'public')));
 
+
+
+// ── Health Check Endpoints (Lightweight, stateless, Render load balancer compatible) ──
+app.get('/health', (req, res) => {
+  res.status(200).json({
+    status: 'ok',
+  });
+});
+
+app.get('/api/health', (req, res) => {
+  res.status(200).json({
+    status: 'ok',
+    success: true,
+    message: 'Server is awake',
+    timestamp: Date.now(),
+  });
+});
+app.get('/api/v1/health', (req, res) => {
+  res.status(200).json({
+    status: 'ok',
+    success: true,
+    message: 'Server is awake',
+    timestamp: Date.now(),
+  });
+});
+
+// Test
+app.get('/', (req, res) => {
+  res.json({
+    success: true,
+    message: 'Backend is working',
+  });
+});
 
 
 // Routes
@@ -296,39 +328,6 @@ const adminRoutes = require('./routes/adminRoutes');
 app.use('/api/v1/admin', adminRoutes);
 app.use('/api/admin', adminRoutes);
 
-
-// ── Health Check Endpoints (Lightweight, stateless, Render load balancer compatible) ──
-app.get('/health', (req, res) => {
-  res.status(200).json({
-    status: 'ok',
-  });
-});
-
-app.get('/api/health', (req, res) => {
-  res.status(200).json({
-    status: 'ok',
-    success: true,
-    message: 'Server is awake',
-    timestamp: Date.now(),
-  });
-});
-app.get('/api/v1/health', (req, res) => {
-  res.status(200).json({
-    status: 'ok',
-    success: true,
-    message: 'Server is awake',
-    timestamp: Date.now(),
-  });
-});
-
-// Test
-app.get('/', (req, res) => {
-  res.json({
-    success: true,
-    message: 'Backend is working',
-  });
-});
-
 // 404 Route Not Found Catch-All
 app.use((req, res, next) => {
   res.status(404).json({
@@ -361,8 +360,10 @@ const startServer = async () => {
       console.log(`🚀 Server running on port ${PORT}`);
     });
 
-    // Configure 10-minute timeout for handling large video file uploads
-    server.timeout = 600000;
+    // Normal requests are capped by middleware at 30s; route-level response
+    // timeouts allow uploads/extraction up to 60s. Do not leave a 10-minute
+    // global socket timeout that masks stalled database work.
+    server.timeout = 35000;
     server.keepAliveTimeout = 65000;
     server.headersTimeout = 66000;
 

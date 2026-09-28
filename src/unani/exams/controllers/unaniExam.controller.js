@@ -40,11 +40,23 @@ async function createExam(req, res) {
  */
 async function getAllExams(req, res) {
   try {
-    const exams = await unaniExamService.getAllExams();
+    const { page = 1, limit = 20, search = '', status = '' } = req.query;
+    const parsedPage = Number(page);
+    const parsedLimit = Number(limit);
+    if (!Number.isInteger(parsedPage) || parsedPage < 1 || !Number.isInteger(parsedLimit) || parsedLimit < 1 || parsedLimit > 100) {
+      return res.status(400).json({ success: false, message: 'page must be >= 1 and limit must be an integer between 1 and 100' });
+    }
+    const result = await unaniExamService.getAllExams({ page: parsedPage, limit: parsedLimit, search, status });
     return res.status(200).json({
       success: true,
-      count: exams.length,
-      data: exams,
+      count: result.exams.length,
+      data: result.exams,
+      pagination: {
+        page: result.page,
+        limit: result.limit,
+        total: result.total,
+        totalPages: Math.ceil(result.total / result.limit),
+      },
     });
   } catch (error) {
     return res.status(500).json({
@@ -462,6 +474,7 @@ async function getUnaniTestHistory(req, res) {
         total: historyData.total,
         page: historyData.page,
         limit: historyData.limit,
+        totalPages: Math.ceil(historyData.total / historyData.limit),
       },
     });
   } catch (error) {

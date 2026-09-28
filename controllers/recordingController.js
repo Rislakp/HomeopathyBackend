@@ -376,7 +376,7 @@ exports.getRecordings = async (req, res) => {
     const [total, recordings] = await Promise.all([
       Recording.countDocuments(filter),
       Recording.find(filter)
-        .populate('courseId', 'courseId courseTitle thumbnail category')
+        .select('_id courseId moduleId lessonId courseName moduleName lessonTitle streamUrl recordedVideoUrl liveClassUrl recordingFileUrl duration status width height bytes format resolution qualityTag createdAt updatedAt')
         .sort({ createdAt: -1 })
         .skip(skip)
         .limit(limit)
@@ -389,7 +389,6 @@ exports.getRecordings = async (req, res) => {
     return res.status(200).json({
       success: true,
       data: formattedList,
-      recordings: formattedList,
       pagination,
       count: formattedList.length,
       total: pagination.total,

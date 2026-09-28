@@ -1,13 +1,20 @@
 const Faculty = require('../models/Faculty');
+const memoryCache = require('../utils/cache');
 
 /**
  * Format a faculty document to ensure all ID and image fields are normalized
  * across both Landing Page and Student Portal client expectations.
  */
-const formatFacultyDoc = (doc) => {
+const formatFacultyDoc = (doc, options = {}) => {
   if (!doc) return null;
   const idStr = doc._id ? doc._id.toString() : (doc.id ? doc.id.toString() : '');
-  const imageVal = doc.avatarUrl || doc.profileImage || doc.avatar || doc.image || '';
+  let imageVal = doc.avatarUrl || doc.profileImage || doc.avatar || doc.image || '';
+
+  // Never send large base64 image payloads in list APIs (Section 4 requirement)
+  if (options.isList && imageVal && imageVal.length > 1024 && (imageVal.startsWith('data:image') || !imageVal.startsWith('http'))) {
+    imageVal = '';
+  }
+
   return {
     _id: idStr,
     id: idStr,
@@ -17,7 +24,7 @@ const formatFacultyDoc = (doc) => {
     role: doc.role || doc.designation || 'Faculty',
     qualification: doc.qualification || '',
     phone: doc.phone || '',
-    bio: doc.bio || '',
+    bio: options.isList ? (doc.bio ? doc.bio.slice(0, 200) : '') : (doc.bio || ''),
     avatarUrl: imageVal,
     experience: doc.experience || '',
     status: doc.status || 'Active',
@@ -49,6 +56,12 @@ exports.getStudentFaculty = async (req, res) => {
     }
 
     const { search, department } = req.query;
+
+    const cacheKey = `faculty_student_${page}_${limit}_${(search || '').trim()}_${(department || '').trim()}`;
+    const cached = memoryCache.get(cacheKey);
+    if (cached) {
+      return res.status(200).json(cached);
+    }
 
     // Only fetch active faculty for students/public (case-insensitive for safety)
     const filter = {
@@ -84,13 +97,12 @@ exports.getStudentFaculty = async (req, res) => {
         .lean(),
     ]);
 
-    const facultyList = rawFacultyList.map(formatFacultyDoc);
+    const facultyList = rawFacultyList.map((f) => formatFacultyDoc(f, { isList: true }));
     const pagination = buildPaginationResponse(total, page, limit);
 
-    return res.status(200).json({
+    const responsePayload = {
       success: true,
       data: facultyList,
-      faculty: facultyList,
       pagination: pagination,
       count: facultyList.length,
       total: pagination.total,
@@ -100,7 +112,10 @@ exports.getStudentFaculty = async (req, res) => {
       pages: pagination.totalPages,
       hasNextPage: pagination.hasNextPage,
       hasPrevPage: pagination.hasPreviousPage,
-    });
+    };
+
+    memoryCache.set(cacheKey, responsePayload, 30);
+    return res.status(200).json(responsePayload);
   } catch (error) {
     console.error('Get Student Faculty Error:', error);
     return res.status(500).json({
@@ -168,6 +183,12 @@ exports.getAllFacultyAdmin = async (req, res) => {
     }
 
     const { search, department, status } = req.query;
+    const cacheKey = `faculty_admin_${page}_${limit}_${(search || '').trim()}_${(department || '').trim()}_${(status || '').trim()}`;
+    const cached = memoryCache.get(cacheKey);
+    if (cached) {
+      return res.status(200).json(cached);
+    }
+
     const filter = {};
 
     if (status && status.toLowerCase() !== 'all') {
@@ -201,13 +222,12 @@ exports.getAllFacultyAdmin = async (req, res) => {
         .lean(),
     ]);
 
-    const facultyList = rawFacultyList.map(formatFacultyDoc);
+    const facultyList = rawFacultyList.map((f) => formatFacultyDoc(f, { isList: true }));
     const pagination = buildPaginationResponse(total, page, limit);
 
-    return res.status(200).json({
+    const responsePayload = {
       success: true,
       data: facultyList,
-      faculty: facultyList,
       pagination: pagination,
       count: facultyList.length,
       total: pagination.total,
@@ -217,7 +237,10 @@ exports.getAllFacultyAdmin = async (req, res) => {
       pages: pagination.totalPages,
       hasNextPage: pagination.hasNextPage,
       hasPrevPage: pagination.hasPreviousPage,
-    });
+    };
+
+    memoryCache.set(cacheKey, responsePayload, 30);
+    return res.status(200).json(responsePayload);
   } catch (error) {
     console.error('Admin Get All Faculty Error:', error);
     return res.status(500).json({
@@ -271,6 +294,7 @@ exports.createFaculty = async (req, res) => {
     });
 
     await faculty.save();
+    memoryCache.del('faculty_');
 
     return res.status(201).json({
       success: true,
@@ -322,6 +346,8 @@ exports.updateFaculty = async (req, res) => {
       });
     }
 
+    memoryCache.del('faculty_');
+
     return res.status(200).json({
       success: true,
       message: 'Faculty member updated successfully',
@@ -354,6 +380,8 @@ exports.deleteFaculty = async (req, res) => {
         message: 'Faculty member not found',
       });
     }
+
+    memoryCache.del('faculty_');
 
     return res.status(200).json({
       success: true,

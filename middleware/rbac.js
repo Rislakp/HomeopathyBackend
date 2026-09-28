@@ -55,11 +55,6 @@ const requireAuth = async (req, res, next) => {
       });
     }
 
-    // ── DEBUG: Print the raw decoded JWT payload ───────────────────────────
-    if (process.env.DEBUG_AUTH === 'true') {
-      console.log('Decoded JWT Payload:', decoded);
-    }
-
     const userId =
       decoded.userId ||
       decoded.id ||
@@ -121,9 +116,6 @@ const requireAuth = async (req, res, next) => {
     }
 
     if (!foundUser) {
-      if (process.env.DEBUG_AUTH === 'true') {
-        console.warn(`[requireAuth] Token userId ${userId} not found in User, Admin, or Student collections.`);
-      }
       return res.status(401).json({
         success: false,
         message: 'User associated with this token no longer exists.',
@@ -191,13 +183,6 @@ const requireRole = (...allowedRoles) => {
 
         try {
           const userRole = (req.user?.role || '').toLowerCase().trim();
-          // ── DEBUG: verifyAdmin role check (req.user populated by requireAuth)
-          console.log('\n╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌');
-          console.log('  [verifyAdmin] Role check (via requireAuth callback)');
-          console.log('  req.user.role (resolved) :', userRole);
-          console.log('  allowedRoles             :', normalizedAllowedRoles);
-          console.log('  Access granted?          :', normalizedAllowedRoles.includes(userRole) || (userRole === 'superadmin' && normalizedAllowedRoles.includes('admin')));
-          console.log('╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌\n');
           if (
             normalizedAllowedRoles.includes(userRole) ||
             (userRole === 'superadmin' && normalizedAllowedRoles.includes('admin'))
@@ -218,13 +203,6 @@ const requireRole = (...allowedRoles) => {
     }
 
     const userRole = (req.user.role || '').toLowerCase().trim();
-    // ── DEBUG: verifyAdmin role check (req.user was pre-populated by a prior middleware)
-    console.log('\n╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌');
-    console.log('  [verifyAdmin] Role check (req.user already populated)');
-    console.log('  req.user.role  :', userRole);
-    console.log('  allowedRoles   :', normalizedAllowedRoles);
-    console.log('  Access granted?:', normalizedAllowedRoles.includes(userRole) || (userRole === 'superadmin' && normalizedAllowedRoles.includes('admin')));
-    console.log('╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌\n');
     if (
       normalizedAllowedRoles.includes(userRole) ||
       (userRole === 'superadmin' && normalizedAllowedRoles.includes('admin'))

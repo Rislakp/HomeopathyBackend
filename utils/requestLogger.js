@@ -20,20 +20,26 @@ function requestLogger(req, res, next) {
     const rounded = Math.round(durationMs * 100) / 100;
 
     const method = req.method;
-    const url = req.originalUrl || req.url;
+    const rawUrl = req.originalUrl || req.url;
     const status = res.statusCode;
 
-    let prefix = '[PERF]';
+    // Redact sensitive query parameters if present
+    const cleanUrl = rawUrl.replace(
+      /([?&](?:token|password|auth|secret|jwt|key)=)[^&]*/gi,
+      '$1[REDACTED]'
+    );
+
+    let severity = '';
     if (rounded > 2000) {
-      prefix = '[CRITICAL]';
+      severity = ' [CRITICAL]';
     } else if (rounded > 500) {
-      prefix = '[SLOW]';
+      severity = ' [SLOW]';
     }
 
     // Only log non-static/asset requests
-    const isAssetPath = /\.(js|css|ico|png|jpg|jpeg|gif|svg|woff|woff2|ttf|eot|map)$/i.test(url);
+    const isAssetPath = /\.(js|css|ico|png|jpg|jpeg|gif|svg|woff|woff2|ttf|eot|map)$/i.test(cleanUrl);
     if (!isAssetPath) {
-      console.log(`${prefix} ${method} ${url} → ${status} in ${rounded}ms`);
+      console.log(`[PERF] ${method} ${cleanUrl} ${status} ${rounded}ms${severity}`);
     }
   });
 
@@ -41,3 +47,4 @@ function requestLogger(req, res, next) {
 }
 
 module.exports = requestLogger;
+

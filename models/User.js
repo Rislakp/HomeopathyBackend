@@ -114,5 +114,7 @@ userSchema.methods.matchPassword = async function (enteredPassword) {
 
 // MongoDB performance indexes
 userSchema.index({ role: 1, createdAt: -1 });
+userSchema.index({ phone: 1 });
+userSchema.index({ contactNumber: 1 });
 
 module.exports = mongoose.models.User || mongoose.model('User', userSchema);

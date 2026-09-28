@@ -3,8 +3,9 @@ const router = express.Router();
 const unaniExamController = require('../controllers/unaniExam.controller');
 const { requireAuth, requireAdmin, requireCourseAccess } = require('../../../../middleware/rbac');
 
-// All routes in this module require authentication
-router.use(requireAuth);
+// All Unani routes in this module require authentication
+router.use('/api/unani-exams', requireAuth);
+router.use('/api/v1/unani-exams', requireAuth);
 
 // ─────────────────────────────────────────────────────────────────────────────
 // 0. STUDENT UNANI EXAM ROUTES (Declared BEFORE /:id dynamic routes)

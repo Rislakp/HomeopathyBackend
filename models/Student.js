@@ -211,6 +211,7 @@ studentSchema.index({ phone: 1 });
 studentSchema.index({ contactNumber: 1 });
 studentSchema.index({ courseRef: 1 });
 studentSchema.index({ courseId: 1 });
+studentSchema.index({ course: 1, createdAt: -1 });
 studentSchema.index({ subscriptionStatus: 1, createdAt: -1 });
 
 module.exports = mongoose.model('Student', studentSchema);

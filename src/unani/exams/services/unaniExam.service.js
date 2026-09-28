@@ -66,9 +66,24 @@ async function createExam(examData) {
 /**
  * Get all Unani exams
  */
-async function getAllExams(queryFilter = {}) {
-  const filter = { courseId: 'unani', examType: 'grand_mock_test', ...queryFilter };
-  return await UnaniExam.find(filter).select('-questions').sort({ createdAt: -1 }).lean();
+async function getAllExams({ page = 1, limit = 20, search = '', status = '' } = {}) {
+  const pageNum = Math.max(1, Number.parseInt(page, 10) || 1);
+  const limitNum = Math.max(1, Math.min(100, Number.parseInt(limit, 10) || 20));
+  const filter = { courseId: 'unani', examType: 'grand_mock_test' };
+  if (status && String(status).toLowerCase() !== 'all') filter.status = String(status);
+  if (search && String(search).trim()) {
+    filter.title = { $regex: String(search).trim().replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), $options: 'i' };
+  }
+  const [total, exams] = await Promise.all([
+    UnaniExam.countDocuments(filter),
+    UnaniExam.find(filter)
+      .select('_id title description examType courseId totalQuestions marksPerQuestion negativeMark negativeMarkPenalty durationMinutes status createdAt updatedAt')
+      .sort({ createdAt: -1 })
+      .skip((pageNum - 1) * limitNum)
+      .limit(limitNum)
+      .lean(),
+  ]);
+  return { exams, total, page: pageNum, limit: limitNum };
 }
 
 /**
@@ -418,6 +433,7 @@ async function getUnaniTestHistory({ page = 1, limit = 50, search = '' } = {}) {
 
   const [exams, total] = await Promise.all([
     UnaniExam.find(filter)
+      .select('-questions')
       .sort({ createdAt: -1 })
       .skip(skip)
       .limit(limitNum)
@@ -659,6 +675,7 @@ async function getStudentAvailableExams(reqUser) {
     examType: 'grand_mock_test',
     status: 'Published',
   })
+    .select('_id title description examType courseId totalQuestions marksPerQuestion negativeMark negativeMarkPenalty durationMinutes status createdAt updatedAt')
     .sort({ createdAt: -1 })
     .lean();
 

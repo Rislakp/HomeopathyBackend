@@ -352,17 +352,49 @@ function validateAndSanitizeQuestions(questions) {
   return { valid: true, questions: sanitizedQuestions };
 }
 
+// Concurrency control for expensive extractMCQs operations
+let activeExtractionCount = 0;
+const MAX_CONCURRENT_EXTRACTIONS = 1;
+const recentExtractions = new Map(); // key -> timestamp
+
 /**
  * POST /api/exams/extract-mcqs
  * Extracts MCQs from uploaded PDF file buffer.
  */
 async function extractMCQs(req, res) {
-  try {
-    const file = req.file || (req.files && req.files[0]);
-    if (!file) {
-      return res.status(400).json({ success: false, message: "No file uploaded." });
-    }
+  const file = req.file || (req.files && req.files[0]);
+  if (!file) {
+    return res.status(400).json({ success: false, message: "No file uploaded." });
+  }
 
+  // 1. Guard against concurrent expensive extractions that could exhaust memory
+  if (activeExtractionCount >= MAX_CONCURRENT_EXTRACTIONS) {
+    return res.status(429).json({
+      success: false,
+      message: "An MCQ extraction is already processing. Please wait a few seconds and try again."
+    });
+  }
+
+  // 2. Guard against rapid duplicate submissions (within 10s window)
+  const extractionKey = `${req.user?._id || req.ip}_${file.size}_${file.originalname}`;
+  const now = Date.now();
+  const lastRun = recentExtractions.get(extractionKey);
+  if (lastRun && (now - lastRun) < 10000) {
+    return res.status(429).json({
+      success: false,
+      message: "Duplicate extraction detected. Please wait a moment before re-uploading the same file."
+    });
+  }
+  recentExtractions.set(extractionKey, now);
+  // Clean up old extraction keys
+  if (recentExtractions.size > 50) {
+    for (const [k, v] of recentExtractions) {
+      if (now - v > 60000) recentExtractions.delete(k);
+    }
+  }
+
+  activeExtractionCount++;
+  try {
     const fileName = (file.originalname || '').toLowerCase();
     const buffer = file.buffer;
     let questions = [];
@@ -435,6 +467,8 @@ async function extractMCQs(req, res) {
       message: "Failed to extract questions from file.",
       error: error.message
     });
+  } finally {
+    activeExtractionCount--;
   }
 }
 
@@ -742,6 +776,23 @@ async function getAllGrandMocks(req, res) {
         ];
       }
       // For Admins / Staff: no testType restriction, so all tests are returned!
+    }
+
+    // Support search query on exam title, courseName & moduleName
+    if (reqQuery.search && typeof reqQuery.search === 'string' && reqQuery.search.trim()) {
+      const searchStr = reqQuery.search.trim().replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      const searchRegex = new RegExp(searchStr, 'i');
+      const searchCondition = [
+        { title: searchRegex },
+        { courseName: searchRegex },
+        { moduleName: searchRegex }
+      ];
+      if (filter.$or) {
+        filter.$and = [{ $or: filter.$or }, { $or: searchCondition }];
+        delete filter.$or;
+      } else {
+        filter.$or = searchCondition;
+      }
     }
 
     // ── Pagination ──

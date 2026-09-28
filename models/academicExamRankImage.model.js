@@ -60,9 +60,6 @@ const academicExamRankImageSchema = new mongoose.Schema(
   }
 );
 
-// MongoDB unique index constraint: strictly one rank image per Academic exam
-academicExamRankImageSchema.index({ examId: 1 }, { unique: true });
-
 module.exports =
   mongoose.models.AcademicExamRankImage ||
   mongoose.model('AcademicExamRankImage', academicExamRankImageSchema);
