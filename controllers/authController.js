@@ -154,14 +154,21 @@ const registerStudent = async (req, res) => {
 
     let enrolledCourse = null;
     if (finalCourse) {
+      const cleanCourse = finalCourse.trim();
+      const escapedCourse = cleanCourse.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
       const courseQuery = [
-        { courseId: finalCourse },
-        { courseTitle: finalCourse },
+        { courseId: cleanCourse },
+        { courseTitle: cleanCourse },
+        { courseTitle: new RegExp("^" + escapedCourse + "$", "i") },
+        { courseId: new RegExp("^" + escapedCourse + "$", "i") },
       ];
-      if (require('mongoose').Types.ObjectId.isValid(finalCourse)) {
-        courseQuery.push({ _id: finalCourse });
+      if (require("mongoose").Types.ObjectId.isValid(cleanCourse)) {
+        courseQuery.push({ _id: cleanCourse });
       }
-      enrolledCourse = await Course.findOne({ $or: courseQuery }).select('_id courseId courseTitle');
+      if (/^unani$/i.test(cleanCourse)) {
+        courseQuery.push({ category: /^unani$/i });
+      }
+      enrolledCourse = await Course.findOne({ $or: courseQuery }).select("_id courseId courseTitle category");
     }
 
     if (!enrolledCourse) {

@@ -169,6 +169,8 @@ app.use('/api/students/self', require('./routes/studentRoutes'));
 app.use('/api/v1/students/self', require('./routes/studentRoutes'));
 app.use('/api/faculty_new', require('./routes/facultyRoutes'));
 app.use('/api/admin/students', require('./routes/adminStudentRoutes'));
+app.use('/api/unani-exams', require('./routes/unaniExamRoutes'));
+app.use('/api/v1/unani-exams', require('./routes/unaniExamRoutes'));
 
 const examRoutes = require('./routes/exam.routes');
 app.use(examRoutes);

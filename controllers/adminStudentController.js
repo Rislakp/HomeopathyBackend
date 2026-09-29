@@ -1137,6 +1137,14 @@ async function updateAdminStudent(req, res) {
       }
       if (updateFields.dateOfBirth) userUpdateFields.dateOfBirth = updateFields.dateOfBirth;
       if (updateFields.qualification) userUpdateFields.qualification = updateFields.qualification;
+      if (updateFields.profileImage !== undefined) {
+        userUpdateFields.profileImage = updateFields.profileImage;
+        userUpdateFields.avatar = updateFields.profileImage;
+      }
+      if (updateFields.avatar !== undefined) {
+        userUpdateFields.avatar = updateFields.avatar;
+        userUpdateFields.profileImage = updateFields.avatar;
+      }
 
       if (Object.keys(userUpdateFields).length > 0) {
         if (updatedStudent.userId) {
@@ -1600,6 +1608,204 @@ async function rejectStudent(req, res) {
 
 
 
+
+/**
+ * POST/PUT /api/admin/students/:id/avatar
+ * Upload or update student avatar/profile image.
+ */
+async function uploadStudentAvatar(req, res) {
+  try {
+    const { id } = req.params;
+    let imageUrl = '';
+
+    if (req.files && req.files.length > 0) {
+      const file = req.files[0];
+      imageUrl = file.cloudinaryUrl || file.secure_url || file.url || file.path || '';
+    } else if (req.file) {
+      imageUrl = req.file.cloudinaryUrl || req.file.secure_url || req.file.url || req.file.path || '';
+    }
+
+    if (!imageUrl) {
+      imageUrl = req.body.profileImage || req.body.avatar || req.body.imageUrl || req.body.url || '';
+    }
+
+    imageUrl = String(imageUrl || '').trim();
+
+    let student = null;
+    if (mongoose.Types.ObjectId.isValid(id)) {
+      const studentObjId = new mongoose.Types.ObjectId(id);
+      student = await Student.findById(studentObjId);
+      if (!student) {
+        student = await Student.findOne({ userId: studentObjId });
+      }
+    }
+    if (!student) {
+      student = await Student.findOne({ $or: [{ studentId: id }, { email: id }] });
+    }
+    if (!student) {
+      const user = await User.findOne({
+        $or: [
+          ...(mongoose.Types.ObjectId.isValid(id) ? [{ _id: new mongoose.Types.ObjectId(id) }] : []),
+          { email: id }
+        ]
+      });
+      if (user) {
+        student = await Student.findOne({ $or: [{ userId: user._id }, { email: user.email }] });
+        if (!student) {
+          student = await Student.create({
+            userId: user._id,
+            name: user.name,
+            email: user.email,
+            phone: user.phone || user.contactNumber,
+            profileImage: imageUrl,
+            avatar: imageUrl,
+            course: 'General',
+            subscription: 'Free',
+            status: 'Active',
+          });
+        }
+        await User.findByIdAndUpdate(user._id, { $set: { profileImage: imageUrl, avatar: imageUrl } });
+      }
+    }
+
+    if (!student) {
+      return res.status(404).json({
+        success: false,
+        message: 'Student not found',
+      });
+    }
+
+    student.profileImage = imageUrl;
+    student.avatar = imageUrl;
+    await student.save();
+
+    if (student.userId) {
+      await User.findByIdAndUpdate(student.userId, { $set: { profileImage: imageUrl, avatar: imageUrl } });
+    } else if (student.email) {
+      await User.findOneAndUpdate({ email: student.email }, { $set: { profileImage: imageUrl, avatar: imageUrl } });
+    }
+
+    return res.status(200).json({
+      success: true,
+      message: 'Student profile image updated successfully',
+      data: {
+        studentId: student._id.toString(),
+        profileImage: imageUrl,
+        avatar: imageUrl,
+      },
+      profileImage: imageUrl,
+    });
+  } catch (error) {
+    console.error('Error in uploadStudentAvatar:', error);
+    return res.status(500).json({
+      success: false,
+      message: 'Failed to update student profile image',
+      error: error.message,
+    });
+  }
+}
+
+/**
+ * DELETE /api/admin/students/:id/avatar
+ * Remove student avatar/profile image.
+ */
+async function deleteStudentAvatar(req, res) {
+  try {
+    const { id } = req.params;
+    let student = null;
+    if (mongoose.Types.ObjectId.isValid(id)) {
+      const studentObjId = new mongoose.Types.ObjectId(id);
+      student = await Student.findById(studentObjId);
+      if (!student) {
+        student = await Student.findOne({ userId: studentObjId });
+      }
+    }
+    if (!student) {
+      student = await Student.findOne({ $or: [{ studentId: id }, { email: id }] });
+    }
+    if (!student) {
+      const user = await User.findOne({
+        $or: [
+          ...(mongoose.Types.ObjectId.isValid(id) ? [{ _id: new mongoose.Types.ObjectId(id) }] : []),
+          { email: id }
+        ]
+      });
+      if (user) {
+        student = await Student.findOne({ $or: [{ userId: user._id }, { email: user.email }] });
+        await User.findByIdAndUpdate(user._id, { $set: { profileImage: '', avatar: '' } });
+      }
+    }
+
+    if (!student) {
+      return res.status(404).json({
+        success: false,
+        message: 'Student not found',
+      });
+    }
+
+    student.profileImage = '';
+    student.avatar = '';
+    await student.save();
+
+    if (student.userId) {
+      await User.findByIdAndUpdate(student.userId, { $set: { profileImage: '', avatar: '' } });
+    } else if (student.email) {
+      await User.findOneAndUpdate({ email: student.email }, { $set: { profileImage: '', avatar: '' } });
+    }
+
+    return res.status(200).json({
+      success: true,
+      message: 'Student profile image removed successfully',
+      profileImage: '',
+    });
+  } catch (error) {
+    console.error('Error in deleteStudentAvatar:', error);
+    return res.status(500).json({
+      success: false,
+      message: 'Failed to remove student profile image',
+      error: error.message,
+    });
+  }
+}
+
+/**
+ * GET /api/admin/students/:id/avatar
+ * Return student avatar/profile image.
+ */
+async function getStudentAvatar(req, res) {
+  try {
+    const { id } = req.params;
+    let student = null;
+    let user = null;
+    if (mongoose.Types.ObjectId.isValid(id)) {
+      const studentObjId = new mongoose.Types.ObjectId(id);
+      student = await Student.findById(studentObjId).lean();
+      if (!student) {
+        user = await User.findById(studentObjId).lean();
+      }
+    }
+    if (!student && !user) {
+      student = await Student.findOne({ $or: [{ studentId: id }, { email: id }] }).lean();
+      if (!student) {
+        user = await User.findOne({ email: id }).lean();
+      }
+    }
+
+    const profileImage = student?.profileImage || student?.avatar || user?.profileImage || user?.avatar || '';
+
+    return res.status(200).json({
+      success: true,
+      profileImage,
+    });
+  } catch (error) {
+    return res.status(500).json({
+      success: false,
+      message: 'Failed to get student avatar',
+      error: error.message,
+    });
+  }
+}
+
 module.exports = {
   getAdminStudents,
   getAdminStudentById,
@@ -1614,5 +1820,8 @@ module.exports = {
   exportStudentsScores,
   approveStudent,
   rejectStudent,
+  uploadStudentAvatar,
+  deleteStudentAvatar,
+  getStudentAvatar,
 };
 

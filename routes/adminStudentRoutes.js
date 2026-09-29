@@ -9,6 +9,9 @@ const {
   exportStudentsScores,
   approveStudent,
   rejectStudent,
+  uploadStudentAvatar,
+  deleteStudentAvatar,
+  getStudentAvatar,
 } = require('../controllers/adminStudentController');
 const { adminAuth } = require('../middleware/adminAuth.middleware');
 
@@ -73,6 +76,41 @@ router.patch('/:id/reject', rejectStudent);
  * @access  Private / Admin
  */
 router.put('/:id/status', approveStudent);
+
+// Multer file upload handler
+const upload = require('../middleware/upload');
+const handleFileUpload = (req, res, next) => {
+  upload.any()(req, res, (err) => {
+    if (err) {
+      return upload.handleUploadError(err, req, res, next);
+    }
+    return upload.processUploadsToCloudinary(req, res, next);
+  });
+};
+
+/**
+ * @route   POST /api/admin/students/:id/avatar
+ * @route   PUT  /api/admin/students/:id/avatar
+ * @desc    Upload or update student profile image
+ * @access  Private / Admin
+ */
+router.post('/:id/avatar', handleFileUpload, uploadStudentAvatar);
+router.put('/:id/avatar', handleFileUpload, uploadStudentAvatar);
+
+/**
+ * @route   DELETE /api/admin/students/:id/avatar
+ * @desc    Remove student profile image
+ * @access  Private / Admin
+ */
+router.delete('/:id/avatar', deleteStudentAvatar);
+
+/**
+ * @route   GET /api/admin/students/:id/avatar
+ * @desc    Get student profile image
+ * @access  Private / Admin
+ */
+router.get('/:id/avatar', getStudentAvatar);
+
 router.patch('/:id/status', approveStudent);
 
 // =========================================================================
