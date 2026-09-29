@@ -876,6 +876,8 @@ async function submitStudentExam(examId, reqUser, submissionData = {}) {
 
   await newResult.save();
 
+  const attemptedQuestions = correctAnswers + wrongAnswers;
+
   return {
     resultId: newResult._id.toString(),
     examId: exam._id.toString(),
@@ -886,9 +888,17 @@ async function submitStudentExam(examId, reqUser, submissionData = {}) {
     wrong: wrongAnswers,
     wrongAnswers: wrongAnswers,
     unanswered: unanswered,
+    unansweredQuestions: unanswered,
+    attemptedQuestions: attemptedQuestions,
     totalMarks: totalMarks,
+    maximumScore: totalMarks,
     percentage: percentage,
+    marksPerQuestion: marksPerQuestion,
+    negativeMark: penalty,
+    totalQuestions: totalQuestions,
+    status: 'Completed',
     timeTakenSeconds: timeTakenSeconds,
+    timeTaken: timeTakenSeconds,
     submittedAt: newResult.createdAt,
   };
 }
@@ -916,6 +926,10 @@ async function getStudentResultByExam(examId, reqUser) {
     return { notFound: true };
   }
 
+  const exam = await UnaniExam.findById(result.examId).select('marksPerQuestion negativeMark negativeMarkPenalty totalQuestions questions').lean();
+  const totalQuestions = result.answers ? result.answers.length : (exam ? (exam.totalQuestions || (exam.questions ? exam.questions.length : 0)) : 0);
+  const attemptedQuestions = (result.correctAnswers || 0) + (result.wrongAnswers || 0);
+
   return {
     resultId: result._id.toString(),
     examId: result.examId.toString(),
@@ -926,9 +940,17 @@ async function getStudentResultByExam(examId, reqUser) {
     wrong: result.wrongAnswers,
     wrongAnswers: result.wrongAnswers,
     unanswered: result.unanswered,
+    unansweredQuestions: result.unanswered,
+    attemptedQuestions: attemptedQuestions,
     totalMarks: result.totalMarks,
+    maximumScore: result.totalMarks,
     percentage: result.percentage,
+    marksPerQuestion: exam ? (exam.marksPerQuestion || 1) : 1,
+    negativeMark: exam ? (exam.negativeMark || exam.negativeMarkPenalty || 0) : 0,
+    totalQuestions: totalQuestions,
+    status: result.status || 'Completed',
     timeTakenSeconds: result.timeTakenSeconds || 0,
+    timeTaken: result.timeTakenSeconds || 0,
     submittedAt: result.createdAt,
   };
 }
