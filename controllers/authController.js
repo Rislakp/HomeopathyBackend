@@ -1,3 +1,4 @@
+const mongoose = require('mongoose');
 const jwt = require('jsonwebtoken');
 const User = require('../models/User');
 const Course = require('../models/Course');
@@ -66,22 +67,24 @@ const buildUserResponse = async (user, studentDoc = null, options = {}) => {
   // Fast single-roundtrip course resolution using $or query
   let targetCourse = null;
   const courseConditions = [];
-  if (courseRef && require('mongoose').Types.ObjectId.isValid(courseRef)) {
-    courseConditions.push({ _id: new require('mongoose').Types.ObjectId(courseRef) });
+  if (courseRef && mongoose.Types.ObjectId.isValid(courseRef)) {
+    courseConditions.push({ _id: new mongoose.Types.ObjectId(courseRef) });
   }
   if (courseId) {
     courseConditions.push({ courseId });
     if (/^[0-9a-fA-F]{24}$/.test(courseId)) {
-      courseConditions.push({ _id: new require('mongoose').Types.ObjectId(courseId) });
+      courseConditions.push({ _id: new mongoose.Types.ObjectId(courseId) });
     }
   }
   if (courseTitle) {
-    courseConditions.push({ courseTitle: new RegExp(`^${courseTitle.trim()}$`, 'i') });
-    courseConditions.push({ title: new RegExp(`^${courseTitle.trim()}$`, 'i') });
+    const escapedTitle = courseTitle.trim().replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    courseConditions.push({ courseTitle: new RegExp(`^${escapedTitle}$`, 'i') });
+    courseConditions.push({ title: new RegExp(`^${escapedTitle}$`, 'i') });
   }
   if (preferredCourse && preferredCourse !== courseTitle) {
-    courseConditions.push({ courseTitle: new RegExp(`^${preferredCourse.trim()}$`, 'i') });
-    courseConditions.push({ title: new RegExp(`^${preferredCourse.trim()}$`, 'i') });
+    const escapedPref = preferredCourse.trim().replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    courseConditions.push({ courseTitle: new RegExp(`^${escapedPref}$`, 'i') });
+    courseConditions.push({ title: new RegExp(`^${escapedPref}$`, 'i') });
   }
 
   if (courseConditions.length > 0) {
@@ -313,14 +316,16 @@ const registerStudent = async (req, res) => {
 
     let enrolledCourse = null;
     if (finalCourse) {
+      const escapedCourse = finalCourse.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
       const courseQuery = [
-        { courseId: finalCourse },
-        { courseTitle: finalCourse },
+        { courseId: new RegExp(`^${escapedCourse}$`, 'i') },
+        { courseTitle: new RegExp(`^${escapedCourse}$`, 'i') },
+        { title: new RegExp(`^${escapedCourse}$`, 'i') },
       ];
-      if (require('mongoose').Types.ObjectId.isValid(finalCourse)) {
-        courseQuery.push({ _id: finalCourse });
+      if (mongoose.Types.ObjectId.isValid(finalCourse)) {
+        courseQuery.push({ _id: new mongoose.Types.ObjectId(finalCourse) });
       }
-      enrolledCourse = await Course.findOne({ $or: courseQuery }).select('_id courseId courseTitle');
+      enrolledCourse = await Course.findOne({ $or: courseQuery }).select('_id courseId courseTitle title');
     }
 
     if (finalCourse && !enrolledCourse) {
@@ -351,68 +356,109 @@ const registerStudent = async (req, res) => {
       });
     }
 
-    const resolvedCourseRef = enrolledCourse ? enrolledCourse._id : null;
-    const resolvedCourseId = enrolledCourse ? (enrolledCourse.courseId || enrolledCourse._id.toString()) : '';
-    const resolvedCourseTitle = enrolledCourse ? (enrolledCourse.courseTitle || finalCourse) : finalCourse;
-
-    // -----------------------------
-    // CREATE USER (Role strictly set to "student")
-    // -----------------------------
-    const user = await User.create({
-      name: finalName,
-      email: cleanEmail,
-      password: password,
-      role: 'student',
-      dateOfBirth: finalDob,
-      contactNumber: finalPhone,
-      phone: finalPhone,
-      qualification: finalQualification,
-      preferredCourse: finalCourse,
-      course: resolvedCourseTitle,
-      courseId: resolvedCourseId,
-      courseRef: resolvedCourseRef,
-    });
-
-    // -----------------------------
-    // SYNC STUDENT MODEL IF AVAILABLE
-    // -----------------------------
-    let studentDoc = null;
     if (Student) {
-      try {
-        studentDoc = await Student.create({
-          userId: user._id,
-          name: finalName,
-          email: cleanEmail,
-          dateOfBirth: finalDob,
-          contactNumber: finalPhone,
-          phone: finalPhone,
-          qualification: finalQualification,
-          preferredCourse: finalCourse,
-          course: resolvedCourseTitle,
-          courseId: resolvedCourseId,
-          courseRef: resolvedCourseRef,
-          // course & subscription now have safe defaults in the schema
+      const existingStudent = await Student.findOne({
+        $or: [
+          { email: cleanEmail },
+          { phone: finalPhone },
+          { contactNumber: finalPhone },
+        ],
+      });
+      if (existingStudent) {
+        const isEmailDup = existingStudent.email === cleanEmail;
+        return res.status(400).json({
+          success: false,
+          message: isEmailDup
+            ? 'Account with this email already exists'
+            : 'Account with this contact number already exists',
         });
-      } catch (studentErr) {
-        // Log but never block registration — Student doc is supplementary
-        console.warn('[registerStudent] Student sync warning:', studentErr.message);
       }
     }
 
-    // -----------------------------
-    // GENERATE TOKEN & RESPONSE
-    // -----------------------------
-    const token = generateToken(user);
+    const resolvedCourseRef = enrolledCourse ? enrolledCourse._id : null;
+    const resolvedCourseId = enrolledCourse ? (enrolledCourse.courseId || enrolledCourse._id.toString()) : '';
+    const resolvedCourseTitle = enrolledCourse ? (enrolledCourse.courseTitle || enrolledCourse.title || finalCourse) : finalCourse;
 
-    return res.status(201).json({
-      success: true,
-      message: 'Student registered successfully',
-      token,
-      role: 'student',
-      user: await buildUserResponse(user, studentDoc),
-    });
+    let createdUser = null;
+    let createdStudent = null;
+
+    try {
+      // -----------------------------
+      // CREATE USER (Role strictly set to "student")
+      // -----------------------------
+      createdUser = await User.create({
+        name: finalName,
+        email: cleanEmail,
+        password: password,
+        role: 'student',
+        dateOfBirth: finalDob,
+        contactNumber: finalPhone,
+        phone: finalPhone,
+        qualification: finalQualification,
+        preferredCourse: finalCourse,
+        course: resolvedCourseTitle,
+        courseId: resolvedCourseId,
+        courseRef: resolvedCourseRef,
+        status: 'Pending',
+        accountStatus: 'Pending',
+        isApproved: false,
+      });
+
+      // -----------------------------
+      // SYNC STUDENT MODEL IF AVAILABLE
+      // -----------------------------
+      if (Student) {
+        try {
+          createdStudent = await Student.create({
+            userId: createdUser._id,
+            name: finalName,
+            email: cleanEmail,
+            dateOfBirth: finalDob,
+            contactNumber: finalPhone,
+            phone: finalPhone,
+            qualification: finalQualification,
+            preferredCourse: finalCourse,
+            course: resolvedCourseTitle,
+            courseId: resolvedCourseId,
+            courseRef: resolvedCourseRef,
+            status: 'Pending',
+            accountStatus: 'Pending',
+            isApproved: false,
+            isActive: false,
+          });
+        } catch (studentErr) {
+          // Log but never block registration — Student doc is supplementary
+          console.warn('[registerStudent] Student sync warning:', studentErr.message);
+        }
+      }
+
+      // -----------------------------
+      // GENERATE TOKEN & RESPONSE
+      // -----------------------------
+      const token = generateToken(createdUser, createdStudent);
+
+      return res.status(201).json({
+        success: true,
+        message: 'Student registered successfully',
+        token,
+        role: 'student',
+        user: await buildUserResponse(createdUser, createdStudent),
+      });
+    } catch (innerErr) {
+      if (createdUser && createdUser._id) {
+        try {
+          await User.deleteOne({ _id: createdUser._id });
+          if (Student) {
+            await Student.deleteOne({ userId: createdUser._id });
+          }
+        } catch (cleanupErr) {
+          console.warn('Failed to clean up partial user record:', cleanupErr.message);
+        }
+      }
+      throw innerErr;
+    }
   } catch (error) {
-    console.error('Student Registration Error:', error);
+    console.error('Student Registration Error:', error.message || error);
     if (error.code === 11000) {
       return res.status(400).json({
         success: false,

@@ -73,6 +73,21 @@ const userSchema = new mongoose.Schema(
       ref: 'Course',
       default: null,
     },
+    status: {
+      type: String,
+      enum: ['Pending', 'Active', 'Inactive', 'Trial', 'Expired'],
+      default: 'Pending',
+    },
+    accountStatus: {
+      type: String,
+      enum: ['Pending', 'Approved', 'Rejected', 'Suspended'],
+      default: 'Pending',
+      trim: true,
+    },
+    isApproved: {
+      type: Boolean,
+      default: false,
+    },
   },
   {
     timestamps: true,
