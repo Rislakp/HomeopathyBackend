@@ -1,4 +1,4 @@
-const jwt = require('jsonwebtoken');
+﻿const jwt = require('jsonwebtoken');
 const User = require('../models/User');
 const Course = require('../models/Course');
 let Student;
@@ -172,10 +172,11 @@ const registerStudent = async (req, res) => {
     }
 
     if (!enrolledCourse) {
-      return res.status(400).json({
-        success: false,
-        message: 'Please select a valid course during registration.',
-      });
+      // Course not found in DB - allow registration to proceed.
+      // preferredCourse is stored as a string; courseRef/courseId will be empty.
+      // This handles valid programs (e.g. UNANI) that may not yet have a
+      // corresponding Course document in the database.
+      console.warn('[registerStudent] Course not found for preferredCourse="' + finalCourse + '". Proceeding without courseRef.');
     }
 
     // -----------------------------
@@ -242,7 +243,7 @@ const registerStudent = async (req, res) => {
           // course & subscription now have safe defaults in the schema
         });
       } catch (studentErr) {
-        // Log but never block registration — Student doc is supplementary
+        // Log but never block registration â€” Student doc is supplementary
         console.warn('[registerStudent] Student sync warning:', studentErr.message);
       }
     }
