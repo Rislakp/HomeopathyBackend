@@ -317,15 +317,27 @@ const registerStudent = async (req, res) => {
     let enrolledCourse = null;
     if (finalCourse) {
       const escapedCourse = finalCourse.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      const cleanCourse = finalCourse.trim();
+      const escapedCourse = cleanCourse.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
       const courseQuery = [
         { courseId: new RegExp(`^${escapedCourse}$`, 'i') },
         { courseTitle: new RegExp(`^${escapedCourse}$`, 'i') },
         { title: new RegExp(`^${escapedCourse}$`, 'i') },
+        { courseId: cleanCourse },
+        { courseTitle: cleanCourse },
+        { courseTitle: new RegExp("^" + escapedCourse + "$", "i") },
+        { courseId: new RegExp("^" + escapedCourse + "$", "i") },
       ];
       if (mongoose.Types.ObjectId.isValid(finalCourse)) {
         courseQuery.push({ _id: new mongoose.Types.ObjectId(finalCourse) });
+      if (require("mongoose").Types.ObjectId.isValid(cleanCourse)) {
+        courseQuery.push({ _id: cleanCourse });
+      }
+      if (/^unani$/i.test(cleanCourse)) {
+        courseQuery.push({ category: /^unani$/i });
       }
       enrolledCourse = await Course.findOne({ $or: courseQuery }).select('_id courseId courseTitle title');
+      enrolledCourse = await Course.findOne({ $or: courseQuery }).select("_id courseId courseTitle category");
     }
 
     if (finalCourse && !enrolledCourse) {
@@ -333,6 +345,12 @@ const registerStudent = async (req, res) => {
         success: false,
         message: 'Please select a valid course during registration.',
       });
+    if (!enrolledCourse) {
+      // Course not found in DB - allow registration to proceed.
+      // preferredCourse is stored as a string; courseRef/courseId will be empty.
+      // This handles valid programs (e.g. UNANI) that may not yet have a
+      // corresponding Course document in the database.
+      console.warn('[registerStudent] Course not found for preferredCourse="' + finalCourse + '". Proceeding without courseRef.');
     }
 
     // -----------------------------
@@ -431,6 +449,31 @@ const registerStudent = async (req, res) => {
           console.warn('[registerStudent] Student sync warning:', studentErr.message);
         }
       }
+    // -----------------------------
+    // SYNC STUDENT MODEL IF AVAILABLE
+    // -----------------------------
+    let studentDoc = null;
+    if (Student) {
+      try {
+        studentDoc = await Student.create({
+          userId: user._id,
+          name: finalName,
+          email: cleanEmail,
+          dateOfBirth: finalDob,
+          contactNumber: finalPhone,
+          phone: finalPhone,
+          qualification: finalQualification,
+          preferredCourse: finalCourse,
+          course: resolvedCourseTitle,
+          courseId: resolvedCourseId,
+          courseRef: resolvedCourseRef,
+          // course & subscription now have safe defaults in the schema
+        });
+      } catch (studentErr) {
+        // Log but never block registration â€” Student doc is supplementary
+        console.warn('[registerStudent] Student sync warning:', studentErr.message);
+      }
+    }
 
       // -----------------------------
       // GENERATE TOKEN & RESPONSE

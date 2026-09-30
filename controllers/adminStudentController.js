@@ -43,8 +43,23 @@ async function syncStudentUsers() {
           dateOfBirth: u.dateOfBirth || '',
           qualification: u.qualification || '',
           course: 'General',
+          name: u.name || 'Student',
+          email: u.email,
+          phone: u.phone || u.contactNumber || '',
+          contactNumber: u.contactNumber || u.phone || '',
+          dateOfBirth: u.dateOfBirth || '',
+          qualification: u.qualification || '',
+          profileImage: u.profileImage || u.avatar || '',
+          avatar: u.avatar || u.profileImage || '',
+          preferredCourse: u.preferredCourse || u.course || 'UNANI',
+          course: u.course || u.preferredCourse || 'UNANI',
+          courseId: u.courseId || '',
+          courseRef: u.courseRef || null,
           subscription: 'Free',
-          status: 'Active',
+          status: u.status || 'Pending',
+          accountStatus: u.accountStatus || 'Pending',
+          isApproved: u.isApproved || false,
+          isActive: u.isActive || false,
           joinedDate: u.createdAt || new Date()
         });
       }
@@ -322,6 +337,323 @@ async function getAdminStudents(req, res) {
         updated_at: s.updatedAt,
       };
     });
+    // 3. High-Performance MongoDB Aggregation Pipeline
+    const pipeline = [
+      // Step A: Apply Initial Filtering
+      { $match: matchConditions },
+
+      // Step B: Lookup User Details for additional metadata / avatar
+      {
+        $lookup: {
+          from: 'users',
+          let: { uId: '$userId', sEmail: '$email' },
+          pipeline: [
+            {
+              $match: {
+                $expr: {
+                  $or: [
+                    { $eq: ['$_id', '$$uId'] },
+                    { $eq: ['$email', '$$sEmail'] }
+                  ]
+                }
+              }
+            },
+            { $limit: 1 }
+          ],
+          as: 'userDetails'
+        }
+      },
+      {
+        $addFields: {
+          userObj: { $arrayElemAt: ['$userDetails', 0] }
+        }
+      },
+
+      // Step C: Lookup Enrolled Course Details
+      {
+        $lookup: {
+          from: 'courses',
+          let: { studentCourse: '$course', studentCourseRef: '$courseRef' },
+          pipeline: [
+            {
+              $match: {
+                $expr: {
+                  $or: [
+                    { $eq: ['$_id', '$$studentCourseRef'] },
+                    { $eq: ['$courseId', '$$studentCourse'] },
+                    { $eq: ['$courseTitle', '$$studentCourse'] }
+                  ]
+                }
+              }
+            },
+            { $limit: 1 }
+          ],
+          as: 'courseDetails'
+        }
+      },
+      {
+        $addFields: {
+          courseObj: { $arrayElemAt: ['$courseDetails', 0] }
+        }
+      },
+
+      // Step D: Lookup Test Results and Resolve Exam Names & Scores
+      {
+        $lookup: {
+          from: 'testresults',
+          let: { studentDocId: '$_id', userDocId: '$userId' },
+          pipeline: [
+            {
+              $match: {
+                $expr: {
+                  $or: [
+                    { $eq: ['$studentId', '$$studentDocId'] },
+                    {
+                      $and: [
+                        { $ne: ['$$userDocId', null] },
+                        { $eq: ['$studentId', '$$userDocId'] }
+                      ]
+                    }
+                  ]
+                }
+              }
+            },
+            { $sort: { createdAt: -1 } },
+            {
+              $lookup: {
+                from: 'exams',
+                localField: 'examId',
+                foreignField: '_id',
+                as: 'examInfo'
+              }
+            },
+            {
+              $unwind: {
+                path: '$examInfo',
+                preserveNullAndEmptyArrays: true
+              }
+            },
+            {
+              $project: {
+                exam_id: '$examId',
+                title: { $ifNull: ['$examInfo.title', 'Mock Exam'] },
+                score: { $ifNull: ['$score', 0] },
+                total_marks: { $ifNull: ['$totalMarks', 0] },
+                total_attempted: { $ifNull: ['$totalAttempted', 0] },
+                total_correct: { $ifNull: ['$totalCorrect', 0] },
+                total_wrong: { $ifNull: ['$totalWrong', 0] },
+                percentage: {
+                  $cond: {
+                    if: { $gt: ['$totalMarks', 0] },
+                    then: {
+                      $round: [
+                        { $multiply: [{ $divide: ['$score', '$totalMarks'] }, 100] },
+                        2
+                      ]
+                    },
+                    else: 0
+                  }
+                },
+                status: {
+                  $cond: {
+                    if: {
+                      $and: [
+                        { $gt: ['$totalMarks', 0] },
+                        { $gte: [{ $divide: ['$score', '$totalMarks'] }, 0.5] }
+                      ]
+                    },
+                    then: 'Passed',
+                    else: 'Failed'
+                  }
+                },
+                submitted_at: '$createdAt'
+              }
+            }
+          ],
+          as: 'attended_exams'
+        }
+      },
+
+      // Step E: Compute Summary Metrics
+      {
+        $addFields: {
+          total_exams_attended: { $size: '$attended_exams' },
+          average_score: {
+            $cond: {
+              if: { $gt: [{ $size: '$attended_exams' }, 0] },
+              then: { $round: [{ $avg: '$attended_exams.percentage' }, 2] },
+              else: 0
+            }
+          },
+          passed_exams: {
+            $size: {
+              $filter: {
+                input: '$attended_exams',
+                as: 'exam',
+                cond: { $eq: ['$$exam.status', 'Passed'] }
+              }
+            }
+          }
+        }
+      },
+
+      // Step F: Facet for Single-Trip Pagination and Count
+      {
+        $facet: {
+          metadata: [{ $count: 'total' }],
+          data: [
+            { $sort: { createdAt: -1 } },
+            { $skip: skip },
+            { $limit: limit },
+            {
+              $project: {
+                _id: 0,
+                id: { $toString: '$_id' },
+                student_id: { $toString: '$_id' },
+                name: '$name',
+                email: '$email',
+                phone: {
+                  $ifNull: [
+                    '$phone',
+                    {
+                      $ifNull: [
+                        '$contactNumber',
+                        {
+                          $ifNull: [
+                            '$userObj.phone',
+                            { $ifNull: ['$userObj.contactNumber', ''] }
+                          ]
+                        }
+                      ]
+                    }
+                  ]
+                },
+                contact_number: {
+                  $ifNull: [
+                    '$contactNumber',
+                    {
+                      $ifNull: [
+                        '$phone',
+                        {
+                          $ifNull: [
+                            '$userObj.contactNumber',
+                            { $ifNull: ['$userObj.phone', ''] }
+                          ]
+                        }
+                      ]
+                    }
+                  ]
+                },
+                date_of_birth: {
+                  $ifNull: ['$dateOfBirth', { $ifNull: ['$userObj.dateOfBirth', ''] }]
+                },
+                qualification: {
+                  $ifNull: ['$qualification', { $ifNull: ['$userObj.qualification', ''] }]
+                },
+                profile_image: {
+                  $ifNull: [
+                    '$profileImage',
+                    {
+                      $ifNull: [
+                        '$avatar',
+                        {
+                          $ifNull: [
+                            '$userObj.profileImage',
+                            { $ifNull: ['$userObj.avatar', ''] }
+                          ]
+                        }
+                      ]
+                    }
+                  ]
+                },
+                avatar: {
+                  $ifNull: [
+                    '$avatar',
+                    {
+                      $ifNull: [
+                        '$profileImage',
+                        {
+                          $ifNull: [
+                            '$userObj.avatar',
+                            { $ifNull: ['$userObj.profileImage', ''] }
+                          ]
+                        }
+                      ]
+                    }
+                  ]
+                },
+                preferredCourse: {
+                  $ifNull: ['$preferredCourse', { $ifNull: ['$course', 'UNANI'] }]
+                },
+                course: {
+                  $ifNull: ['$course', { $ifNull: ['$preferredCourse', 'UNANI'] }]
+                },
+                status: { $ifNull: ['$status', 'Pending'] },
+                accountStatus: { $ifNull: ['$accountStatus', 'Pending'] },
+                account_status: { $ifNull: ['$accountStatus', 'Pending'] },
+                isApproved: { $ifNull: ['$isApproved', false] },
+                is_approved: { $ifNull: ['$isApproved', false] },
+                isActive: { $ifNull: ['$isActive', false] },
+                is_active: { $ifNull: ['$isActive', false] },
+                enrolled_course: {
+                  id: {
+                    $ifNull: [
+                      '$courseObj.courseId',
+                      {
+                        $ifNull: [
+                          { $toString: '$courseObj._id' },
+                          { $ifNull: ['$courseId', { $ifNull: ['$course', { $ifNull: ['$preferredCourse', 'UNANI'] }] }] }
+                        ]
+                      }
+                    ]
+                  },
+                  title: {
+                    $ifNull: [
+                      '$courseObj.courseTitle',
+                      { $ifNull: ['$course', { $ifNull: ['$preferredCourse', 'UNANI'] }] }
+                    ]
+                  },
+                  category: {
+                    $ifNull: [
+                      '$courseObj.category',
+                      {
+                        $cond: {
+                          if: {
+                            $regexMatch: {
+                              input: { $ifNull: ['$course', { $ifNull: ['$preferredCourse', ''] }] },
+                              regex: 'unani',
+                              options: 'i'
+                            }
+                          },
+                          then: 'Unani',
+                          else: 'General'
+                        }
+                      }
+                    ]
+                  },
+                  price: {
+                    $ifNull: ['$courseObj.price', 0]
+                  }
+                },
+                subscription: {
+                  status: { $ifNull: ['$status', 'Pending'] },
+                  type: { $ifNull: ['$subscription', 'Free'] },
+                  joined_date: { $ifNull: ['$joinedDate', '$createdAt'] }
+                },
+                stats: {
+                  total_exams_attended: '$total_exams_attended',
+                  average_score: '$average_score',
+                  passed_exams: '$passed_exams'
+                },
+                attended_exams: '$attended_exams',
+                created_at: '$createdAt',
+                updated_at: '$updatedAt'
+              }
+            }
+          ]
+        }
+      }
+    ];
 
     const pagination = buildPaginationResponse(total, page, limit);
 
@@ -714,24 +1046,45 @@ async function getAdminStudentResults(req, res) {
 
       const formattedAnswers = (result.answers || []).map((ans) => {
         let correctOpt = ans.correctOption || ans.correctAnswer || null;
-        if (!correctOpt && ans.questionId) {
-          const targetQ = questionMap.get(ans.questionId.toString());
+        let targetQ = null;
+        if (ans.questionId) {
+          targetQ = questionMap.get(ans.questionId.toString());
           if (targetQ) {
-            correctOpt = targetQ.correctOption;
+            correctOpt = correctOpt || targetQ.correctOption || targetQ.correctAnswer;
           }
         }
+        correctOpt = correctOpt ? correctOpt.toString().toUpperCase() : null;
         return {
           questionId: ans.questionId,
           selectedOption: ans.selectedOption !== undefined ? ans.selectedOption : null,
+          selectedAnswer: ans.selectedOption !== undefined ? ans.selectedOption : null,
+          selectedOptionText: targetQ && targetQ.options && ans.selectedOption ? targetQ.options[ans.selectedOption] : null,
           correctOption: correctOpt || null,
+          correctAnswer: correctOpt || null,
+          correctOptionText: targetQ && targetQ.options && correctOpt ? (targetQ.options[correctOpt] || null) : null,
           isCorrect: ans.isCorrect
         };
       });
 
       let examMetadata = exam;
-      if (exam && exam.questions) {
-        const { questions, ...restExam } = exam;
-        examMetadata = restExam;
+      if (exam) {
+        const formattedQuestions = (exam.questions || []).map(q => {
+          const cOpt = q.correctOption
+            ? q.correctOption.toString().toUpperCase()
+            : (q.correctAnswer ? q.correctAnswer.toString().toUpperCase() : null);
+          return {
+            ...q,
+            correctOption: cOpt,
+            correctAnswer: cOpt,
+            correctOptionText: q.options && cOpt ? q.options[cOpt] : null,
+            correctAnswerText: q.options && cOpt ? q.options[cOpt] : null
+          };
+        });
+        
+        examMetadata = {
+          ...exam,
+          questions: formattedQuestions
+        };
       }
 
       return {
@@ -1020,6 +1373,14 @@ async function updateAdminStudent(req, res) {
       }
       if (updateFields.dateOfBirth) userUpdateFields.dateOfBirth = updateFields.dateOfBirth;
       if (updateFields.qualification) userUpdateFields.qualification = updateFields.qualification;
+      if (updateFields.profileImage !== undefined) {
+        userUpdateFields.profileImage = updateFields.profileImage;
+        userUpdateFields.avatar = updateFields.profileImage;
+      }
+      if (updateFields.avatar !== undefined) {
+        userUpdateFields.avatar = updateFields.avatar;
+        userUpdateFields.profileImage = updateFields.avatar;
+      }
 
       if (Object.keys(userUpdateFields).length > 0) {
         if (updatedStudent.userId) {
@@ -1488,6 +1849,204 @@ async function rejectStudent(req, res) {
 
 
 
+
+/**
+ * POST/PUT /api/admin/students/:id/avatar
+ * Upload or update student avatar/profile image.
+ */
+async function uploadStudentAvatar(req, res) {
+  try {
+    const { id } = req.params;
+    let imageUrl = '';
+
+    if (req.files && req.files.length > 0) {
+      const file = req.files[0];
+      imageUrl = file.cloudinaryUrl || file.secure_url || file.url || file.path || '';
+    } else if (req.file) {
+      imageUrl = req.file.cloudinaryUrl || req.file.secure_url || req.file.url || req.file.path || '';
+    }
+
+    if (!imageUrl) {
+      imageUrl = req.body.profileImage || req.body.avatar || req.body.imageUrl || req.body.url || '';
+    }
+
+    imageUrl = String(imageUrl || '').trim();
+
+    let student = null;
+    if (mongoose.Types.ObjectId.isValid(id)) {
+      const studentObjId = new mongoose.Types.ObjectId(id);
+      student = await Student.findById(studentObjId);
+      if (!student) {
+        student = await Student.findOne({ userId: studentObjId });
+      }
+    }
+    if (!student) {
+      student = await Student.findOne({ $or: [{ studentId: id }, { email: id }] });
+    }
+    if (!student) {
+      const user = await User.findOne({
+        $or: [
+          ...(mongoose.Types.ObjectId.isValid(id) ? [{ _id: new mongoose.Types.ObjectId(id) }] : []),
+          { email: id }
+        ]
+      });
+      if (user) {
+        student = await Student.findOne({ $or: [{ userId: user._id }, { email: user.email }] });
+        if (!student) {
+          student = await Student.create({
+            userId: user._id,
+            name: user.name,
+            email: user.email,
+            phone: user.phone || user.contactNumber,
+            profileImage: imageUrl,
+            avatar: imageUrl,
+            course: 'General',
+            subscription: 'Free',
+            status: 'Active',
+          });
+        }
+        await User.findByIdAndUpdate(user._id, { $set: { profileImage: imageUrl, avatar: imageUrl } });
+      }
+    }
+
+    if (!student) {
+      return res.status(404).json({
+        success: false,
+        message: 'Student not found',
+      });
+    }
+
+    student.profileImage = imageUrl;
+    student.avatar = imageUrl;
+    await student.save();
+
+    if (student.userId) {
+      await User.findByIdAndUpdate(student.userId, { $set: { profileImage: imageUrl, avatar: imageUrl } });
+    } else if (student.email) {
+      await User.findOneAndUpdate({ email: student.email }, { $set: { profileImage: imageUrl, avatar: imageUrl } });
+    }
+
+    return res.status(200).json({
+      success: true,
+      message: 'Student profile image updated successfully',
+      data: {
+        studentId: student._id.toString(),
+        profileImage: imageUrl,
+        avatar: imageUrl,
+      },
+      profileImage: imageUrl,
+    });
+  } catch (error) {
+    console.error('Error in uploadStudentAvatar:', error);
+    return res.status(500).json({
+      success: false,
+      message: 'Failed to update student profile image',
+      error: error.message,
+    });
+  }
+}
+
+/**
+ * DELETE /api/admin/students/:id/avatar
+ * Remove student avatar/profile image.
+ */
+async function deleteStudentAvatar(req, res) {
+  try {
+    const { id } = req.params;
+    let student = null;
+    if (mongoose.Types.ObjectId.isValid(id)) {
+      const studentObjId = new mongoose.Types.ObjectId(id);
+      student = await Student.findById(studentObjId);
+      if (!student) {
+        student = await Student.findOne({ userId: studentObjId });
+      }
+    }
+    if (!student) {
+      student = await Student.findOne({ $or: [{ studentId: id }, { email: id }] });
+    }
+    if (!student) {
+      const user = await User.findOne({
+        $or: [
+          ...(mongoose.Types.ObjectId.isValid(id) ? [{ _id: new mongoose.Types.ObjectId(id) }] : []),
+          { email: id }
+        ]
+      });
+      if (user) {
+        student = await Student.findOne({ $or: [{ userId: user._id }, { email: user.email }] });
+        await User.findByIdAndUpdate(user._id, { $set: { profileImage: '', avatar: '' } });
+      }
+    }
+
+    if (!student) {
+      return res.status(404).json({
+        success: false,
+        message: 'Student not found',
+      });
+    }
+
+    student.profileImage = '';
+    student.avatar = '';
+    await student.save();
+
+    if (student.userId) {
+      await User.findByIdAndUpdate(student.userId, { $set: { profileImage: '', avatar: '' } });
+    } else if (student.email) {
+      await User.findOneAndUpdate({ email: student.email }, { $set: { profileImage: '', avatar: '' } });
+    }
+
+    return res.status(200).json({
+      success: true,
+      message: 'Student profile image removed successfully',
+      profileImage: '',
+    });
+  } catch (error) {
+    console.error('Error in deleteStudentAvatar:', error);
+    return res.status(500).json({
+      success: false,
+      message: 'Failed to remove student profile image',
+      error: error.message,
+    });
+  }
+}
+
+/**
+ * GET /api/admin/students/:id/avatar
+ * Return student avatar/profile image.
+ */
+async function getStudentAvatar(req, res) {
+  try {
+    const { id } = req.params;
+    let student = null;
+    let user = null;
+    if (mongoose.Types.ObjectId.isValid(id)) {
+      const studentObjId = new mongoose.Types.ObjectId(id);
+      student = await Student.findById(studentObjId).lean();
+      if (!student) {
+        user = await User.findById(studentObjId).lean();
+      }
+    }
+    if (!student && !user) {
+      student = await Student.findOne({ $or: [{ studentId: id }, { email: id }] }).lean();
+      if (!student) {
+        user = await User.findOne({ email: id }).lean();
+      }
+    }
+
+    const profileImage = student?.profileImage || student?.avatar || user?.profileImage || user?.avatar || '';
+
+    return res.status(200).json({
+      success: true,
+      profileImage,
+    });
+  } catch (error) {
+    return res.status(500).json({
+      success: false,
+      message: 'Failed to get student avatar',
+      error: error.message,
+    });
+  }
+}
+
 module.exports = {
   getAdminStudents,
   getAdminStudentById,
@@ -1502,5 +2061,8 @@ module.exports = {
   exportStudentsScores,
   approveStudent,
   rejectStudent,
+  uploadStudentAvatar,
+  deleteStudentAvatar,
+  getStudentAvatar,
 };
 

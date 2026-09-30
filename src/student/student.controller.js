@@ -113,6 +113,28 @@ async function batchResolveCourseNames(exams) {
   return courseMap;
 }
 
+function getQuestionCorrectOption(question) {
+  if (!question) return null;
+  const rawCorrectAnswer = question.correctOption ?? question.correctAnswer ?? null;
+  if (rawCorrectAnswer === null || rawCorrectAnswer === undefined || rawCorrectAnswer === '') return null;
+  return normalizeOptionKey(rawCorrectAnswer, question.options) || rawCorrectAnswer.toString().toUpperCase();
+}
+
+function formatQuestionWithAnswerKey(question) {
+  const correctOption = getQuestionCorrectOption(question);
+  const correctOptionText = question && question.options && correctOption
+    ? (question.options[correctOption] || null)
+    : null;
+
+  return {
+    ...question,
+    correctOption,
+    correctAnswer: correctOption,
+    correctOptionText,
+    correctAnswerText: correctOptionText
+  };
+}
+
 /**
  * GET /api/student/profile (or /api/student/me)
  * Fetch authenticated student's profile details.
@@ -379,10 +401,12 @@ async function getAvailableExams(req, res) {
           } else {
             // Allow enrolled course exams OR grand mocks
             filter.$or = [
-              ...courseOrFilter,
+              ...courseOrFilter.map(c => ({ ...c, testType: 'course_test' })),
               { testType: 'grand_mock' },
               { testType: { $regex: /^(grand[-_ ]?mock|mock)$/i } },
-              { courseId: null }
+              { testType: { $exists: false } },
+              { testType: null },
+              { testType: '' }
             ];
           }
         } else {
@@ -771,7 +795,7 @@ async function submitExam(req, res) {
       if (targetQuestion) {
         // Robust option normalization for both selectedOption and correctOption
         const userOptionKey = normalizeOptionKey(ans.selectedOption, targetQuestion.options);
-        const correctOptionKey = normalizeOptionKey(targetQuestion.correctOption, targetQuestion.options);
+        const correctOptionKey = getQuestionCorrectOption(targetQuestion);
 
         const isAttempted = userOptionKey !== null;
         const isCorrect = isAttempted && correctOptionKey !== null && userOptionKey === correctOptionKey;
@@ -787,10 +811,16 @@ async function submitExam(req, res) {
           }
         }
 
+        const correctOptStr = correctOptionKey;
+
         processedAnswers.push({
           questionId: targetQuestion._id || (mongoose.Types.ObjectId.isValid(qId) ? qId : null),
           selectedOption: userOptionKey, // Guaranteed 'A', 'B', 'C', 'D' or null
-          correctOption: correctOptionKey || (targetQuestion.correctOption ? targetQuestion.correctOption.toString().toUpperCase() : null),
+          selectedAnswer: userOptionKey,
+          selectedOptionText: targetQuestion.options && userOptionKey ? targetQuestion.options[userOptionKey] : null,
+          correctOption: correctOptStr,
+          correctAnswer: correctOptStr,
+          correctOptionText: targetQuestion.options && correctOptStr ? targetQuestion.options[correctOptStr] : null,
           isCorrect: isCorrect
         });
       }
@@ -886,6 +916,11 @@ async function submitExam(req, res) {
         hasAttempted:         true,
         isCompleted:          true,
         answers:              testResult.answers,
+        answers:              processedAnswers,
+        examInfo: {
+          ...exam.toObject(),
+          questions: exam.questions.map(formatQuestionWithAnswerKey)
+        },
         createdAt:            testResult.createdAt
       }
     });
@@ -991,16 +1026,21 @@ async function getStudentResults(req, res) {
 
       const formattedAnswers = (result.answers || []).map((ans) => {
         let correctOpt = ans.correctOption || ans.correctAnswer || null;
-        if (!correctOpt && ans.questionId) {
-          const targetQ = questionMap.get(ans.questionId.toString());
-          if (targetQ) {
-            correctOpt = normalizeOptionKey(targetQ.correctOption, targetQ.options) || targetQ.correctOption;
+        let targetQ = null;
+        if (ans.questionId) {
+          targetQ = questionMap.get(ans.questionId.toString());
+          if (!correctOpt && targetQ) {
+            correctOpt = getQuestionCorrectOption(targetQ);
           }
         }
         return {
           questionId: ans.questionId,
           selectedOption: ans.selectedOption !== undefined ? ans.selectedOption : null,
+          selectedAnswer: ans.selectedOption !== undefined ? ans.selectedOption : null,
+          selectedOptionText: targetQ && targetQ.options && ans.selectedOption ? targetQ.options[ans.selectedOption] : null,
           correctOption: correctOpt || null,
+          correctAnswer: correctOpt || null,
+          correctOptionText: targetQ && targetQ.options && correctOpt ? (targetQ.options[correctOpt] || null) : null,
           isCorrect: ans.isCorrect
         };
       });
@@ -1036,6 +1076,15 @@ async function getStudentResults(req, res) {
             moduleName: resolvedModuleName
           };
         }
+        const { courseName: resolvedCourseName, moduleName: resolvedModuleName } = await resolveCourseAndModuleNames(exam);
+        const formattedQuestions = (exam.questions || []).map(formatQuestionWithAnswerKey);
+
+        examMetadata = {
+          ...exam,
+          courseName: resolvedCourseName,
+          moduleName: resolvedModuleName,
+          questions: formattedQuestions
+        };
       }
 
       return {

@@ -768,11 +768,12 @@ async function getAllGrandMocks(req, res) {
           courseOrFilter.push({ courseId: student.courseId });
         }
         filter.$or = [
-          ...courseOrFilter,
+          ...courseOrFilter.map(c => ({ ...c, testType: 'course_test' })),
           { testType: 'grand_mock' },
           { testType: { $regex: /^(grand[-_ ]?mock|mock)$/i } },
           { testType: { $exists: false } },
-          { courseId: null }
+          { testType: null },
+          { testType: '' }
         ];
       }
       // For Admins / Staff: no testType restriction, so all tests are returned!
@@ -1015,6 +1016,16 @@ async function getGrandMockById(req, res) {
       ? exam.totalQuestions
       : (Array.isArray(exam.questions) ? exam.questions.length : 0);
 
+    const formattedQuestions = (exam.questions || []).map(q => {
+      const cOpt = q.correctOption ? q.correctOption.toString().toUpperCase() : null;
+      return {
+        ...q,
+        correctAnswer: cOpt,
+        correctOptionText: q.options && cOpt ? q.options[cOpt] : null,
+        correctAnswerText: q.options && cOpt ? q.options[cOpt] : null
+      };
+    });
+
     const candidateIds = req.user ? await getStudentCandidateIds(req.user) : [];
     const attemptMap = candidateIds.length > 0
       ? await getStudentExamAttemptMap(candidateIds, [exam._id])
@@ -1024,6 +1035,7 @@ async function getGrandMockById(req, res) {
 
     const formattedExam = {
       ...exam,
+      questions: formattedQuestions,
       courseId: courseIdStr,
       courseName: finalCourseName,
       moduleId: moduleIdStr,

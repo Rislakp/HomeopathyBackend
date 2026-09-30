@@ -47,6 +47,16 @@ const userSchema = new mongoose.Schema(
       type: String,
       trim: true,
     },
+    profileImage: {
+      type: String,
+      trim: true,
+      default: "",
+    },
+    avatar: {
+      type: String,
+      trim: true,
+      default: "",
+    },
     preferredCourse: {
       type: String,
       trim: true,
@@ -132,4 +142,4 @@ userSchema.index({ role: 1, createdAt: -1 });
 userSchema.index({ phone: 1 });
 userSchema.index({ contactNumber: 1 });
 
-module.exports = mongoose.models.User || mongoose.model('User', userSchema);
+module.exports = mongoose.models.User || mongoose.model('User', userSchema);

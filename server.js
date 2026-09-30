@@ -306,6 +306,8 @@ app.use('/api/v1/admin/students', require('./routes/adminStudentRoutes'));
 const rankImageRoutes = require('./routes/academicExamRankImage.routes');
 app.use('/api/exams', rankImageRoutes);
 app.use('/api/v1/exams', rankImageRoutes);
+app.use('/api/unani-exams', require('./routes/unaniExamRoutes'));
+app.use('/api/v1/unani-exams', require('./routes/unaniExamRoutes'));
 
 const examRoutes = require('./routes/exam.routes');
 app.use(examRoutes);

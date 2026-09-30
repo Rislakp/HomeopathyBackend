@@ -46,6 +46,16 @@ const studentSchema = new mongoose.Schema({
     trim: true,
     default: '',
   },
+  profileImage: {
+    type: String,
+    trim: true,
+    default: "",
+  },
+  avatar: {
+    type: String,
+    trim: true,
+    default: "",
+  },
   preferredCourse: {
     type: String,
     trim: true,
