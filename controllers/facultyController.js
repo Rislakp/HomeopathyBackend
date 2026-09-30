@@ -355,6 +355,26 @@ exports.updateFaculty = async (req, res) => {
     });
   } catch (error) {
     console.error('Update Faculty Error:', error);
+    
+    if (error.code === 11000 && error.keyPattern && error.keyPattern.email) {
+      return res.status(400).json({
+        success: false,
+        message: 'A faculty member with this email address already exists',
+      });
+    }
+
+    if (error.name === 'ValidationError') {
+      const errors = {};
+      Object.keys(error.errors).forEach((key) => {
+        errors[key] = error.errors[key].message;
+      });
+      return res.status(400).json({
+        success: false,
+        message: 'Validation failed',
+        errors,
+      });
+    }
+
     return res.status(500).json({
       success: false,
       message: 'Failed to update faculty member',
