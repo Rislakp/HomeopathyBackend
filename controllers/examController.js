@@ -287,8 +287,13 @@ function validateAndSanitizeQuestion(q, index = 0) {
     correctOption: normalizedCorrect,
     passage: null,
     imageUrl: null,
-    tableData: null
+    tableData: null,
+    explanation: ''
   };
+
+  if (q.explanation !== undefined && q.explanation !== null && q.explanation !== '') {
+    sanitizedQuestion.explanation = String(q.explanation).trim();
+  }
 
   if (q._id && mongoose.Types.ObjectId.isValid(q._id)) {
     sanitizedQuestion._id = q._id;
@@ -1338,6 +1343,7 @@ async function updateQuestionInExam(req, res) {
     qSubDoc.passage = validation.question.passage;
     qSubDoc.imageUrl = validation.question.imageUrl;
     qSubDoc.tableData = validation.question.tableData;
+    qSubDoc.explanation = validation.question.explanation;
 
     await exam.save();
 

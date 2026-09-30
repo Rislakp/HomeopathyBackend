@@ -6,6 +6,8 @@ const Student = require('../models/Student');
 const User = require('../models/User');
 const TestResult = require('../src/common/models/testResult.model');
 const { requireAdmin, requireRole } = require('../middleware/rbac');
+const requireAuthUser = requireRole('student', 'admin', 'superadmin');
+const { startExam, submitExam } = require('../src/student/student.controller');
 const { adminAuth } = require('../middleware/adminAuth.middleware');
 const {
   createGrandMockExam,
@@ -416,6 +418,7 @@ router.post('/:examId/questions/bulk', adminAuth, async (req, res) => {
     for (const q of questions) {
       exam.questions.push(q);
     }
+    exam.totalQuestions = exam.questions.length;
     await exam.save();
     return res.status(200).json({
       success: true,
@@ -428,5 +431,12 @@ router.post('/:examId/questions/bulk', adminAuth, async (req, res) => {
 });
 router.put('/:id/questions/:questionId', adminAuth, updateQuestionInExam);
 router.delete('/:id/questions/:questionId', adminAuth, deleteQuestionFromExam);
+
+// ---------------------------------------------------------------------------
+// 6. Student Exam Taking: Start & Submit
+// ---------------------------------------------------------------------------
+router.post('/:id/start', requireAuthUser, startExam);
+router.get('/:id/start', requireAuthUser, startExam);
+router.post('/:id/submit', requireAuthUser, submitExam);
 
 module.exports = router;

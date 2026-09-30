@@ -49,6 +49,12 @@ const questionSchema = new mongoose.Schema({
     type: String,
     enum: ['A', 'B', 'C', 'D'],
     required: true
+  },
+  explanation: {
+    type: String,
+    trim: true,
+    required: false,
+    default: ''
   }
 }, { _id: true });
 
