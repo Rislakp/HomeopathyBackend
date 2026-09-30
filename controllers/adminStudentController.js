@@ -17,15 +17,23 @@ async function syncStudentUsers() {
       if (!exists) {
         await Student.create({
           userId: u._id,
-          name: u.name,
+          name: u.name || 'Student',
           email: u.email,
-          phone: u.phone || u.contactNumber,
-          contactNumber: u.contactNumber || u.phone,
-          dateOfBirth: u.dateOfBirth,
-          qualification: u.qualification,
-          course: 'General',
+          phone: u.phone || u.contactNumber || '',
+          contactNumber: u.contactNumber || u.phone || '',
+          dateOfBirth: u.dateOfBirth || '',
+          qualification: u.qualification || '',
+          profileImage: u.profileImage || u.avatar || '',
+          avatar: u.avatar || u.profileImage || '',
+          preferredCourse: u.preferredCourse || u.course || 'UNANI',
+          course: u.course || u.preferredCourse || 'UNANI',
+          courseId: u.courseId || '',
+          courseRef: u.courseRef || null,
           subscription: 'Free',
-          status: 'Active',
+          status: u.status || 'Pending',
+          accountStatus: u.accountStatus || 'Pending',
+          isApproved: u.isApproved || false,
+          isActive: u.isActive || false,
           joinedDate: u.createdAt || new Date()
         });
       }
@@ -359,6 +367,19 @@ async function getAdminStudents(req, res) {
                     }
                   ]
                 },
+                preferredCourse: {
+                  $ifNull: ['$preferredCourse', { $ifNull: ['$course', 'UNANI'] }]
+                },
+                course: {
+                  $ifNull: ['$course', { $ifNull: ['$preferredCourse', 'UNANI'] }]
+                },
+                status: { $ifNull: ['$status', 'Pending'] },
+                accountStatus: { $ifNull: ['$accountStatus', 'Pending'] },
+                account_status: { $ifNull: ['$accountStatus', 'Pending'] },
+                isApproved: { $ifNull: ['$isApproved', false] },
+                is_approved: { $ifNull: ['$isApproved', false] },
+                isActive: { $ifNull: ['$isActive', false] },
+                is_active: { $ifNull: ['$isActive', false] },
                 enrolled_course: {
                   id: {
                     $ifNull: [
@@ -366,23 +387,41 @@ async function getAdminStudents(req, res) {
                       {
                         $ifNull: [
                           { $toString: '$courseObj._id' },
-                          { $ifNull: ['$course', 'General'] }
+                          { $ifNull: ['$courseId', { $ifNull: ['$course', { $ifNull: ['$preferredCourse', 'UNANI'] }] }] }
                         ]
                       }
                     ]
                   },
                   title: {
-                    $ifNull: ['$courseObj.courseTitle', { $ifNull: ['$course', 'General'] }]
+                    $ifNull: [
+                      '$courseObj.courseTitle',
+                      { $ifNull: ['$course', { $ifNull: ['$preferredCourse', 'UNANI'] }] }
+                    ]
                   },
                   category: {
-                    $ifNull: ['$courseObj.category', 'General']
+                    $ifNull: [
+                      '$courseObj.category',
+                      {
+                        $cond: {
+                          if: {
+                            $regexMatch: {
+                              input: { $ifNull: ['$course', { $ifNull: ['$preferredCourse', ''] }] },
+                              regex: 'unani',
+                              options: 'i'
+                            }
+                          },
+                          then: 'Unani',
+                          else: 'General'
+                        }
+                      }
+                    ]
                   },
                   price: {
                     $ifNull: ['$courseObj.price', 0]
                   }
                 },
                 subscription: {
-                  status: { $ifNull: ['$status', 'Active'] },
+                  status: { $ifNull: ['$status', 'Pending'] },
                   type: { $ifNull: ['$subscription', 'Free'] },
                   joined_date: { $ifNull: ['$joinedDate', '$createdAt'] }
                 },
