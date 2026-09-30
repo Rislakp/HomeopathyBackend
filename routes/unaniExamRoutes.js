@@ -8,6 +8,7 @@ const TestResult = require('../src/common/models/testResult.model');
 const { requireAdmin, requireRole } = require('../middleware/rbac');
 const requireAuthUser = requireRole('student', 'admin', 'superadmin');
 const { startExam, submitExam } = require('../src/student/student.controller');
+const unaniExamController = require('../src/unani/exams/controllers/unaniExam.controller');
 const { adminAuth } = require('../middleware/adminAuth.middleware');
 const {
   createGrandMockExam,
@@ -385,6 +386,14 @@ router.get('/:examId/rank', async (req, res) => {
 });
 
 // ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
+// 4d. Student Unani Exam Endpoints (Declared BEFORE /:id dynamic route)
+// ---------------------------------------------------------------------------
+router.get('/student', requireAuthUser, unaniExamController.getStudentAvailableExams);
+router.get('/student/:examId', requireAuthUser, unaniExamController.getStudentExamById);
+router.post('/student/:examId/submit', requireAuthUser, unaniExamController.submitStudentExam);
+router.get('/student/:examId/result', requireAuthUser, unaniExamController.getStudentResultByExam);
+
 // 5. Unani Exam CRUD & Questions endpoints (reusing existing exam controller)
 // ---------------------------------------------------------------------------
 router.get('/', (req, res, next) => {

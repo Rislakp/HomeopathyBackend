@@ -1,6 +1,18 @@
 const mongoose = require('mongoose');
 const UnaniExam = require('../models/unaniExam.model');
 const UnaniExamResult = require('../models/unaniExamResult.model');
+let Exam;
+try {
+  Exam = require('../../../../models/Exam');
+} catch (e) {
+  // Exam model optional
+}
+let TestResult;
+try {
+  TestResult = require('../../../common/models/testResult.model');
+} catch (e) {
+  // TestResult model optional
+}
 let Student;
 try {
   Student = require('../../../../models/Student');
@@ -670,31 +682,88 @@ async function getHistory(examId, reqUser) {
  * Get available Unani exams for student
  */
 async function getStudentAvailableExams(reqUser) {
-  const exams = await UnaniExam.find({
-    courseId: 'unani',
-    examType: 'grand_mock_test',
-    status: 'Published',
-  })
-    .select('_id title description examType courseId totalQuestions marksPerQuestion negativeMark negativeMarkPenalty durationMinutes status createdAt updatedAt')
-    .sort({ createdAt: -1 })
-    .lean();
+  const query = {
+    $or: [
+      { courseId: /^unani$/i },
+      { category: /^unani$/i },
+      { title: /unani/i },
+    ],
+  };
 
-  return exams.map((exam) => ({
-    _id: exam._id.toString(),
-    id: exam._id.toString(),
-    title: exam.title,
-    description: exam.description || '',
-    courseId: 'unani',
-    examType: 'grand_mock_test',
-    totalQuestions: exam.totalQuestions || (Array.isArray(exam.questions) ? exam.questions.length : 0),
-    duration: exam.durationMinutes,
-    durationMinutes: exam.durationMinutes,
-    marksPerQuestion: exam.marksPerQuestion,
-    negativeMark: exam.negativeMark || exam.negativeMarkPenalty || 0,
-    status: exam.status || 'Published',
-    createdAt: exam.createdAt,
-    updatedAt: exam.updatedAt,
-  }));
+  const results = [];
+  const seenIds = new Set();
+
+  // 1. Fetch from UnaniExam model
+  try {
+    const unaniExams = await UnaniExam.find({
+      courseId: 'unani',
+    })
+      .select('_id title description examType courseId totalQuestions marksPerQuestion negativeMark negativeMarkPenalty durationMinutes status createdAt updatedAt questions')
+      .sort({ createdAt: -1 })
+      .lean();
+
+    for (const exam of unaniExams) {
+      if (exam.status && String(exam.status).toLowerCase() === 'draft') continue;
+      const idStr = exam._id.toString();
+      seenIds.add(idStr);
+      results.push({
+        _id: idStr,
+        id: idStr,
+        title: exam.title,
+        description: exam.description || '',
+        courseId: 'unani',
+        examType: 'grand_mock_test',
+        totalQuestions: exam.totalQuestions || (Array.isArray(exam.questions) ? exam.questions.length : 0),
+        duration: exam.durationMinutes || exam.duration || 0,
+        durationMinutes: exam.durationMinutes || exam.duration || 0,
+        marksPerQuestion: exam.marksPerQuestion || 1,
+        negativeMark: exam.negativeMark || exam.negativeMarkPenalty || 0,
+        status: exam.status || 'Published',
+        createdAt: exam.createdAt,
+        updatedAt: exam.updatedAt,
+      });
+    }
+  } catch (err) {
+    console.error('Error fetching from UnaniExam:', err.message);
+  }
+
+  // 2. Fetch from Exam model
+  if (Exam) {
+    try {
+      const standardExams = await Exam.find(query)
+        .select('_id title description courseId category durationMinutes duration marksPerQuestion negativeMark negativeMarkPenalty totalQuestions questions status createdAt updatedAt')
+        .sort({ createdAt: -1 })
+        .lean();
+
+      for (const exam of standardExams) {
+        if (exam.status && String(exam.status).toLowerCase() === 'draft') continue;
+        const idStr = exam._id.toString();
+        if (!seenIds.has(idStr)) {
+          seenIds.add(idStr);
+          results.push({
+            _id: idStr,
+            id: idStr,
+            title: exam.title,
+            description: exam.description || '',
+            courseId: exam.courseId || 'unani',
+            examType: exam.testType || 'grand_mock_test',
+            totalQuestions: exam.questions ? exam.questions.length : (exam.totalQuestions || 0),
+            duration: exam.durationMinutes || exam.duration || 0,
+            durationMinutes: exam.durationMinutes || exam.duration || 0,
+            marksPerQuestion: exam.marksPerQuestion || 1,
+            negativeMark: exam.negativeMark || exam.negativeMarkPenalty || 0,
+            status: exam.status || 'Published',
+            createdAt: exam.createdAt,
+            updatedAt: exam.updatedAt,
+          });
+        }
+      }
+    } catch (err) {
+      console.error('Error fetching from Exam model:', err.message);
+    }
+  }
+
+  return results;
 }
 
 /**
@@ -705,13 +774,22 @@ async function getStudentExamById(examId, reqUser) {
     return { notFound: true };
   }
 
-  const exam = await UnaniExam.findOne({
+  let exam = await UnaniExam.findOne({
     _id: examId,
     courseId: 'unani',
-    status: 'Published',
-  });
+  }).lean();
+
+  if (!exam && Exam) {
+    exam = await Exam.findOne({
+      _id: examId,
+    }).lean();
+  }
 
   if (!exam) {
+    return { notFound: true };
+  }
+
+  if (exam.status && String(exam.status).toLowerCase() === 'draft') {
     return { notFound: true };
   }
 
@@ -719,7 +797,7 @@ async function getStudentExamById(examId, reqUser) {
     const qObj = q.toObject ? q.toObject() : { ...q };
     const qIdStr = qObj._id ? qObj._id.toString() : qObj.id;
 
-    // SECURITY: CRITICAL - DO NOT expose answer key or correct options
+    // SECURITY: CRITICAL - DO NOT expose answer key or correct options or explanations
     delete qObj.correctOption;
     delete qObj.correctAnswer;
     delete qObj.explanation;
@@ -728,8 +806,8 @@ async function getStudentExamById(examId, reqUser) {
     return {
       _id: qIdStr,
       id: qIdStr,
-      question: qObj.questionText || '',
-      questionText: qObj.questionText || '',
+      question: qObj.questionText || qObj.question || '',
+      questionText: qObj.questionText || qObj.question || '',
       options: qObj.options || { A: '', B: '', C: '', D: '' },
       passage: qObj.passage || null,
       imageUrl: qObj.imageUrl || null,
@@ -744,11 +822,11 @@ async function getStudentExamById(examId, reqUser) {
       title: exam.title,
       description: exam.description || '',
       courseId: 'unani',
-      examType: 'grand_mock_test',
+      examType: exam.testType || 'grand_mock_test',
       totalQuestions: sanitizedQuestions.length,
-      duration: exam.durationMinutes,
-      durationMinutes: exam.durationMinutes,
-      marksPerQuestion: exam.marksPerQuestion,
+      duration: exam.durationMinutes || exam.duration || 0,
+      durationMinutes: exam.durationMinutes || exam.duration || 0,
+      marksPerQuestion: exam.marksPerQuestion || 1,
       negativeMark: exam.negativeMark || exam.negativeMarkPenalty || 0,
     },
     questions: sanitizedQuestions,
@@ -763,7 +841,11 @@ async function submitStudentExam(examId, reqUser, submissionData = {}) {
     return { notFound: true };
   }
 
-  const exam = await UnaniExam.findOne({ _id: examId, courseId: 'unani' });
+  let exam = await UnaniExam.findOne({ _id: examId });
+  if (!exam && Exam) {
+    exam = await Exam.findOne({ _id: examId });
+  }
+
   if (!exam) {
     return { notFound: true };
   }
@@ -773,12 +855,18 @@ async function submitStudentExam(examId, reqUser, submissionData = {}) {
     return { unauthenticated: true };
   }
 
-  // Prevent duplicate submission: check if student has already submitted this exam
-  const existingResult = await UnaniExamResult.findOne({
+  // Prevent duplicate submission
+  let existingResult = await UnaniExamResult.findOne({
     examId: exam._id,
     studentId: studentId,
-    courseId: 'unani',
   });
+
+  if (!existingResult && TestResult) {
+    existingResult = await TestResult.findOne({
+      examId: exam._id,
+      studentId: studentId,
+    });
+  }
 
   if (existingResult) {
     return { conflict: true };
@@ -858,6 +946,7 @@ async function submitStudentExam(examId, reqUser, submissionData = {}) {
     timeTakenSeconds = 0;
   }
 
+  // Save to UnaniExamResult
   const newResult = new UnaniExamResult({
     studentId: studentId,
     examId: exam._id,
@@ -873,8 +962,31 @@ async function submitStudentExam(examId, reqUser, submissionData = {}) {
     status: 'Completed',
     timeTakenSeconds: timeTakenSeconds,
   });
-
   await newResult.save();
+
+  // Also save to TestResult for unified reporting & ranks
+  if (TestResult) {
+    try {
+      await TestResult.create({
+        studentId: studentId,
+        examId: exam._id,
+        score: score,
+        totalMarks: totalMarks,
+        totalAttempted: correctAnswers + wrongAnswers,
+        totalCorrect: correctAnswers,
+        totalWrong: wrongAnswers,
+        unansweredQuestions: unanswered,
+        positiveMarks: correctAnswers * marksPerQuestion,
+        negativeMarks: wrongAnswers * penalty,
+        maximumScore: totalMarks,
+        percentage: percentage,
+        status: 'Completed',
+        answers: evaluatedAnswers,
+      });
+    } catch (trErr) {
+      console.error('Error mirroring to TestResult:', trErr.message);
+    }
+  }
 
   const attemptedQuestions = correctAnswers + wrongAnswers;
 
@@ -916,17 +1028,43 @@ async function getStudentResultByExam(examId, reqUser) {
     return { unauthenticated: true };
   }
 
-  const result = await UnaniExamResult.findOne({
+  let result = await UnaniExamResult.findOne({
     examId: examId,
     studentId: studentId,
-    courseId: 'unani',
   }).sort({ createdAt: -1 });
+
+  if (!result && TestResult) {
+    const tr = await TestResult.findOne({
+      examId: examId,
+      studentId: studentId,
+    }).sort({ createdAt: -1 });
+
+    if (tr) {
+      result = {
+        _id: tr._id,
+        examId: tr.examId,
+        score: tr.score,
+        correctAnswers: tr.totalCorrect,
+        wrongAnswers: tr.totalWrong,
+        unanswered: tr.unansweredQuestions,
+        totalMarks: tr.totalMarks,
+        percentage: tr.percentage,
+        status: tr.status,
+        timeTakenSeconds: 0,
+        createdAt: tr.createdAt,
+      };
+    }
+  }
 
   if (!result) {
     return { notFound: true };
   }
 
-  const exam = await UnaniExam.findById(result.examId).select('marksPerQuestion negativeMark negativeMarkPenalty totalQuestions questions').lean();
+  let exam = await UnaniExam.findById(result.examId).select('marksPerQuestion negativeMark negativeMarkPenalty totalQuestions questions').lean();
+  if (!exam && Exam) {
+    exam = await Exam.findById(result.examId).select('marksPerQuestion negativeMark negativeMarkPenalty totalQuestions questions').lean();
+  }
+
   const totalQuestions = result.answers ? result.answers.length : (exam ? (exam.totalQuestions || (exam.questions ? exam.questions.length : 0)) : 0);
   const attemptedQuestions = (result.correctAnswers || 0) + (result.wrongAnswers || 0);
 
