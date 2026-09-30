@@ -619,6 +619,10 @@ async function getAdminStudentById(req, res) {
             type: { $ifNull: ['$subscription', 'Free'] },
             joined_date: { $ifNull: ['$joinedDate', '$createdAt'] }
           },
+          // Mirror the exact field names used by the LIST endpoint so the
+          // Admin portal's Student Detail page sees the same contract as the list.
+          account_status: { $ifNull: ['$accountStatus', 'Pending'] },
+          is_approved: { $ifNull: ['$isApproved', false] },
           stats: {
             total_exams_attended: '$total_exams_attended',
             average_score: '$average_score',
