@@ -1,11 +1,11 @@
-require('dotenv').config({ path: require('path').join(__dirname, '.env') });
+﻿require('dotenv').config({ path: require('path').join(__dirname, '.env') });
 
-// ── Process-level safety net ──────────────────────────────────────────────────
+// â”€â”€ Process-level safety net â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 // Catches any async promise rejection that escapes a try/catch.
 // Without this, Node silently ignores the error and the HTTP request hangs forever.
 process.on('unhandledRejection', (reason, promise) => {
   console.error('[UnhandledRejection] Unhandled Promise Rejection:', reason);
-  // Do NOT exit — let Express keep serving; individual request already timed out.
+  // Do NOT exit â€” let Express keep serving; individual request already timed out.
 });
 
 // Catches synchronous throws that escape all error boundaries.
@@ -162,7 +162,7 @@ app.use(express.urlencoded({ limit: '1mb', extended: true }));
 
 app.use(requestLogger);
 
-// ── Request timeout middleware ─────────────────────────────────────────────
+// â”€â”€ Request timeout middleware â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 // Uses 120s timeout for video uploads/recordings, 30s for general REST endpoints.
 app.use((req, res, next) => {
   const url = (req.originalUrl || req.url || '').toLowerCase();
@@ -218,7 +218,7 @@ app.use(express.static(path.join(__dirname, 'public')));
 
 
 
-// ── Health Check Endpoints (Lightweight, stateless, Render load balancer compatible) ──
+// â”€â”€ Health Check Endpoints (Lightweight, stateless, Render load balancer compatible) â”€â”€
 app.get('/health', (req, res) => {
   res.status(200).json({
     status: 'ok',
@@ -255,7 +255,7 @@ app.get('/', (req, res) => {
 const authRoutes = require('./routes/authRoutes');
 const adminAuthRoutes = require('./routes/adminAuthRoutes');
 
-// ── Public Authentication Endpoints (Strictly public, NO auth middleware) ───
+// â”€â”€ Public Authentication Endpoints (Strictly public, NO auth middleware) â”€â”€â”€
 app.use('/api/admin/auth', adminAuthRoutes);
 app.use('/api/v1/admin/auth', adminAuthRoutes);
 app.use('/admin/auth', adminAuthRoutes);
@@ -282,6 +282,9 @@ app.use('/api', require('./routes/recordingRoutes'));
 app.use('/api/v1', require('./routes/recordingRoutes'));
 
 
+
+const unaniSubscriptionRoutes = require('./src/unani/subscriptions/routes/unaniSubscription.routes');
+app.use(unaniSubscriptionRoutes);
 
 const studentFacultyRoutes = require('./routes/studentFacultyRoutes');
 app.use('/api/student/faculty', studentFacultyRoutes);
@@ -357,7 +360,7 @@ const startServer = async () => {
     await seedInitialAdmin();
 
     const server = app.listen(PORT, () => {
-      console.log(`🚀 Server running on port ${PORT}`);
+      console.log(`ðŸš€ Server running on port ${PORT}`);
     });
 
     // Normal requests are capped by middleware at 30s; route-level response
@@ -370,22 +373,22 @@ const startServer = async () => {
     // Graceful Shutdown Handler for Render horizontal scaling
     const mongoose = require('mongoose');
     const handleGracefulShutdown = (signal) => {
-      console.log(`\n🛑 [${signal}] Graceful shutdown initiated. Closing HTTP server...`);
+      console.log(`\nðŸ›‘ [${signal}] Graceful shutdown initiated. Closing HTTP server...`);
       server.close(async () => {
-        console.log(`✅ [${signal}] HTTP server closed. Closing MongoDB connection pool...`);
+        console.log(`âœ… [${signal}] HTTP server closed. Closing MongoDB connection pool...`);
         try {
           await mongoose.connection.close(false);
-          console.log(`✅ [${signal}] MongoDB connection closed cleanly.`);
+          console.log(`âœ… [${signal}] MongoDB connection closed cleanly.`);
           process.exit(0);
         } catch (err) {
-          console.error(`❌ [${signal}] Error closing MongoDB connection:`, err.message);
+          console.error(`âŒ [${signal}] Error closing MongoDB connection:`, err.message);
           process.exit(1);
         }
       });
 
       // Force exit after 10s if connections refuse to close in time
       setTimeout(() => {
-        console.error(`⚠️ [${signal}] Forced shutdown after 10s timeout.`);
+        console.error(`âš ï¸ [${signal}] Forced shutdown after 10s timeout.`);
         process.exit(1);
       }, 10000).unref();
     };
@@ -393,7 +396,7 @@ const startServer = async () => {
     process.on('SIGTERM', () => handleGracefulShutdown('SIGTERM'));
     process.on('SIGINT', () => handleGracefulShutdown('SIGINT'));
   } catch (error) {
-    console.error('❌ Server startup failed:', error.message);
+    console.error('âŒ Server startup failed:', error.message);
     process.exit(1);
   }
 };
@@ -402,4 +405,4 @@ if (require.main === module) {
   startServer();
 }
 
-module.exports = { app, startServer };
+module.exports = { app, startServer };
