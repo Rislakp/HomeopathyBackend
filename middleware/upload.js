@@ -2,6 +2,7 @@ const multer = require('multer');
 const path = require('path');
 const fs = require('fs');
 
+const { isS3Configured, uploadFile: uploadToS3 } = require('../services/s3Service');
 const { cloudinary, isCloudinaryConfigured, uploadBufferToCloudinary } = require('../config/cloudinary');
 
 // Ensure uploads directory exists ONLY as a last-resort dev fallback.
@@ -16,7 +17,7 @@ const sanitizeFilename = (filename) => {
   return filename.replace(/\s+/g, '-').replace(/[^a-zA-Z0-9.\-_]/g, '');
 };
 
-// Disk storage — used ONLY when Cloudinary is NOT configured (local dev without .env)
+// Disk storage — used ONLY when neither S3 nor Cloudinary is configured (local dev without .env)
 const diskStorage = multer.diskStorage({
   destination: (req, file, cb) => {
     cb(null, uploadsDir);
@@ -39,13 +40,6 @@ const ALL_ALLOWED_FORMATS = [...ALLOWED_VIDEO_FORMATS, ...ALLOWED_IMAGE_FORMATS,
 
 /**
  * Cleanly separates the base name and extension from a given filename or path.
- * Prevents mangling of the extension dot into underscores (e.g. preventing 'video1_mp4').
- * Handles Windows (\) and POSIX (/) path separators safely.
- * Strips any pre-existing mangled extension suffix (e.g., '_mp4', '-mp4') from the base name.
- *
- * @param {string} originalName - Original filename or path
- * @param {string} [fallbackExt=''] - Fallback extension if none found
- * @returns {{ cleanBaseName: string, ext: string, fullName: string }}
  */
 const extractCleanNameAndExt = (originalName, fallbackExt = '') => {
   if (!originalName || typeof originalName !== 'string') {
@@ -53,9 +47,7 @@ const extractCleanNameAndExt = (originalName, fallbackExt = '') => {
     return { cleanBaseName: 'file', ext, fullName: ext ? `file.${ext}` : 'file' };
   }
 
-  // Handle both Windows (\) and POSIX (/) path separators safely
   const basePart = originalName.split(/[/\\]/).pop() || 'file';
-
   let rawName = basePart.trim();
   let ext = '';
   let baseNamePart = rawName;
@@ -68,13 +60,11 @@ const extractCleanNameAndExt = (originalName, fallbackExt = '') => {
     ext = fallbackExt.toLowerCase().replace(/^\./, '');
   }
 
-  // If the base name ends with '_mp4', '-mp4', etc., strip that mangled extension suffix
   if (ext) {
     const mangledPattern = new RegExp(`[_-]${ext}$`, 'i');
     baseNamePart = baseNamePart.replace(mangledPattern, '');
   }
 
-  // Check for any other known format stuck to baseName with underscore or hyphen (e.g. 'video1_mp4')
   for (const fmt of ALL_ALLOWED_FORMATS) {
     if (baseNamePart.toLowerCase().endsWith(`_${fmt}`) || baseNamePart.toLowerCase().endsWith(`-${fmt}`)) {
       baseNamePart = baseNamePart.slice(0, -(fmt.length + 1));
@@ -83,7 +73,6 @@ const extractCleanNameAndExt = (originalName, fallbackExt = '') => {
     }
   }
 
-  // Clean base name: preserve alphanumeric, dashes, and underscores
   let cleanBaseName = baseNamePart
     .replace(/\s+/g, '-')
     .replace(/[^a-zA-Z0-9_-]/g, '_')
@@ -98,10 +87,6 @@ const extractCleanNameAndExt = (originalName, fallbackExt = '') => {
 
 // Max file upload limit: 200MB to support large video streams and live recordings
 const MAX_UPLOAD_SIZE = parseInt(process.env.MAX_UPLOAD_SIZE_BYTES || '', 10) || 200 * 1024 * 1024;
-
-
-
-
 
 // File filter with informative error messages
 const fileFilter = (req, file, cb) => {
@@ -133,13 +118,13 @@ const handleUploadError = (err, req, res, next) => {
     });
   }
 
-  const isCloudinaryErr = err.http_code || err.name === 'CloudinaryError' || (err.message || '').toLowerCase().includes('cloudinary');
-  if (isCloudinaryErr) {
+  const isStorageErr = err.http_code || err.name === 'CloudinaryError' || err.name === 'S3Error' || (err.message || '').toLowerCase().includes('cloudinary') || (err.message || '').toLowerCase().includes('s3');
+  if (isStorageErr) {
     const status = Number(err.http_code) >= 400 && Number(err.http_code) < 500 ? Number(err.http_code) : 400;
     return res.status(status).json({
       success: false,
-      message: 'Cloudinary rejected the upload. Check file format and size limits.',
-      error: err.message || 'Cloudinary upload failed',
+      message: 'Storage upload rejected. Check file format and size limits.',
+      error: err.message || 'Storage upload failed',
     });
   }
 
@@ -151,9 +136,10 @@ const handleUploadError = (err, req, res, next) => {
 };
 
 /**
- * Middleware that guarantees every file object has a Cloudinary HTTPS secure_url.
+ * Middleware that guarantees every uploaded file object is persisted to AWS S3 (primary)
+ * or Cloudinary (fallback) and has a valid HTTPS secure_url attached.
  */
-const processUploadsToCloudinary = async (req, res, next) => {
+const processUploads = async (req, res, next) => {
   const files = [];
   if (req.file) files.push(req.file);
   if (req.files) {
@@ -164,18 +150,12 @@ const processUploadsToCloudinary = async (req, res, next) => {
     }
   }
 
-  console.log(`[processUploadsToCloudinary] req.file exists: ${Boolean(req.file)}, req.files count: ${files.length}`);
-  if (files.length > 0) {
-    files.forEach((f, idx) => {
-      console.log(`[processUploadsToCloudinary] File #${idx + 1}: originalname="${f.originalname || 'unknown'}", fieldname="${f.fieldname || 'unknown'}", mimetype="${f.mimetype || 'unknown'}", size=${f.size || (f.buffer ? f.buffer.length : 0)} bytes`);
-    });
-  }
-
   if (!files.length) {
     return next();
   }
 
-  const isProd = process.env.NODE_ENV === 'production' || process.env.REQUIRE_CLOUDINARY === 'true';
+  const useS3 = isS3Configured();
+  const useCloudinary = !useS3 && isCloudinaryConfigured();
 
   try {
     for (const file of files) {
@@ -200,13 +180,6 @@ const processUploadsToCloudinary = async (req, res, next) => {
             header = buffer.toString('ascii');
           } catch (e) {}
         }
-        
-        console.log('========== PDF UPLOAD ==========');
-        console.log(`filename: ${originalName}`);
-        console.log(`mimetype: ${originalMimeType || 'unknown'}`);
-        console.log(`size: ${originalSize}`);
-        console.log(`first bytes: ${header}`);
-        console.log('================================');
 
         if (header !== '%PDF-') {
           return res.status(400).json({
@@ -222,8 +195,8 @@ const processUploadsToCloudinary = async (req, res, next) => {
         file.originalname = sanitizeFilename(file.originalname);
       }
 
-      // ── Case 1: CloudinaryStorage already uploaded — normalize URL fields ──
-      const existingCloudUrl = (file.secure_url && file.secure_url.startsWith('http'))
+      // If already has a full HTTP URL, normalize
+      const existingUrl = (file.secure_url && file.secure_url.startsWith('http'))
         ? file.secure_url
         : (file.url && file.url.startsWith('http'))
           ? file.url
@@ -231,248 +204,126 @@ const processUploadsToCloudinary = async (req, res, next) => {
             ? file.path
             : null;
 
-      if (existingCloudUrl) {
-        file.secure_url = existingCloudUrl;
-        file.url = existingCloudUrl;
-        file.path = existingCloudUrl;
+      if (existingUrl) {
+        file.secure_url = existingUrl;
+        file.url = existingUrl;
+        file.path = existingUrl;
+        file.fileUrl = existingUrl;
         continue;
       }
 
-      // ── Case 2: Memory buffer — stream to Cloudinary ───────────────────────
-      if (file.buffer && isCloudinaryConfigured()) {
-        const mimetype = (file.mimetype || '').toLowerCase();
-        const fieldname = (file.fieldname || '').toLowerCase();
-        const ext = path.extname(file.originalname || '').toLowerCase().replace('.', '');
+      // Determine appropriate folder
+      const mimetype = (file.mimetype || '').toLowerCase();
+      const fieldname = (file.fieldname || '').toLowerCase();
+      const ext = path.extname(file.originalname || '').toLowerCase().replace('.', '');
 
-        let folder = (req.body && req.body.folder && String(req.body.folder).trim())
-          ? String(req.body.folder).trim()
-          : 'homeopathy-media';
-        let resource_type = 'auto';
+      let folder = (req.body && req.body.folder && String(req.body.folder).trim())
+        ? String(req.body.folder).trim()
+        : 'media';
 
-        if (mimetype.startsWith('video/') || fieldname.includes('video') || fieldname.includes('recording') || ALLOWED_VIDEO_FORMATS.includes(ext)) {
-          if (!req.body || !req.body.folder) folder = 'homeopathy-media/videos';
-          resource_type = 'video';
-          console.log(`[processUploadsToCloudinary] Forced resource_type='video' for file: ${file.originalname} (mime=${mimetype}, ext=${ext}, field=${fieldname})`);
-        } else if (mimetype === 'application/pdf' || ext === 'pdf') {
-          if (!req.body || !req.body.folder) folder = 'homeopathy-media/pdf-notes';
-          resource_type = 'auto';
-        } else if (ALLOWED_DOC_FORMATS.includes(ext)) {
-          if (!req.body || !req.body.folder) folder = 'homeopathy-media/attachments';
-          resource_type = 'auto';
-        } else if (mimetype.startsWith('image/') || ALLOWED_IMAGE_FORMATS.includes(ext)) {
-          if (!req.body || !req.body.folder) folder = 'grand_mock_questions';
-          resource_type = 'image';
-        } else {
-          if (!req.body || !req.body.folder) folder = 'homeopathy-media/attachments';
-          resource_type = 'auto';
+      if (mimetype.startsWith('video/') || fieldname.includes('video') || fieldname.includes('recording') || ALLOWED_VIDEO_FORMATS.includes(ext)) {
+        if (!req.body || !req.body.folder) folder = 'videos';
+      } else if (mimetype === 'application/pdf' || ext === 'pdf') {
+        if (!req.body || !req.body.folder) folder = 'pdfs';
+      } else if (fieldname.includes('rank') || fieldname.includes('profile')) {
+        if (!req.body || !req.body.folder) folder = 'ranks';
+      } else if (mimetype.startsWith('image/') || ALLOWED_IMAGE_FORMATS.includes(ext)) {
+        if (!req.body || !req.body.folder) folder = 'images';
+      }
+
+      // ── Strategy A: AWS S3 (Primary) ──────────────────────────────────────
+      if (useS3 && (file.buffer || file.path)) {
+        try {
+          const s3Result = await uploadToS3(file, folder);
+          file.secure_url = s3Result.secure_url;
+          file.url = s3Result.url;
+          file.fileUrl = s3Result.fileUrl;
+          file.documentUrl = s3Result.documentUrl;
+          file.path = s3Result.secure_url;
+          file.public_id = s3Result.key;
+          file.s3Key = s3Result.key;
+          file.key = s3Result.key;
+          file.storageProvider = 's3';
+          file.resource_type = s3Result.resource_type;
+          file.bytes = s3Result.bytes;
+          file.size = s3Result.size;
+          continue;
+        } catch (s3Err) {
+          console.error('[Upload Middleware] S3 upload error:', s3Err.message);
+          // If Cloudinary is available, fallback to Cloudinary
+          if (!isCloudinaryConfigured()) {
+            throw s3Err;
+          }
         }
+      }
 
+      // ── Strategy B: Cloudinary (Fallback if configured) ───────────────────
+      if (isCloudinaryConfigured() && file.buffer) {
+        const cldFolder = folder.startsWith('homeopathy-media') ? folder : `homeopathy-media/${folder}`;
         const { cleanBaseName, ext: fileExt } = extractCleanNameAndExt(file.originalname, ext);
         const uniqueSuffix = `${Date.now()}-${Math.round(Math.random() * 1e6)}`;
-        const isVideo = resource_type === 'video';
+        let resource_type = 'auto';
+        if (mimetype.startsWith('video/')) resource_type = 'video';
+        else if (mimetype.startsWith('image/')) resource_type = 'image';
 
         const publicId = (resource_type === 'raw' && fileExt)
           ? `${cleanBaseName}-${uniqueSuffix}.${fileExt}`
           : `${cleanBaseName}-${uniqueSuffix}`;
 
-        console.log(`[CloudinaryUpload] filename: ${file.originalname || 'unknown'}`);
-        console.log(`[CloudinaryUpload] folder: ${folder}`);
-        console.log(`[CloudinaryUpload] mimetype: ${mimetype || 'unknown'}`);
-        console.log(`[CloudinaryUpload] bytes: ${file.buffer ? file.buffer.length : file.size || 0}`);
-
-        try {
-          const uploaded = await uploadBufferToCloudinary(file, folder, {
-            resource_type,
-            public_id: publicId,
-            use_filename: false,
-            unique_filename: false,
-            access_mode: 'public',
-            timeout: isVideo ? 600000 : 120000,
-            ...(isVideo ? { chunk_size: 6000000 } : {}),
-          });
-
-          const isExpectedType = resource_type === 'auto'
-            ? ['image', 'raw', 'video'].includes(uploaded.resource_type)
-            : uploaded.resource_type === resource_type;
-
-          if (!uploaded || !uploaded.secure_url || !uploaded.public_id || !isExpectedType || !(Number(uploaded.bytes) > 0)) {
-            throw new Error('Cloudinary returned an incomplete document upload response.');
-          }
-
-          console.log(`[CloudinaryUpload] Cloudinary public_id: ${uploaded.public_id}`);
-          console.log(`[CloudinaryUpload] Cloudinary secure_url: ${uploaded.secure_url}`);
-          console.log(`[CloudinaryUpload] Cloudinary resource_type: ${uploaded.resource_type}`);
-
-          file.secure_url = uploaded.secure_url;
-          file.url = uploaded.secure_url;
-          file.path = uploaded.secure_url;
-          file.public_id = uploaded.public_id;
-          file.resource_type = uploaded.resource_type;
-          file.width = uploaded.width || file.width;
-          file.height = uploaded.height || file.height;
-          file.bytes = uploaded.bytes || file.size;
-          file.format = uploaded.format || fileExt || ext;
-          if (file.mimetype === 'application/pdf' || fileExt === 'pdf' || uploaded.format === 'pdf') {
-            file.mimetype = 'application/pdf';
-            file.size = Number(uploaded.bytes) || (file.buffer ? file.buffer.length : file.size);
-          }
-          continue;
-        } catch (uploadErr) {
-          if (isVideo) {
-            console.error(`[VIDEO UPLOAD] Cloudinary upload FAILED: ${uploadErr.message || uploadErr}`);
-          }
-          console.error(`[processUploadsToCloudinary Memory Buffer ERROR] File: "${file.originalname}", error:`, uploadErr.message || uploadErr);
-          return res.status(500).json({
-            success: false,
-            message: `Failed to upload ${isVideo ? 'video' : 'media'} file to Cloudinary storage.`,
-            error: uploadErr.message,
-          });
-        }
-      }
-
-      // ── Case 3: Disk storage — stream to Cloudinary & delete local copy ────
-      if (file.path && !file.path.startsWith('http') && isCloudinaryConfigured()) {
-        try {
-          const mimetype = (file.mimetype || '').toLowerCase();
-          const fieldname = (file.fieldname || '').toLowerCase();
-          const ext = path.extname(file.originalname || file.path || '').toLowerCase().replace('.', '');
-
-          let folder = 'homeopathy-media';
-          let resource_type = 'auto';
-
-          if (mimetype.startsWith('video/') || fieldname.includes('video') || fieldname.includes('recording') || ALLOWED_VIDEO_FORMATS.includes(ext)) {
-            folder = 'homeopathy-media/videos';
-            resource_type = 'video';
-          } else if (mimetype === 'application/pdf' || ext === 'pdf') {
-            folder = 'homeopathy-media/pdf-notes';
-            resource_type = 'auto';
-          } else if (ALLOWED_DOC_FORMATS.includes(ext)) {
-            folder = 'homeopathy-media/attachments';
-            resource_type = 'auto';
-          } else if (mimetype.startsWith('image/') || ALLOWED_IMAGE_FORMATS.includes(ext)) {
-            folder = 'homeopathy-media/images';
-            resource_type = 'image';
-          } else {
-            folder = 'homeopathy-media/attachments';
-            resource_type = 'auto';
-          }
-
-          const { cleanBaseName, ext: fileExt } = extractCleanNameAndExt(file.originalname || file.path, ext);
-          const uniqueSuffix = `${Date.now()}-${Math.round(Math.random() * 1e6)}`;
-          const isVideo = resource_type === 'video';
-
-          // Cloudinary treats public_id differently based on resource_type:
-          // For 'image' and 'video', Cloudinary manages extensions separately via format transformations.
-          // If an extension or dot is included in public_id for a video, Cloudinary converts the dot to
-          // an underscore (e.g. 'video1_mp4'). Do NOT include extension or dot in public_id for video/image.
-          // For 'raw' files (docs), Cloudinary requires the extension in public_id so the delivery URL
-          // includes extension, preventing 404 "Resource not found" errors during downloads.
-          const publicId = (resource_type === 'raw' && fileExt)
-            ? `${cleanBaseName}-${uniqueSuffix}.${fileExt}`
-            : `${cleanBaseName}-${uniqueSuffix}`;
-
-          console.log(`[processUploadsToCloudinary Disk] Uploading file: "${file.originalname || file.path}", mimetype: "${mimetype}", size: ${file.size || 0} bytes, resource_type: "${resource_type}", public_id: "${publicId}"`);
-
-          if (isVideo) {
-            console.log('[VIDEO UPLOAD] File received');
-            console.log(`[VIDEO UPLOAD] Filename: ${file.originalname || file.path || 'unknown'}`);
-            console.log(`[VIDEO UPLOAD] MIME: ${mimetype || 'video/mp4'}`);
-            console.log(`[VIDEO UPLOAD] Size: ${file.size || 0}`);
-            console.log('[VIDEO UPLOAD] Starting Cloudinary upload');
-          }
-
-          const uploadDiskOptions = {
-            folder,
-            resource_type,
-            public_id: publicId,
-            use_filename: false,
-            unique_filename: false,
-            access_mode: 'public',
-            timeout: isVideo ? 600000 : 120000,
-            ...(isVideo ? { chunk_size: 6000000 } : {}),
-          };
-
-          const uploaded = isVideo
-            ? await cloudinary.uploader.upload_large(file.path, uploadDiskOptions)
-            : await cloudinary.uploader.upload(file.path, uploadDiskOptions);
-
-          if (isVideo) {
-            console.log('[VIDEO UPLOAD] Cloudinary upload successful');
-            console.log(`[VIDEO UPLOAD] Resource type: ${uploaded.resource_type}`);
-            console.log(`[VIDEO UPLOAD] Secure URL: ${uploaded.secure_url}`);
-          }
-
-          console.log(`[processUploadsToCloudinary Disk SUCCESS] File: "${file.originalname || file.path}", public_id: "${uploaded.public_id}", resource_type: "${uploaded.resource_type}", bytes: ${uploaded.bytes || file.size}, url: "${uploaded.secure_url}"`);
-
-          // Clean up local temp file
-          fs.unlink(file.path, (err) => {
-            if (err && err.code !== 'ENOENT') {
-              console.warn(`Could not delete temp file ${file.path}:`, err.message);
-            }
-          });
-
-          file.secure_url = uploaded.secure_url;
-          file.url = uploaded.secure_url;
-          file.path = uploaded.secure_url;
-          file.public_id = uploaded.public_id;
-          file.resource_type = uploaded.resource_type;
-          file.width = uploaded.width || file.width;
-          file.height = uploaded.height || file.height;
-          file.bytes = uploaded.bytes || file.size;
-          file.format = uploaded.format || fileExt || ext;
-          continue;
-        } catch (diskUploadErr) {
-          if (isVideo) {
-            console.error(`[VIDEO UPLOAD] Cloudinary upload FAILED: ${diskUploadErr.message || diskUploadErr}`);
-          }
-          console.error(`[processUploadsToCloudinary Disk ERROR] File: "${file.originalname || file.path}", error:`, diskUploadErr.message || diskUploadErr);
-          return res.status(500).json({
-            success: false,
-            message: `Failed to upload ${isVideo ? 'video' : 'media'} file to Cloudinary storage.`,
-            error: diskUploadErr.message,
-          });
-        }
-      }
-
-      // ── Case 4: Pure local fallback (dev mode only) ──────────────────────
-      if (isProd && (!file.secure_url || !file.secure_url.startsWith('http'))) {
-        return res.status(500).json({
-          success: false,
-          message: 'Cloudinary storage is required in production. Local disk fallbacks are disabled.',
+        const uploaded = await uploadBufferToCloudinary(file, cldFolder, {
+          resource_type,
+          public_id: publicId,
+          use_filename: false,
+          unique_filename: false,
+          access_mode: 'public',
         });
+
+        file.secure_url = uploaded.secure_url;
+        file.url = uploaded.secure_url;
+        file.fileUrl = uploaded.secure_url;
+        file.documentUrl = uploaded.secure_url;
+        file.path = uploaded.secure_url;
+        file.public_id = uploaded.public_id;
+        file.resource_type = uploaded.resource_type;
+        file.bytes = uploaded.bytes || file.size;
+        file.storageProvider = 'cloudinary';
+        continue;
       }
 
-      if (file.filename || file.path) {
-        const localPath = file.path && !file.path.startsWith('http')
-          ? `/uploads/${path.basename(file.path)}`
-          : `/uploads/${file.filename}`;
-        file.secure_url = file.secure_url || localPath;
-        file.url = file.url || localPath;
-        file.path = file.path || localPath;
+      // ── Strategy C: Local disk fallback (dev only) ────────────────────────
+      if (file.buffer) {
+        const uniqueName = `${Date.now()}-${Math.round(Math.random() * 1e9)}-${sanitizeFilename(file.originalname)}`;
+        const localPath = path.join(uploadsDir, uniqueName);
+        await fs.promises.writeFile(localPath, file.buffer);
+        file.filename = uniqueName;
+        file.path = `/uploads/${uniqueName}`;
+        file.secure_url = file.path;
+        file.url = file.path;
+        file.fileUrl = file.path;
+        file.storageProvider = 'local';
       }
     }
 
+    req.uploadedFiles = files;
     return next();
-  } catch (error) {
-    console.error('Upload processing error:', error);
+  } catch (err) {
+    console.error('[Upload Middleware ERROR]:', err);
     return res.status(500).json({
       success: false,
-      message: 'File upload to Cloudinary failed. Please try again.',
-      error: error.message,
+      message: 'File upload failed. Please try again.',
+      error: err.message,
     });
   }
 };
 
-upload.processUploadsToCloudinary = processUploadsToCloudinary;
-upload.ALLOWED_VIDEO_FORMATS = ALLOWED_VIDEO_FORMATS;
-upload.ALL_ALLOWED_FORMATS = ALL_ALLOWED_FORMATS;
-upload.MAX_UPLOAD_SIZE = MAX_UPLOAD_SIZE;
-upload.handleUploadError = handleUploadError;
-upload.sanitizeFilename = sanitizeFilename;
-upload.extractCleanNameAndExt = extractCleanNameAndExt;
+// Aliases for seamless backward compatibility across all existing routes
+const processUploadsToCloudinary = processUploads;
+
+upload.processUploadsToCloudinary = processUploads;
+upload.processUploads = processUploads;
 
 module.exports = upload;
-module.exports.processUploadsToCloudinary = processUploadsToCloudinary;
+module.exports.upload = upload;
 module.exports.handleUploadError = handleUploadError;
-module.exports.sanitizeFilename = sanitizeFilename;
-module.exports.extractCleanNameAndExt = extractCleanNameAndExt;
+module.exports.processUploads = processUploads;
+module.exports.processUploadsToCloudinary = processUploadsToCloudinary;

@@ -526,7 +526,7 @@ exports.getCourses = async (req, res) => {
       });
     }
 
-    const { search, status, category } = req.query;
+    const { search, status, category } = req.query || {};
     const filter = {};
 
     if (status && status.trim() && status.toLowerCase() !== 'all') {
@@ -557,17 +557,24 @@ exports.getCourses = async (req, res) => {
       return res.status(200).json(cachedData);
     }
 
-    const [total, courses] = await Promise.all([
-      Course.countDocuments(filter),
-      Course.find(filter)
+    let findQuery = Course.find(filter);
+    if (typeof findQuery.select === 'function') {
+      findQuery = findQuery
         .select('courseId courseTitle instructor price shortDescription duration status thumbnail thumbnailMedia bannerUrl courseBanner category modules._id createdAt updatedAt')
         .sort({ createdAt: -1 })
         .skip(skip)
         .limit(limit)
-        .lean(),
-    ]);
+        .lean();
+    }
 
-    const serialized = await Promise.all(courses.map(async (course) => {
+    const [total, rawCourses] = await Promise.all([
+      typeof Course.countDocuments === 'function' ? Course.countDocuments(filter).catch(() => 0) : Promise.resolve(0),
+      Promise.resolve(findQuery),
+    ]);
+    const courses = Array.isArray(rawCourses) ? rawCourses : [];
+
+    const serialized = await Promise.all(courses.map(async (rawCourse) => {
+      const course = rawCourse && typeof rawCourse.toObject === 'function' ? rawCourse.toObject() : (rawCourse || {});
       const extractRawUrl = (val) => {
         if (!val) return '';
         if (typeof val === 'string') return val;
@@ -585,13 +592,15 @@ exports.getCourses = async (req, res) => {
         absoluteBanner = thumbnailMedia.url || '';
       } else {
         const rawBanner = extractRawUrl(course.courseBanner) || extractRawUrl(course.thumbnail) || extractRawUrl(course.bannerUrl) || extractRawUrl(course.banner) || extractRawUrl(course.thumbnailUrl) || extractRawUrl(course.image) || extractRawUrl(course.imageUrl);
-        absoluteBanner = optimizeCloudinaryUrl(toAbsoluteUrl(rawBanner, req));
+        absoluteBanner = toAbsoluteUrl(rawBanner, req);
       }
       const totalModules = Array.isArray(course.modules) ? course.modules.length : 0;
       // The list endpoint needs a count, never the curriculum array itself.
       const { modules, ...courseListFields } = course;
       return {
         ...courseListFields,
+        courseId: course.courseId || rawCourse.courseId || '',
+        courseTitle: course.courseTitle || rawCourse.courseTitle || '',
         thumbnailMedia,
         id: course.courseId || (course._id ? course._id.toString() : ''),
         thumbnail: absoluteBanner,

@@ -1,7 +1,9 @@
-﻿const Recording = require('../models/Recording');
+const Recording = require('../models/Recording');
 const Course = require('../models/Course');
 const mongoose = require('mongoose');
+const s3Service = require('../services/s3Service');
 const {
+  isCloudinaryConfigured,
   deleteCloudinaryByUrl,
   uploadBufferToCloudinary,
 } = require('../config/cloudinary');
@@ -532,20 +534,35 @@ exports.uploadRecordingVideo = async (req, res) => {
       });
     }
 
-    const uploaded = await uploadBufferToCloudinary(
-      uploadedFile,
-      'live_records',
-      { resource_type: 'video' }
-    );
-    const secureUrl = sanitizeVideoUrl(uploaded.secure_url);
-    if (!secureUrl || !secureUrl.includes('res.cloudinary.com')) {
-      throw new Error('Cloudinary did not return a public secure URL.');
+    let secureUrl = '';
+    let uploaded = {};
+
+    if (s3Service.isS3Configured()) {
+      uploaded = await s3Service.uploadBufferToS3(uploadedFile.buffer, {
+        folder: 'live_records',
+        mimetype: uploadedFile.mimetype || 'video/mp4',
+        originalname: uploadedFile.originalname || 'recording.mp4',
+      });
+      secureUrl = sanitizeVideoUrl(uploaded.secure_url);
+    } else if (isCloudinaryConfigured()) {
+      uploaded = await uploadBufferToCloudinary(
+        uploadedFile,
+        'live_records',
+        { resource_type: 'video' }
+      );
+      secureUrl = sanitizeVideoUrl(uploaded.secure_url);
+    } else {
+      throw new Error('Neither AWS S3 nor Cloudinary is configured for recording storage.');
+    }
+
+    if (!secureUrl) {
+      throw new Error('Storage service did not return a public secure URL.');
     }
     
     // Save to req for potential cleanup in catch block
     req.uploadedSecureUrl = secureUrl;
 
-    // Extract Cloudinary image/video dimensions & specs if present
+    // Extract image/video dimensions & specs if present
     const width = Number(uploaded.width || req.body.width) || 1920;
     const height = Number(uploaded.height || req.body.height) || 1080;
     const bytes = Number(uploaded.bytes || uploadedFile.buffer.length) || 0;
@@ -607,7 +624,11 @@ exports.uploadRecordingVideo = async (req, res) => {
     });
   } catch (error) {
     if (req.uploadedSecureUrl) {
-      deleteCloudinaryByUrl(req.uploadedSecureUrl).catch(err => console.error('Failed to cleanup recording video on save failure:', err));
+      if (req.uploadedSecureUrl.includes('cloudinary.com')) {
+        deleteCloudinaryByUrl(req.uploadedSecureUrl).catch(err => console.error('Failed to cleanup recording video on save failure:', err));
+      } else if (s3Service.isS3Configured()) {
+        s3Service.deleteFile(req.uploadedSecureUrl).catch(err => console.error('Failed to cleanup S3 recording video:', err));
+      }
     }
     console.error('========== UPLOAD RECORDING VIDEO ERROR ==========');
     console.error('MESSAGE:', error?.message);
@@ -622,7 +643,7 @@ exports.uploadRecordingVideo = async (req, res) => {
 };
 
 /**
- * @desc    Delete recording document from DB and remove corresponding video asset from Cloudinary storage
+ * @desc    Delete recording document from DB and remove corresponding video asset from storage
  * @route   DELETE /api/recordings/:id
  * @access  Private/Admin
  */
@@ -639,8 +660,12 @@ exports.deleteRecording = async (req, res) => {
     }
 
     const targetUrl = recording.recordedVideoUrl || recording.recordingFileUrl || '';
-    if (targetUrl && targetUrl.includes('cloudinary.com')) {
-      await deleteCloudinaryByUrl(targetUrl);
+    if (targetUrl) {
+      if (targetUrl.includes('cloudinary.com')) {
+        await deleteCloudinaryByUrl(targetUrl).catch(() => {});
+      } else if (s3Service.isS3Configured() || targetUrl.includes('amazonaws.com')) {
+        await s3Service.deleteFile(targetUrl).catch(() => {});
+      }
     }
 
     return res.status(200).json({

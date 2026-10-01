@@ -1,6 +1,7 @@
 const DemoVideo = require('../models/DemoVideo');
 const Course = require('../models/Course');
 const mongoose = require('mongoose');
+const s3Service = require('../services/s3Service');
 const { deleteCloudinaryByUrl } = require('../config/cloudinary');
 
 // Helper to extract file url from uploaded file object
@@ -363,8 +364,12 @@ exports.deleteDemoVideo = async (req, res) => {
       return res.status(404).json({ success: false, message: 'Demo video not found' });
     }
 
-    if (deletedVideo.videoUrl && deletedVideo.videoUrl.includes('cloudinary.com')) {
-      await deleteCloudinaryByUrl(deletedVideo.videoUrl);
+    if (deletedVideo.videoUrl) {
+      if (deletedVideo.videoUrl.includes('cloudinary.com')) {
+        await deleteCloudinaryByUrl(deletedVideo.videoUrl).catch(() => {});
+      } else if (s3Service.isS3Configured() || deletedVideo.videoUrl.includes('amazonaws.com')) {
+        await s3Service.deleteFile(deletedVideo.videoUrl).catch(() => {});
+      }
     }
 
     return res.status(200).json({
