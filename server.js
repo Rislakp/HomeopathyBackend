@@ -32,6 +32,7 @@ const app = express();
 
 // CORS Allowlist
 const allowedOrigins = [
+  'https://unani-landing-screen.onrender.com',
   'https://whitecoat.academy',
   'https://www.whitecoat.academy',
   'https://admin.whitecoat.academy',
@@ -53,14 +54,23 @@ const allowedOrigins = [
   'http://localhost:5173',
 ];
 
-if (process.env.ALLOWED_ORIGINS) {
-  process.env.ALLOWED_ORIGINS.split(',').forEach((origin) => {
-    const trimmed = origin.trim();
-    if (trimmed && !allowedOrigins.includes(trimmed)) {
-      allowedOrigins.push(trimmed);
-    }
-  });
-}
+// Support environment variables (ALLOWED_ORIGINS, CORS_ORIGINS, CORS_ORIGIN)
+const envOriginVars = [
+  process.env.ALLOWED_ORIGINS,
+  process.env.CORS_ORIGINS,
+  process.env.CORS_ORIGIN,
+];
+
+envOriginVars.forEach((envVar) => {
+  if (envVar) {
+    envVar.split(',').forEach((origin) => {
+      const trimmed = origin.trim().replace(/^["']|["']$/g, '').replace(/\/+$/, '');
+      if (trimmed && !allowedOrigins.some((o) => o.replace(/\/+$/, '') === trimmed)) {
+        allowedOrigins.push(trimmed);
+      }
+    });
+  }
+});
 
 // Helper to check if origin is localhost or 127.0.0.1 on any port (http or https)
 const isLocalhostOrigin = (origin) => {
@@ -71,11 +81,15 @@ const isLocalhostOrigin = (origin) => {
 const isOriginAllowed = (origin) => {
   if (!origin) return true; // Mobile apps, Postman, curl, server-to-server
 
-  // Direct allowlist match
-  if (allowedOrigins.includes(origin)) return true;
+  const cleanOrigin = origin.trim().replace(/\/+$/, '');
+
+  // Direct allowlist match (normalized)
+  if (allowedOrigins.some((allowed) => allowed.trim().replace(/\/+$/, '') === cleanOrigin)) {
+    return true;
+  }
 
   // Localhost & 127.0.0.1 dynamic development ports (Flutter Web, Vite, React, etc.)
-  if (isLocalhostOrigin(origin)) {
+  if (isLocalhostOrigin(cleanOrigin)) {
     return true;
   }
 
@@ -87,17 +101,17 @@ const isOriginAllowed = (origin) => {
     /^https?:\/\/(10\.0\.2\.2|0\.0\.0\.0)(:\d+)?$/i,
   ];
 
-  if (domainPatterns.some((pattern) => pattern.test(origin))) {
+  if (domainPatterns.some((pattern) => pattern.test(cleanOrigin))) {
     return true;
   }
 
   // Mobile WebViews and hybrid app schemes
   if (
-    origin.startsWith('file://') ||
-    origin.startsWith('capacitor://') ||
-    origin.startsWith('ionic://') ||
-    origin.startsWith('tauri://') ||
-    origin.startsWith('app://')
+    cleanOrigin.startsWith('file://') ||
+    cleanOrigin.startsWith('capacitor://') ||
+    cleanOrigin.startsWith('ionic://') ||
+    cleanOrigin.startsWith('tauri://') ||
+    cleanOrigin.startsWith('app://')
   ) {
     return true;
   }
@@ -144,7 +158,7 @@ const corsOptionsDelegate = (req, callback) => {
     methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS', 'HEAD'],
     allowedHeaders: allowedHeaders,
     exposedHeaders: ['Content-Range', 'X-Content-Range', 'ETag', 'Authorization'],
-    optionsSuccessStatus: 200,
+    optionsSuccessStatus: 204,
     maxAge: 86400,
   });
 };
