@@ -318,6 +318,8 @@ const unaniExamRoutes = require('./src/unani/exams/routes/unaniExam.routes');
 app.use(unaniExamRoutes);
 const unaniRankRoutes = require('./src/unani/ranks/routes/unaniRank.routes');
 app.use(unaniRankRoutes);
+const unaniReviewRoutes = require('./src/unani/reviews/routes/unaniReview.routes');
+app.use(unaniReviewRoutes);
 
 const facultyRoutes = require('./routes/facultyRoutes');
 app.use('/api/faculty', facultyRoutes);
