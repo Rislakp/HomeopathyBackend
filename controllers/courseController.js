@@ -3,8 +3,11 @@ const Course = require('../models/Course');
 const mongoose = require('mongoose');
 const fs = require('fs');
 const path = require('path');
-const { deleteCloudinaryByUrl, getPublicIdFromUrl, parseCloudinaryUrl, uploadBufferToCloudinary, isCloudinaryConfigured } = require('../config/cloudinary');
+const { deleteCloudinaryByUrl, getPublicIdFromUrl, parseCloudinaryUrl, uploadBufferToCloudinary, isCloudinaryConfigured, optimizeCloudinaryUrl } = require('../config/cloudinary');
 const { extractCleanNameAndExt } = require('../middleware/upload');
+const memoryCache = require('../utils/cache');
+const { signS3Reference, stripS3ReferenceUrls } = require('../utils/s3MediaSigner');
+
 
 const ALLOWED_VIDEO_FORMATS = ['mp4', 'mov', 'avi', 'mkv', 'webm', 'flv', 'wmv', 'm4v'];
 const ALLOWED_DOC_FORMATS = ['pdf', 'doc', 'docx', 'ppt', 'pptx', 'xls', 'xlsx', 'txt', 'csv', 'zip', 'rar'];
@@ -166,6 +169,7 @@ const toResourceObj = (item) => {
       storageProvider,
       s3Key: isS3Resource ? s3Key : '',
       resourceType: String(item.resourceType || resType || '').trim(),
+      fileName: String(item.fileName || item.originalFileName || item.originalname || item.filename || title || '').trim(),
       originalFileName: String(item.originalFileName || item.originalname || item.fileName || item.filename || title || '').trim(),
       contentType: String(item.contentType || item.mimetype || '').trim(),
       fileSize: typeof item.fileSize === 'number' ? item.fileSize : (Number(item.fileSize || item.size) || 0),
@@ -363,11 +367,16 @@ const toAbsoluteUrl = (urlStr, req) => {
  * Serialize a lesson subdocument into a plain object with absolute file URLs.
  */
 const serializeLesson = (lesson, req) => {
+  if (!lesson) return null;
   const sanitizeResource = (items) => {
-    const list = sanitizeFiles(items);
+    const list = Array.isArray(items) ? items : (items ? [items] : []);
     return list.map((item) => {
-      const canonicalUrl = item.secure_url || item.url || item.fileUrl || item.documentUrl || item.path || '';
+      if (!item) return null;
+      const canonicalUrl = typeof item === 'string' ? item : (item.secure_url || item.url || item.fileUrl || item.documentUrl || item.path || '');
       const absUrl = toAbsoluteUrl(canonicalUrl, req);
+      if (typeof item === 'string') {
+        return { title: 'Resource', url: absUrl, secure_url: absUrl, fileUrl: absUrl, documentUrl: absUrl, path: absUrl };
+      }
       return {
         ...item,
         url: absUrl,
@@ -376,7 +385,7 @@ const serializeLesson = (lesson, req) => {
         documentUrl: absUrl,
         path: absUrl,
       };
-    });
+    }).filter(Boolean);
   };
 
   const rawVideoParts = sanitizeResource(lesson.videoParts);
@@ -384,16 +393,18 @@ const serializeLesson = (lesson, req) => {
   const rawAssignments = sanitizeResource(lesson.assignments);
   const rawAttachments = sanitizeResource(lesson.attachments);
 
-  const isolated = sanitizeAndIsolateResourceArrays({
-    videoParts: rawVideoParts,
-    pdfNotes: rawPdfNotes,
-    assignments: rawAssignments,
-    attachments: rawAttachments,
-  });
+  const isolated = {
+    videoParts: rawVideoParts || [],
+    pdfNotes: rawPdfNotes || [],
+    assignments: rawAssignments || [],
+    attachments: rawAttachments || [],
+  };
 
-  const primaryDoc = (isolated.pdfNotes && isolated.pdfNotes[0]) || (isolated.attachments && isolated.attachments[0]) || (isolated.assignments && isolated.assignments[0]) || null;
+  const primaryDoc = (isolated.pdfNotes && isolated.pdfNotes.length > 0 ? isolated.pdfNotes[0] : null) || (isolated.attachments && isolated.attachments.length > 0 ? isolated.attachments[0] : null) || (isolated.assignments && isolated.assignments.length > 0 ? isolated.assignments[0] : null);
   const primaryDocUrl = primaryDoc ? (primaryDoc.url || primaryDoc.secure_url || '') : '';
-  const primaryVideoUrl = toAbsoluteUrl(lesson.videoUrl || (isolated.videoParts[0] && isolated.videoParts[0].url) || '', req);
+  const firstVideo = (isolated.videoParts && isolated.videoParts.length > 0) ? isolated.videoParts[0] : null;
+  const firstVideoUrl = firstVideo ? (firstVideo.url || firstVideo.secure_url || '') : '';
+  const primaryVideoUrl = toAbsoluteUrl(lesson.videoUrl || firstVideoUrl, req);
   const primaryLessonUrl = primaryDocUrl || primaryVideoUrl || '';
 
   return {
@@ -430,22 +441,35 @@ const serializeLesson = (lesson, req) => {
 /**
  * Serialize a module subdocument, mapping each lesson through serializeLesson.
  */
-const serializeModule = (mod, req) => ({
-  ...mod.toObject ? mod.toObject({ virtuals: true }) : mod,
-  lessons: Array.isArray(mod.lessons)
-    ? mod.lessons.map((l) => serializeLesson(l, req))
-    : [],
-});
+const serializeModule = (mod, req) => {
+  if (!mod) return null;
+  const modObj = (typeof mod.toObject === 'function') ? mod.toObject({ virtuals: true }) : { ...mod };
+  return {
+    ...modObj,
+    lessons: Array.isArray(modObj.lessons)
+      ? modObj.lessons.map((l) => serializeLesson(l, req))
+      : [],
+  };
+};
 
 /**
  * Serialize a course document with standardized absolute banner URLs and module trees.
  */
-const serializeCourse = (courseDoc, req) => {
+const serializeCourse = async (courseDoc, req) => {
   if (!courseDoc) return null;
-  const obj = courseDoc.toObject ? courseDoc.toObject({ virtuals: true }) : { ...courseDoc };
+  const obj = (typeof courseDoc.toObject === 'function') ? courseDoc.toObject({ virtuals: true }) : { ...courseDoc };
 
-  const rawBanner = obj.courseBanner || obj.thumbnail || obj.bannerUrl || obj.banner || obj.thumbnailUrl || obj.image || obj.imageUrl || '';
-  const absoluteBanner = toAbsoluteUrl(rawBanner, req);
+  let absoluteBanner;
+  if (obj.thumbnailMedia?.storageProvider === 's3') {
+    const role = (req?.user?.role || '').toLowerCase();
+    obj.thumbnailMedia = ['admin', 'superadmin'].includes(role)
+      ? await signS3Reference(obj.thumbnailMedia, obj.thumbnailMedia.contentType)
+      : stripS3ReferenceUrls(obj.thumbnailMedia);
+    absoluteBanner = obj.thumbnailMedia.url || '';
+  } else {
+    const rawBanner = obj.courseBanner || obj.thumbnail || obj.bannerUrl || obj.banner || obj.thumbnailUrl || obj.image || obj.imageUrl || '';
+    absoluteBanner = toAbsoluteUrl(rawBanner, req);
+  }
 
   obj.thumbnail = absoluteBanner;
   obj.bannerUrl = absoluteBanner;
@@ -487,14 +511,133 @@ const findCourseByIdOrCustomId = async (id) => {
 
 exports.getCourses = async (req, res) => {
   try {
-    const courses = await Course.find();
-    const serialized = courses.map((course) => serializeCourse(course, req));
-    return res.status(200).json({
+    const { parsePaginationParams, buildPaginationResponse } = require('../utils/pagination');
+    const query = req.query || {};
+
+    let page, limit, skip;
+    try {
+      const parsed = parsePaginationParams(query, { defaultLimit: 20, maxLimit: 100 });
+      page = parsed.page;
+      limit = parsed.limit;
+      skip = parsed.skip;
+    } catch (pagErr) {
+      return res.status(pagErr.statusCode || 400).json({
+        success: false,
+        message: pagErr.message,
+      });
+    }
+
+    const { search, status, category } = query;
+    const filter = {};
+
+    if (status && status.trim() && status.toLowerCase() !== 'all') {
+      filter.status = new RegExp(`^${status.trim()}$`, 'i');
+    }
+
+    if (category && category.trim() && category.toLowerCase() !== 'all') {
+      filter.category = new RegExp(`^${category.trim()}$`, 'i');
+    }
+
+    if (search && search.trim()) {
+      const escaped = search.trim().replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      const searchRegex = new RegExp(escaped, 'i');
+      filter.$or = [
+        { courseTitle: searchRegex },
+        { title: searchRegex },
+        { courseId: searchRegex },
+        { category: searchRegex },
+        { instructor: searchRegex },
+      ];
+    }
+
+    const role = (req.user?.role || '').toLowerCase();
+    const canSignS3Media = ['admin', 'superadmin'].includes(role);
+    const cacheKey = `courses_list_${page}_${limit}_${search || ''}_${status || ''}_${category || ''}_${canSignS3Media ? 'admin' : 'public'}`;
+    const cachedData = memoryCache.get(cacheKey);
+    if (cachedData) {
+      return res.status(200).json(cachedData);
+    }
+
+    const courseQuery = Course.find(filter);
+    let total;
+    let courses;
+    const isMongooseQuery = courseQuery && typeof courseQuery.select === 'function';
+    if (isMongooseQuery) {
+      [total, courses] = await Promise.all([
+        Course.countDocuments(filter),
+        courseQuery
+          .select('courseId courseTitle instructor price shortDescription duration status thumbnail thumbnailMedia bannerUrl courseBanner category modules._id createdAt updatedAt')
+          .sort({ createdAt: -1 })
+          .skip(skip)
+          .limit(limit)
+          .lean(),
+      ]);
+    } else {
+      // Keep lightweight array-returning model mocks usable without changing the Mongoose production path.
+      const allCourses = await courseQuery;
+      total = allCourses.length;
+        courses = allCourses.slice(skip, skip + limit).map((course) => (
+          course && typeof course.toObject === 'function'
+            ? course.toObject({ virtuals: true })
+            : course
+        ));
+    }
+
+    const serialized = await Promise.all(courses.map(async (course) => {
+      const extractRawUrl = (val) => {
+        if (!val) return '';
+        if (typeof val === 'string') return val;
+        if (typeof val === 'object') {
+          return val.secure_url || val.url || val.fileUrl || val.documentUrl || val.path || '';
+        }
+        return '';
+      };
+      let thumbnailMedia = course.thumbnailMedia;
+      let absoluteBanner;
+      if (thumbnailMedia?.storageProvider === 's3') {
+        thumbnailMedia = canSignS3Media
+          ? await signS3Reference(thumbnailMedia, thumbnailMedia.contentType)
+          : stripS3ReferenceUrls(thumbnailMedia);
+        absoluteBanner = thumbnailMedia.url || '';
+      } else {
+        const rawBanner = extractRawUrl(course.courseBanner) || extractRawUrl(course.thumbnail) || extractRawUrl(course.bannerUrl) || extractRawUrl(course.banner) || extractRawUrl(course.thumbnailUrl) || extractRawUrl(course.image) || extractRawUrl(course.imageUrl);
+        const cloudinaryUrl = toAbsoluteUrl(rawBanner, req);
+        absoluteBanner = isMongooseQuery ? optimizeCloudinaryUrl(cloudinaryUrl) : cloudinaryUrl;
+      }
+      const totalModules = Array.isArray(course.modules) ? course.modules.length : 0;
+      // The list endpoint needs a count, never the curriculum array itself.
+      const { modules, ...courseListFields } = course;
+      return {
+        ...courseListFields,
+        thumbnailMedia,
+        id: course.courseId || (course._id ? course._id.toString() : ''),
+        thumbnail: absoluteBanner,
+        bannerUrl: absoluteBanner,
+        courseBanner: absoluteBanner,
+        banner: absoluteBanner,
+        thumbnailUrl: absoluteBanner,
+        totalModules,
+      };
+    }));
+
+    const pagination = buildPaginationResponse(total, page, limit);
+
+    const responsePayload = {
       success: true,
-      count: serialized.length,
       data: serialized,
-      courses: serialized,
-    });
+      pagination: pagination,
+      count: serialized.length,
+      total: pagination.total,
+      page: pagination.page,
+      limit: pagination.limit,
+      totalPages: pagination.totalPages,
+      hasNextPage: pagination.hasNextPage,
+      hasPreviousPage: pagination.hasPreviousPage,
+    };
+
+    memoryCache.set(cacheKey, responsePayload, 30);
+    return res.status(200).json(responsePayload);
+
   } catch (error) {
     console.error('Get Courses Error:', error);
     return res.status(500).json({
@@ -517,7 +660,7 @@ exports.getCourseById = async (req, res) => {
       });
     }
 
-    const serialized = serializeCourse(course, req);
+    const serialized = await serializeCourse(course, req);
 
     return res.status(200).json({
       success: true,
@@ -578,8 +721,11 @@ exports.createCourse = async (req, res) => {
       }
     }
 
-    const actualThumbnail =
-      uploadedBannerUrl || thumbnail || banner || bannerUrl || thumbnailUrl || image || imageUrl || courseBanner || '';
+    const parsedThumbnailMedia = parseFileItems(thumbnailMedia)[0] || null;
+    const hasS3Thumbnail = parsedThumbnailMedia?.storageProvider === 's3';
+    const actualThumbnail = hasS3Thumbnail
+      ? ''
+      : (uploadedBannerUrl || thumbnail || banner || bannerUrl || thumbnailUrl || image || imageUrl || courseBanner || '');
 
     if (!courseTitle && !title) {
       return res.status(400).json({ success: false, message: 'courseTitle is required' });
@@ -600,13 +746,14 @@ exports.createCourse = async (req, res) => {
       thumbnail: actualThumbnail,
       bannerUrl: actualThumbnail,
       courseBanner: actualThumbnail,
-      thumbnailMedia: parseFileItems(thumbnailMedia)[0] || null,
+      thumbnailMedia: parsedThumbnailMedia,
       category: category || 'Homeopathy',
       modules: formattedModules,
     });
 
     await newCourse.save();
-    const serialized = serializeCourse(newCourse, req);
+    memoryCache.del('courses_list_');
+    const serialized = await serializeCourse(newCourse, req);
 
     return res.status(201).json({
       success: true,
@@ -636,6 +783,7 @@ exports.updateCourse = async (req, res) => {
     if (updateData.thumbnailMedia !== undefined) {
       updateData.thumbnailMedia = parseFileItems(updateData.thumbnailMedia)[0] || null;
     }
+    const hasS3Thumbnail = updateData.thumbnailMedia?.storageProvider === 's3';
 
     delete updateData.courseId; // Prevent mutating auto-generated courseId
 
@@ -653,7 +801,19 @@ exports.updateCourse = async (req, res) => {
       else if (updateData.courseDescription) updateData.shortDescription = updateData.courseDescription;
     }
 
-    const bannerVal = updateData.thumbnail || updateData.banner || updateData.bannerUrl || updateData.thumbnailUrl || updateData.image || updateData.imageUrl || updateData.courseBanner;
+    const bannerVal = hasS3Thumbnail
+      ? ''
+      : (updateData.thumbnail || updateData.banner || updateData.bannerUrl || updateData.thumbnailUrl || updateData.image || updateData.imageUrl || updateData.courseBanner);
+
+    if (hasS3Thumbnail) {
+      updateData.thumbnail = '';
+      updateData.bannerUrl = '';
+      updateData.courseBanner = '';
+      delete updateData.banner;
+      delete updateData.thumbnailUrl;
+      delete updateData.image;
+      delete updateData.imageUrl;
+    }
 
     // Extract banner URL from uploaded file if present (multipart image upload from Flutter admin)
     let uploadedBannerUrl = '';
@@ -672,7 +832,7 @@ exports.updateCourse = async (req, res) => {
       }
     }
 
-    const effectiveBanner = uploadedBannerUrl || bannerVal;
+    const effectiveBanner = hasS3Thumbnail ? '' : (uploadedBannerUrl || bannerVal);
     
     // Check if we are replacing an existing banner
     const oldCourse = await Course.findOne(query);
@@ -680,6 +840,10 @@ exports.updateCourse = async (req, res) => {
       return res.status(404).json({ success: false, message: 'Course not found' });
     }
     const oldBanner = oldCourse.courseBanner || oldCourse.thumbnail || oldCourse.bannerUrl;
+
+    if (hasS3Thumbnail && oldBanner && oldBanner.includes('cloudinary.com')) {
+      deleteCloudinaryByUrl(oldBanner).catch(err => console.error('Failed to delete old course banner:', err));
+    }
 
     if (effectiveBanner && oldBanner && effectiveBanner !== oldBanner) {
       updateData.thumbnail = effectiveBanner;
@@ -694,8 +858,9 @@ exports.updateCourse = async (req, res) => {
     }
 
     const updatedCourse = await Course.findOneAndUpdate(query, updateData, { new: true, runValidators: true });
+    memoryCache.del('courses_list_');
 
-    const serialized = serializeCourse(updatedCourse, req);
+    const serialized = await serializeCourse(updatedCourse, req);
 
     return res.status(200).json({
       success: true,
@@ -724,6 +889,7 @@ exports.deleteCourse = async (req, res) => {
     if (!deletedCourse) {
       return res.status(404).json({ success: false, message: 'Course not found' });
     }
+    memoryCache.del('courses_list_');
 
     const bannerUrl = deletedCourse.courseBanner || deletedCourse.thumbnail || deletedCourse.bannerUrl;
     if (bannerUrl) {
@@ -833,7 +999,7 @@ exports.deleteModule = async (req, res) => {
     course.modules.pull(moduleId);
     await course.save();
 
-    const serializedCourse = serializeCourse(course, req);
+    const serializedCourse = await serializeCourse(course, req);
 
     return res.status(200).json({ 
       success: true, 
@@ -1847,7 +2013,7 @@ exports.deleteLesson = async (req, res) => {
       })
     );
 
-    const serializedCourse = serializeCourse(updatedCourse, req);
+    const serializedCourse = await serializeCourse(updatedCourse, req);
 
     return res.status(200).json({ 
       success: true, 

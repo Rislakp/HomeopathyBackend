@@ -62,7 +62,7 @@ const adminLogin = async (req, res) => {
     }
 
     // 3. Find admin by email
-    const admin = await Admin.findOne({ email: cleanEmail });
+    const admin = await Admin.findOne({ email: cleanEmail }).lean();
 
     if (!admin) {
       console.warn('[adminLogin] Login failed: incorrect email');
@@ -91,7 +91,7 @@ const adminLogin = async (req, res) => {
     if (!isMatch && password === admin.password) {
       isMatch = true;
       admin.password = await bcrypt.hash(password, 10);
-      await admin.save();
+      await Admin.updateOne({ _id: admin._id }, { $set: { password: admin.password, role: admin.role || 'ADMIN', isActive: true } });
       console.log('[adminLogin] Legacy plain-text password migrated to bcrypt');
     }
 

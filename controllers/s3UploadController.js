@@ -67,6 +67,7 @@ const makeReference = ({ key, fileName, contentType, fileSize, uploadStatus = 'u
   s3Key: key,
   resourceType: contentType?.startsWith('video/') ? 'video' : (contentType === 'application/pdf' ? 'pdf' : 'image'),
   resource_type: contentType?.startsWith('video/') ? 'video' : (contentType === 'application/pdf' ? 'raw' : 'image'),
+  fileName,
   originalFileName: fileName,
   contentType,
   mimetype: contentType,

@@ -3,32 +3,70 @@ const Student = require('../models/Student');
 const User = require('../models/User');
 const TestResult = require('../src/common/models/testResult.model');
 const Course = require('../models/Course');
+const memoryCache = require('../utils/cache');
 
 /**
  * Sync registered student users from User collection into Student collection if missing
  */
 async function syncStudentUsers() {
   try {
-    const studentUsers = await User.find({ role: 'student' }).lean();
+    const lastSync = memoryCache.get('last_student_sync');
+    if (lastSync) return; // Throttled: sync at most once every 5 minutes
+
+    memoryCache.set('last_student_sync', true, 300); // 5 min TTL
+
+    const studentUsers = await User.find({ role: 'student' })
+      .select('_id email name phone contactNumber dateOfBirth qualification createdAt')
+      .lean();
+    if (!studentUsers || studentUsers.length === 0) return;
+
+
+    const [existingUserIdsRaw, existingEmailsRaw] = await Promise.all([
+      Student.distinct('userId'),
+      Student.distinct('email'),
+    ]);
+
+    const existingUserIds = new Set(existingUserIdsRaw.filter(Boolean).map(id => id.toString()));
+    const existingEmails = new Set(existingEmailsRaw.filter(Boolean).map(e => e.toLowerCase().trim()));
+
+    const toCreate = [];
     for (const u of studentUsers) {
-      const exists = await Student.findOne({
-        $or: [{ userId: u._id }, { email: u.email }]
-      });
-      if (!exists) {
-        await Student.create({
+      const uId = u._id.toString();
+      const uEmail = u.email ? u.email.toLowerCase().trim() : '';
+      if (!existingUserIds.has(uId) && !existingEmails.has(uEmail)) {
+        toCreate.push({
           userId: u._id,
-          name: u.name,
-          email: u.email,
-          phone: u.phone || u.contactNumber,
-          contactNumber: u.contactNumber || u.phone,
-          dateOfBirth: u.dateOfBirth,
-          qualification: u.qualification,
+          name: u.name || '',
+          email: u.email || '',
+          phone: u.phone || u.contactNumber || '',
+          contactNumber: u.contactNumber || u.phone || '',
+          dateOfBirth: u.dateOfBirth || '',
+          qualification: u.qualification || '',
           course: 'General',
+          name: u.name || 'Student',
+          email: u.email,
+          phone: u.phone || u.contactNumber || '',
+          contactNumber: u.contactNumber || u.phone || '',
+          dateOfBirth: u.dateOfBirth || '',
+          qualification: u.qualification || '',
+          profileImage: u.profileImage || u.avatar || '',
+          avatar: u.avatar || u.profileImage || '',
+          preferredCourse: u.preferredCourse || u.course || 'UNANI',
+          course: u.course || u.preferredCourse || 'UNANI',
+          courseId: u.courseId || '',
+          courseRef: u.courseRef || null,
           subscription: 'Free',
-          status: 'Active',
+          status: u.status || 'Pending',
+          accountStatus: u.accountStatus || 'Pending',
+          isApproved: u.isApproved || false,
+          isActive: u.isActive || false,
           joinedDate: u.createdAt || new Date()
         });
       }
+    }
+
+    if (toCreate.length > 0) {
+      await Student.insertMany(toCreate, { ordered: false });
     }
   } catch (err) {
     console.warn('Sync student users notice:', err.message);
@@ -42,18 +80,21 @@ async function syncStudentUsers() {
  */
 async function getAdminStudents(req, res) {
   try {
-    // 1. Parse Pagination Parameters
-    let page = parseInt(req.query.page, 10);
-    let limit = parseInt(req.query.limit, 10);
+    const { parsePaginationParams, buildPaginationResponse } = require('../utils/pagination');
 
-    if (isNaN(page) || page < 1) page = 1;
-    if (isNaN(limit) || limit < 1) limit = 10;
-    if (limit > 100) limit = 100; // Cap page limit at 100
-
-    const skip = (page - 1) * limit;
-
-    // Optional background sync to ensure data consistency
-    syncStudentUsers().catch(() => { });
+    // 1. Parse & Validate Pagination Parameters (default: 20, max: 100)
+    let page, limit, skip;
+    try {
+      const parsed = parsePaginationParams(req.query, { defaultLimit: 20, maxLimit: 100 });
+      page = parsed.page;
+      limit = parsed.limit;
+      skip = parsed.skip;
+    } catch (pagErr) {
+      return res.status(pagErr.statusCode || 400).json({
+        success: false,
+        message: pagErr.message,
+      });
+    }
 
     // 2. Build Search and Filter Match Conditions
     const matchConditions = {};
@@ -114,6 +155,188 @@ async function getAdminStudents(req, res) {
       }
     }
 
+    // 3. Fast Parallel Count & Paginated Find using Lean Projections
+    const [total, rawStudents] = await Promise.all([
+      Student.countDocuments(matchConditions),
+      Student.find(matchConditions)
+        .select('_id userId name email phone contactNumber dateOfBirth qualification profileImage avatar course courseRef courseId status accountStatus isApproved subscription joinedDate createdAt updatedAt')
+        .sort({ createdAt: -1 })
+        .skip(skip)
+        .limit(limit)
+        .lean(),
+    ]);
+
+    if (!rawStudents || rawStudents.length === 0) {
+      const pagination = buildPaginationResponse(total, page, limit);
+      return res.status(200).json({
+        success: true,
+        message: 'Students retrieved successfully',
+        data: [],
+        pagination: pagination,
+        count: 0,
+      });
+    }
+
+    // 4. Batch resolve supplementary User and Course data in ONE roundtrip (no N+1)
+    const userIdsToFetch = new Set();
+    const emailsToFetch = new Set();
+    const courseRefsToFetch = new Set();
+    const courseIdsToFetch = new Set();
+    const courseTitlesToFetch = new Set();
+    const studentDocIds = [];
+
+    rawStudents.forEach((s) => {
+      studentDocIds.push(s._id);
+      if (s.userId && mongoose.Types.ObjectId.isValid(s.userId)) {
+        userIdsToFetch.add(s.userId.toString());
+      }
+      if (s.email) {
+        emailsToFetch.add(s.email.toLowerCase().trim());
+      }
+      if (s.courseRef && mongoose.Types.ObjectId.isValid(s.courseRef)) {
+        courseRefsToFetch.add(s.courseRef.toString());
+      }
+      if (s.courseId) {
+        courseIdsToFetch.add(s.courseId.toString().trim());
+      }
+      if (s.course) {
+        courseTitlesToFetch.add(s.course.toString().trim());
+      }
+    });
+
+    const userQueryConditions = [];
+    if (userIdsToFetch.size > 0) {
+      userQueryConditions.push({
+        _id: { $in: [...userIdsToFetch].map((id) => new mongoose.Types.ObjectId(id)) },
+      });
+    }
+    if (emailsToFetch.size > 0) {
+      userQueryConditions.push({ email: { $in: [...emailsToFetch] } });
+    }
+
+    const courseQueryConditions = [];
+    if (courseRefsToFetch.size > 0) {
+      courseQueryConditions.push({
+        _id: { $in: [...courseRefsToFetch].map((id) => new mongoose.Types.ObjectId(id)) },
+      });
+    }
+    if (courseIdsToFetch.size > 0) {
+      courseQueryConditions.push({ courseId: { $in: [...courseIdsToFetch] } });
+    }
+    if (courseTitlesToFetch.size > 0) {
+      courseQueryConditions.push({ courseTitle: { $in: [...courseTitlesToFetch] } });
+    }
+
+    // Run user lookup, course lookup, and test stats concurrently
+    const [matchedUsers, matchedCourses, testStatsAgg] = await Promise.all([
+      userQueryConditions.length > 0
+        ? User.find({ $or: userQueryConditions })
+            .select('_id email phone contactNumber dateOfBirth qualification profileImage avatar')
+            .lean()
+        : Promise.resolve([]),
+      courseQueryConditions.length > 0
+        ? Course.find({ $or: courseQueryConditions })
+            .select('_id courseId courseTitle category price')
+            .lean()
+        : Promise.resolve([]),
+      TestResult.aggregate([
+        { $match: { studentId: { $in: studentDocIds } } },
+        {
+          $group: {
+            _id: '$studentId',
+            total_exams_attended: { $sum: 1 },
+            average_score: { $avg: '$percentage' },
+            passed_exams: {
+              $sum: {
+                $cond: [
+                  {
+                    $and: [
+                      { $gt: ['$totalMarks', 0] },
+                      { $gte: [{ $divide: ['$score', '$totalMarks'] }, 0.5] },
+                    ],
+                  },
+                  1,
+                  0,
+                ],
+              },
+            },
+          },
+        },
+      ]),
+    ]);
+
+    const userMap = new Map();
+    matchedUsers.forEach((u) => {
+      if (u._id) userMap.set(u._id.toString(), u);
+      if (u.email) userMap.set(u.email.toLowerCase().trim(), u);
+    });
+
+    const courseMap = new Map();
+    matchedCourses.forEach((c) => {
+      if (c._id) courseMap.set(c._id.toString(), c);
+      if (c.courseId) courseMap.set(c.courseId.toString().trim(), c);
+      if (c.courseTitle) courseMap.set(c.courseTitle.toString().toLowerCase().trim(), c);
+    });
+
+    const statsMap = new Map();
+    testStatsAgg.forEach((stat) => {
+      if (stat._id) statsMap.set(stat._id.toString(), stat);
+    });
+
+    // 5. Format student response objects
+    const formattedStudents = rawStudents.map((s) => {
+      const uId = s.userId ? s.userId.toString() : '';
+      const uEmail = s.email ? s.email.toLowerCase().trim() : '';
+      const userObj = userMap.get(uId) || userMap.get(uEmail) || null;
+
+      const cRef = s.courseRef ? s.courseRef.toString() : '';
+      const cId = s.courseId ? s.courseId.toString().trim() : '';
+      const cTitle = s.course ? s.course.toString().toLowerCase().trim() : '';
+      const courseObj = courseMap.get(cRef) || courseMap.get(cId) || courseMap.get(cTitle) || null;
+
+      const statObj = statsMap.get(s._id.toString()) || null;
+
+      const profileImage =
+        s.profileImage ||
+        s.avatar ||
+        userObj?.profileImage ||
+        userObj?.avatar ||
+        '';
+
+      return {
+        id: s._id.toString(),
+        student_id: s._id.toString(),
+        name: s.name || '',
+        email: s.email || '',
+        phone: s.phone || s.contactNumber || userObj?.phone || userObj?.contactNumber || '',
+        contact_number: s.contactNumber || s.phone || userObj?.contactNumber || userObj?.phone || '',
+        date_of_birth: s.dateOfBirth || userObj?.dateOfBirth || '',
+        qualification: s.qualification || userObj?.qualification || '',
+        profile_image: profileImage,
+        avatar: profileImage,
+        enrolled_course: {
+          id: courseObj?.courseId || (courseObj?._id ? courseObj._id.toString() : (s.course || 'General')),
+          title: courseObj?.courseTitle || s.course || 'General',
+          category: courseObj?.category || 'General',
+          price: courseObj?.price || 0,
+        },
+        subscription: {
+          status: s.status || 'Active',
+          type: s.subscription || 'Free',
+          joined_date: s.joinedDate || s.createdAt,
+        },
+        account_status: s.accountStatus || 'Pending',
+        is_approved: s.isApproved !== undefined ? s.isApproved : false,
+        stats: {
+          total_exams_attended: statObj?.total_exams_attended || 0,
+          average_score: statObj ? Math.round((statObj.average_score || 0) * 100) / 100 : 0,
+          passed_exams: statObj?.passed_exams || 0,
+        },
+        attended_exams: [],
+        created_at: s.createdAt,
+        updated_at: s.updatedAt,
+      };
+    });
     // 3. High-Performance MongoDB Aggregation Pipeline
     const pipeline = [
       // Step A: Apply Initial Filtering
@@ -359,6 +582,19 @@ async function getAdminStudents(req, res) {
                     }
                   ]
                 },
+                preferredCourse: {
+                  $ifNull: ['$preferredCourse', { $ifNull: ['$course', 'UNANI'] }]
+                },
+                course: {
+                  $ifNull: ['$course', { $ifNull: ['$preferredCourse', 'UNANI'] }]
+                },
+                status: { $ifNull: ['$status', 'Pending'] },
+                accountStatus: { $ifNull: ['$accountStatus', 'Pending'] },
+                account_status: { $ifNull: ['$accountStatus', 'Pending'] },
+                isApproved: { $ifNull: ['$isApproved', false] },
+                is_approved: { $ifNull: ['$isApproved', false] },
+                isActive: { $ifNull: ['$isActive', false] },
+                is_active: { $ifNull: ['$isActive', false] },
                 enrolled_course: {
                   id: {
                     $ifNull: [
@@ -366,23 +602,41 @@ async function getAdminStudents(req, res) {
                       {
                         $ifNull: [
                           { $toString: '$courseObj._id' },
-                          { $ifNull: ['$course', 'General'] }
+                          { $ifNull: ['$courseId', { $ifNull: ['$course', { $ifNull: ['$preferredCourse', 'UNANI'] }] }] }
                         ]
                       }
                     ]
                   },
                   title: {
-                    $ifNull: ['$courseObj.courseTitle', { $ifNull: ['$course', 'General'] }]
+                    $ifNull: [
+                      '$courseObj.courseTitle',
+                      { $ifNull: ['$course', { $ifNull: ['$preferredCourse', 'UNANI'] }] }
+                    ]
                   },
                   category: {
-                    $ifNull: ['$courseObj.category', 'General']
+                    $ifNull: [
+                      '$courseObj.category',
+                      {
+                        $cond: {
+                          if: {
+                            $regexMatch: {
+                              input: { $ifNull: ['$course', { $ifNull: ['$preferredCourse', ''] }] },
+                              regex: 'unani',
+                              options: 'i'
+                            }
+                          },
+                          then: 'Unani',
+                          else: 'General'
+                        }
+                      }
+                    ]
                   },
                   price: {
                     $ifNull: ['$courseObj.price', 0]
                   }
                 },
                 subscription: {
-                  status: { $ifNull: ['$status', 'Active'] },
+                  status: { $ifNull: ['$status', 'Pending'] },
                   type: { $ifNull: ['$subscription', 'Free'] },
                   joined_date: { $ifNull: ['$joinedDate', '$createdAt'] }
                 },
@@ -401,36 +655,14 @@ async function getAdminStudents(req, res) {
       }
     ];
 
-    const result = await Student.aggregate(pipeline);
-
-    const metadata = (result[0] && result[0].metadata[0]) || { total: 0 };
-    const students = (result[0] && result[0].data) || [];
-    const total = metadata.total;
-    const totalPages = Math.ceil(total / limit) || (total > 0 ? 1 : 0);
+    const pagination = buildPaginationResponse(total, page, limit);
 
     return res.status(200).json({
       success: true,
       message: 'Students retrieved successfully',
-      data: {
-        students,
-        pagination: {
-          total,
-          page,
-          limit,
-          total_pages: totalPages,
-          has_next: page < totalPages,
-          has_prev: page > 1
-        }
-      },
-      pagination: {
-        total,
-        page,
-        limit,
-        total_pages: totalPages,
-        has_next: page < totalPages,
-        has_prev: page > 1
-      },
-      count: students.length
+      data: formattedStudents,
+      pagination: pagination,
+      count: formattedStudents.length,
     });
   } catch (error) {
     console.error('Error fetching admin students list:', error);
@@ -719,6 +951,10 @@ async function getAdminStudentById(req, res) {
             type: { $ifNull: ['$subscription', 'Free'] },
             joined_date: { $ifNull: ['$joinedDate', '$createdAt'] }
           },
+          // Mirror the exact field names used by the LIST endpoint so the
+          // Admin portal's Student Detail page sees the same contract as the list.
+          account_status: { $ifNull: ['$accountStatus', 'Pending'] },
+          is_approved: { $ifNull: ['$isApproved', false] },
           stats: {
             total_exams_attended: '$total_exams_attended',
             average_score: '$average_score',
@@ -810,24 +1046,45 @@ async function getAdminStudentResults(req, res) {
 
       const formattedAnswers = (result.answers || []).map((ans) => {
         let correctOpt = ans.correctOption || ans.correctAnswer || null;
-        if (!correctOpt && ans.questionId) {
-          const targetQ = questionMap.get(ans.questionId.toString());
+        let targetQ = null;
+        if (ans.questionId) {
+          targetQ = questionMap.get(ans.questionId.toString());
           if (targetQ) {
-            correctOpt = targetQ.correctOption;
+            correctOpt = correctOpt || targetQ.correctOption || targetQ.correctAnswer;
           }
         }
+        correctOpt = correctOpt ? correctOpt.toString().toUpperCase() : null;
         return {
           questionId: ans.questionId,
           selectedOption: ans.selectedOption !== undefined ? ans.selectedOption : null,
+          selectedAnswer: ans.selectedOption !== undefined ? ans.selectedOption : null,
+          selectedOptionText: targetQ && targetQ.options && ans.selectedOption ? targetQ.options[ans.selectedOption] : null,
           correctOption: correctOpt || null,
+          correctAnswer: correctOpt || null,
+          correctOptionText: targetQ && targetQ.options && correctOpt ? (targetQ.options[correctOpt] || null) : null,
           isCorrect: ans.isCorrect
         };
       });
 
       let examMetadata = exam;
-      if (exam && exam.questions) {
-        const { questions, ...restExam } = exam;
-        examMetadata = restExam;
+      if (exam) {
+        const formattedQuestions = (exam.questions || []).map(q => {
+          const cOpt = q.correctOption
+            ? q.correctOption.toString().toUpperCase()
+            : (q.correctAnswer ? q.correctAnswer.toString().toUpperCase() : null);
+          return {
+            ...q,
+            correctOption: cOpt,
+            correctAnswer: cOpt,
+            correctOptionText: q.options && cOpt ? q.options[cOpt] : null,
+            correctAnswerText: q.options && cOpt ? q.options[cOpt] : null
+          };
+        });
+        
+        examMetadata = {
+          ...exam,
+          questions: formattedQuestions
+        };
       }
 
       return {
@@ -1116,6 +1373,14 @@ async function updateAdminStudent(req, res) {
       }
       if (updateFields.dateOfBirth) userUpdateFields.dateOfBirth = updateFields.dateOfBirth;
       if (updateFields.qualification) userUpdateFields.qualification = updateFields.qualification;
+      if (updateFields.profileImage !== undefined) {
+        userUpdateFields.profileImage = updateFields.profileImage;
+        userUpdateFields.avatar = updateFields.profileImage;
+      }
+      if (updateFields.avatar !== undefined) {
+        userUpdateFields.avatar = updateFields.avatar;
+        userUpdateFields.profileImage = updateFields.avatar;
+      }
 
       if (Object.keys(userUpdateFields).length > 0) {
         if (updatedStudent.userId) {
@@ -1273,14 +1538,19 @@ async function createAdminStudent(req, res) {
  */
 async function exportStudentsScores(req, res) {
   try {
-    const students = await Student.find().lean();
+    const students = await Student.find()
+      .select('_id userId name email phone contactNumber course subscription status joinedDate createdAt')
+      .lean();
     
     const acceptHeader = req.headers.accept || '';
     const format = req.query.format || (acceptHeader.includes('text/csv') ? 'csv' : 'json');
 
-    const testResults = await TestResult.find().populate('examId', 'title totalMarks').lean();
+    const testResults = await TestResult.find()
+      .select('studentId score')
+      .lean();
 
     const resultsMap = new Map();
+
     testResults.forEach(tr => {
       const sId = tr.studentId ? tr.studentId.toString() : null;
       if (sId) {
@@ -1579,6 +1849,204 @@ async function rejectStudent(req, res) {
 
 
 
+
+/**
+ * POST/PUT /api/admin/students/:id/avatar
+ * Upload or update student avatar/profile image.
+ */
+async function uploadStudentAvatar(req, res) {
+  try {
+    const { id } = req.params;
+    let imageUrl = '';
+
+    if (req.files && req.files.length > 0) {
+      const file = req.files[0];
+      imageUrl = file.cloudinaryUrl || file.secure_url || file.url || file.path || '';
+    } else if (req.file) {
+      imageUrl = req.file.cloudinaryUrl || req.file.secure_url || req.file.url || req.file.path || '';
+    }
+
+    if (!imageUrl) {
+      imageUrl = req.body.profileImage || req.body.avatar || req.body.imageUrl || req.body.url || '';
+    }
+
+    imageUrl = String(imageUrl || '').trim();
+
+    let student = null;
+    if (mongoose.Types.ObjectId.isValid(id)) {
+      const studentObjId = new mongoose.Types.ObjectId(id);
+      student = await Student.findById(studentObjId);
+      if (!student) {
+        student = await Student.findOne({ userId: studentObjId });
+      }
+    }
+    if (!student) {
+      student = await Student.findOne({ $or: [{ studentId: id }, { email: id }] });
+    }
+    if (!student) {
+      const user = await User.findOne({
+        $or: [
+          ...(mongoose.Types.ObjectId.isValid(id) ? [{ _id: new mongoose.Types.ObjectId(id) }] : []),
+          { email: id }
+        ]
+      });
+      if (user) {
+        student = await Student.findOne({ $or: [{ userId: user._id }, { email: user.email }] });
+        if (!student) {
+          student = await Student.create({
+            userId: user._id,
+            name: user.name,
+            email: user.email,
+            phone: user.phone || user.contactNumber,
+            profileImage: imageUrl,
+            avatar: imageUrl,
+            course: 'General',
+            subscription: 'Free',
+            status: 'Active',
+          });
+        }
+        await User.findByIdAndUpdate(user._id, { $set: { profileImage: imageUrl, avatar: imageUrl } });
+      }
+    }
+
+    if (!student) {
+      return res.status(404).json({
+        success: false,
+        message: 'Student not found',
+      });
+    }
+
+    student.profileImage = imageUrl;
+    student.avatar = imageUrl;
+    await student.save();
+
+    if (student.userId) {
+      await User.findByIdAndUpdate(student.userId, { $set: { profileImage: imageUrl, avatar: imageUrl } });
+    } else if (student.email) {
+      await User.findOneAndUpdate({ email: student.email }, { $set: { profileImage: imageUrl, avatar: imageUrl } });
+    }
+
+    return res.status(200).json({
+      success: true,
+      message: 'Student profile image updated successfully',
+      data: {
+        studentId: student._id.toString(),
+        profileImage: imageUrl,
+        avatar: imageUrl,
+      },
+      profileImage: imageUrl,
+    });
+  } catch (error) {
+    console.error('Error in uploadStudentAvatar:', error);
+    return res.status(500).json({
+      success: false,
+      message: 'Failed to update student profile image',
+      error: error.message,
+    });
+  }
+}
+
+/**
+ * DELETE /api/admin/students/:id/avatar
+ * Remove student avatar/profile image.
+ */
+async function deleteStudentAvatar(req, res) {
+  try {
+    const { id } = req.params;
+    let student = null;
+    if (mongoose.Types.ObjectId.isValid(id)) {
+      const studentObjId = new mongoose.Types.ObjectId(id);
+      student = await Student.findById(studentObjId);
+      if (!student) {
+        student = await Student.findOne({ userId: studentObjId });
+      }
+    }
+    if (!student) {
+      student = await Student.findOne({ $or: [{ studentId: id }, { email: id }] });
+    }
+    if (!student) {
+      const user = await User.findOne({
+        $or: [
+          ...(mongoose.Types.ObjectId.isValid(id) ? [{ _id: new mongoose.Types.ObjectId(id) }] : []),
+          { email: id }
+        ]
+      });
+      if (user) {
+        student = await Student.findOne({ $or: [{ userId: user._id }, { email: user.email }] });
+        await User.findByIdAndUpdate(user._id, { $set: { profileImage: '', avatar: '' } });
+      }
+    }
+
+    if (!student) {
+      return res.status(404).json({
+        success: false,
+        message: 'Student not found',
+      });
+    }
+
+    student.profileImage = '';
+    student.avatar = '';
+    await student.save();
+
+    if (student.userId) {
+      await User.findByIdAndUpdate(student.userId, { $set: { profileImage: '', avatar: '' } });
+    } else if (student.email) {
+      await User.findOneAndUpdate({ email: student.email }, { $set: { profileImage: '', avatar: '' } });
+    }
+
+    return res.status(200).json({
+      success: true,
+      message: 'Student profile image removed successfully',
+      profileImage: '',
+    });
+  } catch (error) {
+    console.error('Error in deleteStudentAvatar:', error);
+    return res.status(500).json({
+      success: false,
+      message: 'Failed to remove student profile image',
+      error: error.message,
+    });
+  }
+}
+
+/**
+ * GET /api/admin/students/:id/avatar
+ * Return student avatar/profile image.
+ */
+async function getStudentAvatar(req, res) {
+  try {
+    const { id } = req.params;
+    let student = null;
+    let user = null;
+    if (mongoose.Types.ObjectId.isValid(id)) {
+      const studentObjId = new mongoose.Types.ObjectId(id);
+      student = await Student.findById(studentObjId).lean();
+      if (!student) {
+        user = await User.findById(studentObjId).lean();
+      }
+    }
+    if (!student && !user) {
+      student = await Student.findOne({ $or: [{ studentId: id }, { email: id }] }).lean();
+      if (!student) {
+        user = await User.findOne({ email: id }).lean();
+      }
+    }
+
+    const profileImage = student?.profileImage || student?.avatar || user?.profileImage || user?.avatar || '';
+
+    return res.status(200).json({
+      success: true,
+      profileImage,
+    });
+  } catch (error) {
+    return res.status(500).json({
+      success: false,
+      message: 'Failed to get student avatar',
+      error: error.message,
+    });
+  }
+}
+
 module.exports = {
   getAdminStudents,
   getAdminStudentById,
@@ -1593,5 +2061,8 @@ module.exports = {
   exportStudentsScores,
   approveStudent,
   rejectStudent,
+  uploadStudentAvatar,
+  deleteStudentAvatar,
+  getStudentAvatar,
 };
 

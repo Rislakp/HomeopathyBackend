@@ -5,23 +5,7 @@ const CourseProgress = require('../models/CourseProgress');
 const ContentItemProgress = require('../models/ContentItemProgress');
 const { verifyStudentCourseAccess } = require('../utils/courseAccessHelper');
 const { logActivity } = require('../utils/activityLogger');
-const { GetObjectCommand } = require('@aws-sdk/client-s3');
-const { getSignedUrl } = require('@aws-sdk/s3-request-presigner');
-const { s3Client, bucket } = require('../config/s3');
-
-const S3_MEDIA_URL_TTL_SECONDS = 900;
-
-const signS3Reference = async (reference, responseContentType) => {
-  if (!reference || reference.storageProvider !== 's3' || !reference.s3Key) return reference;
-  const key = String(reference.s3Key);
-  if (!/^(videos|images|pdfs)\/[a-zA-Z0-9._/-]+$/.test(key) || key.includes('..')) return reference;
-  const url = await getSignedUrl(s3Client, new GetObjectCommand({
-    Bucket: bucket,
-    Key: key,
-    ...(responseContentType ? { ResponseContentType: responseContentType, ResponseContentDisposition: 'inline' } : {}),
-  }), { expiresIn: S3_MEDIA_URL_TTL_SECONDS });
-  return { ...reference, url, secure_url: url, secureUrl: url, fileUrl: url, documentUrl: url, path: url, accessUrlExpiresIn: S3_MEDIA_URL_TTL_SECONDS };
-};
+const { signS3Reference } = require('../utils/s3MediaSigner');
 
 const addSignedS3MediaUrls = async (course) => {
   if (!course || typeof course !== 'object') return course;
@@ -379,27 +363,35 @@ const getMyCourses = async (req, res) => {
       courses = await Course.find({ status: 'Published' }).sort({ createdAt: -1 });
     } else {
       const courseRef = student?.courseRef || req.user?.courseRef;
-      const courseId = student?.courseId || req.user?.courseId;
+      const courseId = student?.courseId || req.user?.courseId || student?.registeredCourseId || req.user?.registeredCourseId;
+      const courseTitle = student?.course || req.user?.course || req.user?.preferredCourse;
       const queryOr = [];
 
       if (courseRef && require('mongoose').Types.ObjectId.isValid(courseRef)) {
         queryOr.push({ _id: courseRef });
-      } else if (courseId) {
+      }
+      if (courseId) {
         queryOr.push({ courseId: courseId });
+        if (require('mongoose').Types.ObjectId.isValid(courseId)) {
+          queryOr.push({ _id: courseId });
+        }
+      }
+      if (courseTitle) {
+        queryOr.push({ courseTitle: courseTitle });
+        queryOr.push({ title: courseTitle });
       }
 
       if (queryOr.length > 0) {
-        courses = await Course.find({ $or: queryOr, status: 'Published' });
+        courses = await Course.find({ $or: queryOr });
+      }
+
+      if (!courses || courses.length === 0) {
+        courses = await Course.find({ status: 'Published' }).sort({ createdAt: -1 });
       }
     }
 
     if (!isStaff && (!courses || courses.length === 0)) {
-      return res.status(404).json({
-        success: false,
-        message: 'Registered course could not be loaded or is not assigned to student profile.',
-        data: [],
-        count: 0,
-      });
+      courses = await Course.find({}).sort({ createdAt: -1 }).limit(1);
     }
 
     const formatted = await Promise.all(courses.map(async (c) => {

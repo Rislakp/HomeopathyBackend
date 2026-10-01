@@ -22,6 +22,7 @@ const resourceSchema = new mongoose.Schema({
   storageProvider: { type: String, trim: true, default: '' },
   s3Key:         { type: String, trim: true, default: '' },
   resourceType:  { type: String, trim: true, default: '' },
+  fileName:      { type: String, trim: true, default: '' },
   originalFileName: { type: String, trim: true, default: '' },
   contentType:   { type: String, trim: true, default: '' },
   fileSize:      { type: Number, default: 0 },
@@ -312,5 +313,11 @@ courseSchema.pre('validate', async function(next) {
     next();
   }
 });
+
+// MongoDB performance indexes
+courseSchema.index({ status: 1, createdAt: -1 });
+courseSchema.index({ category: 1, status: 1 });
+courseSchema.index({ courseTitle: 1 });
+courseSchema.index({ createdAt: -1 });
 
 module.exports = mongoose.model('Course', courseSchema);

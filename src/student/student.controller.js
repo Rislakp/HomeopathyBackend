@@ -9,6 +9,7 @@ const {
   getStudentExamAttemptMap,
   computeExamAttemptMetrics
 } = require('../../utils/examAttemptHelper');
+const { parsePaginationParams, buildPaginationResponse } = require('../../utils/pagination');
 try { require('../../models/Course'); } catch (e) {}
 
 /**
@@ -66,6 +67,72 @@ async function resolveCourseAndModuleNames(exam) {
   }
 
   return { courseName, moduleName, canonicalCourseId };
+}
+
+/**
+ * Batch-resolve courseName and moduleName for a list of exams in ONE query.
+ * Eliminates the N+1 per-exam resolveCourseAndModuleNames pattern.
+ * @param {Array} exams - lean exam documents
+ * @returns {Map<string, Object>} courseMap keyed by courseId string
+ */
+async function batchResolveCourseNames(exams) {
+  const courseIdsToFetch = new Set();
+  for (const exam of exams) {
+    if (exam.courseId && typeof exam.courseId === 'string') {
+      const raw = exam.courseId.trim();
+      if (raw && raw !== 'null' && raw !== 'undefined') courseIdsToFetch.add(raw);
+    }
+  }
+
+  const courseMap = new Map();
+  if (courseIdsToFetch.size === 0) return courseMap;
+
+  try {
+    const CourseModel = mongoose.models.Course || require('../../models/Course');
+    const ids = [...courseIdsToFetch];
+    const objIds = ids.filter(id => mongoose.Types.ObjectId.isValid(id)).map(id => new mongoose.Types.ObjectId(id));
+    const foundCourses = await CourseModel.find({
+      $or: [
+        ...(objIds.length > 0 ? [{ _id: { $in: objIds } }] : []),
+        { courseId: { $in: ids } },
+        { courseTitle: { $in: ids } },
+        { title: { $in: ids } }
+      ]
+    }).select('courseId courseTitle title name modules').lean();
+
+    for (const fc of foundCourses) {
+      if (fc._id) courseMap.set(fc._id.toString(), fc);
+      if (fc.courseId) courseMap.set(fc.courseId, fc);
+      if (fc.courseTitle) courseMap.set(fc.courseTitle, fc);
+      if (fc.title) courseMap.set(fc.title, fc);
+    }
+  } catch (err) {
+    // Batch course lookup failed gracefully
+  }
+
+  return courseMap;
+}
+
+function getQuestionCorrectOption(question) {
+  if (!question) return null;
+  const rawCorrectAnswer = question.correctOption ?? question.correctAnswer ?? null;
+  if (rawCorrectAnswer === null || rawCorrectAnswer === undefined || rawCorrectAnswer === '') return null;
+  return normalizeOptionKey(rawCorrectAnswer, question.options) || rawCorrectAnswer.toString().toUpperCase();
+}
+
+function formatQuestionWithAnswerKey(question) {
+  const correctOption = getQuestionCorrectOption(question);
+  const correctOptionText = question && question.options && correctOption
+    ? (question.options[correctOption] || null)
+    : null;
+
+  return {
+    ...question,
+    correctOption,
+    correctAnswer: correctOption,
+    correctOptionText,
+    correctAnswerText: correctOptionText
+  };
 }
 
 /**
@@ -334,10 +401,12 @@ async function getAvailableExams(req, res) {
           } else {
             // Allow enrolled course exams OR grand mocks
             filter.$or = [
-              ...courseOrFilter,
+              ...courseOrFilter.map(c => ({ ...c, testType: 'course_test' })),
               { testType: 'grand_mock' },
               { testType: { $regex: /^(grand[-_ ]?mock|mock)$/i } },
-              { courseId: null }
+              { testType: { $exists: false } },
+              { testType: null },
+              { testType: '' }
             ];
           }
         } else {
@@ -350,24 +419,52 @@ async function getAvailableExams(req, res) {
       }
     }
 
-    // 1. Fetch all exams matching filter (excluding questions for lightweight summary)
-    const exams = await Exam.find(filter)
-      .select('-questions')
-      .sort({ createdAt: -1 })
-      .lean();
+    // ── Pagination ──
+    let page, limit, skip;
+    try {
+      ({ page, limit, skip } = parsePaginationParams(reqQuery, { defaultLimit: 20 }));
+    } catch (pErr) {
+      return res.status(pErr.statusCode || 400).json({ success: false, message: pErr.message });
+    }
 
-    // 2. Resolve candidate IDs for the authenticated student
+    // 1. Run count + paginated find concurrently
+    const [total, exams] = await Promise.all([
+      Exam.countDocuments(filter),
+      Exam.find(filter)
+        .select('-questions')
+        .sort({ createdAt: -1 })
+        .skip(skip)
+        .limit(limit)
+        .lean()
+    ]);
+
+    // 2. Resolve candidate IDs + attempt map + batch course names concurrently
     const candidateIds = await getStudentCandidateIds(req.user);
+    const [attemptMap, courseMap] = await Promise.all([
+      getStudentExamAttemptMap(candidateIds, exams.map((e) => e._id)),
+      batchResolveCourseNames(exams)
+    ]);
 
-    // 3. Fetch student's test results mapped by examId
-    const attemptMap = await getStudentExamAttemptMap(
-      candidateIds,
-      exams.map((e) => e._id)
-    );
+    // 3. Combine exams with authoritative student attempt status (NO per-exam DB calls)
+    const formattedExams = exams.map((exam) => {
+      let courseName = exam.courseName || null;
+      let moduleName = exam.moduleName || null;
+      let canonicalCourseId = null;
 
-    // 4. Combine exams with authoritative student attempt status and previous score
-    const formattedExams = await Promise.all(exams.map(async (exam) => {
-      const { courseName, moduleName, canonicalCourseId } = await resolveCourseAndModuleNames(exam);
+      if (exam.courseId && typeof exam.courseId === 'string') {
+        const foundCourse = courseMap.get(exam.courseId.trim());
+        if (foundCourse) {
+          canonicalCourseId = foundCourse._id ? foundCourse._id.toString() : null;
+          if (!courseName) courseName = foundCourse.courseTitle || foundCourse.title || null;
+          if (!moduleName && exam.moduleId && Array.isArray(foundCourse.modules)) {
+            const modObj = foundCourse.modules.find(
+              (m) => m && ((m._id && m._id.toString() === exam.moduleId.toString()) || m.moduleName === exam.moduleId)
+            );
+            if (modObj) moduleName = modObj.moduleName || null;
+          }
+        }
+      }
+
       const examIdStr = exam._id.toString();
       const resultsForExam = attemptMap.get(examIdStr) || [];
       const metrics = computeExamAttemptMetrics(exam, resultsForExam);
@@ -391,12 +488,15 @@ async function getAvailableExams(req, res) {
         submittedAt: metrics.submittedAt,
         resultId: metrics.resultId
       };
-    }));
+    });
+
+    const pagination = buildPaginationResponse(total, page, limit);
 
     return res.status(200).json({
       success: true,
       count: formattedExams.length,
-      data: formattedExams
+      data: formattedExams,
+      pagination
     });
   } catch (error) {
     console.error('Error fetching student available exams:', error);
@@ -498,7 +598,7 @@ async function startExam(req, res) {
 
     // Sanitize questions to prevent cheating - completely remove `correctOption`
     const sanitizedQuestions = (exam.questions || []).map((q) => {
-      const { correctOption, ...questionWithoutAnswer } = q;
+      const { correctOption, explanation, ...questionWithoutAnswer } = q;
       return questionWithoutAnswer;
     });
 
@@ -695,7 +795,7 @@ async function submitExam(req, res) {
       if (targetQuestion) {
         // Robust option normalization for both selectedOption and correctOption
         const userOptionKey = normalizeOptionKey(ans.selectedOption, targetQuestion.options);
-        const correctOptionKey = normalizeOptionKey(targetQuestion.correctOption, targetQuestion.options);
+        const correctOptionKey = getQuestionCorrectOption(targetQuestion);
 
         const isAttempted = userOptionKey !== null;
         const isCorrect = isAttempted && correctOptionKey !== null && userOptionKey === correctOptionKey;
@@ -711,10 +811,16 @@ async function submitExam(req, res) {
           }
         }
 
+        const correctOptStr = correctOptionKey;
+
         processedAnswers.push({
           questionId: targetQuestion._id || (mongoose.Types.ObjectId.isValid(qId) ? qId : null),
           selectedOption: userOptionKey, // Guaranteed 'A', 'B', 'C', 'D' or null
-          correctOption: correctOptionKey || (targetQuestion.correctOption ? targetQuestion.correctOption.toString().toUpperCase() : null),
+          selectedAnswer: userOptionKey,
+          selectedOptionText: targetQuestion.options && userOptionKey ? targetQuestion.options[userOptionKey] : null,
+          correctOption: correctOptStr,
+          correctAnswer: correctOptStr,
+          correctOptionText: targetQuestion.options && correctOptStr ? targetQuestion.options[correctOptStr] : null,
           isCorrect: isCorrect
         });
       }
@@ -810,6 +916,11 @@ async function submitExam(req, res) {
         hasAttempted:         true,
         isCompleted:          true,
         answers:              testResult.answers,
+        answers:              processedAnswers,
+        examInfo: {
+          ...exam.toObject(),
+          questions: exam.questions.map(formatQuestionWithAnswerKey)
+        },
         createdAt:            testResult.createdAt
       }
     });
@@ -859,34 +970,48 @@ async function getStudentResults(req, res) {
       matchingExamIds = matchingExams.map(e => e._id.toString());
     }
 
-    let results = await TestResult.find({ studentId: { $in: candidateIds } })
-      .populate('examId', 'title testType courseId moduleId courseName moduleName marksPerQuestion negativeMark negativeMarkPenalty durationMinutes totalQuestions questions')
-      .sort({ createdAt: -1 })
-      .lean();
+    // ── Pagination ──
+    let page, limit, skip;
+    try {
+      ({ page, limit, skip } = parsePaginationParams(reqQuery, { defaultLimit: 20 }));
+    } catch (pErr) {
+      return res.status(pErr.statusCode || 400).json({ success: false, message: pErr.message });
+    }
 
+    const resultFilter = { studentId: { $in: candidateIds } };
     if (matchingExamIds !== null) {
-      results = results.filter(r => r.examId && matchingExamIds.includes(r.examId._id ? r.examId._id.toString() : r.examId.toString()));
+      resultFilter.examId = { $in: matchingExamIds.map(id => new mongoose.Types.ObjectId(id)) };
     }
-    
-    // For course tests, strictly filter out results for courses the student no longer has access to.
-    // Grand mock tests are global and bypass course verification.
-    const validResults = [];
-    for (const r of results) {
-      if (!r.examId) continue;
-      const exam = r.examId;
-      if (exam.courseId && normalizeTestType(exam.testType) === 'course_test') {
-        const hasAccess = await verifyStudentCourseAccess(req.user, exam.courseId);
-        if (hasAccess) {
-          validResults.push(r);
-        }
-      } else {
-        // Grand mock results are global
-        validResults.push(r);
-      }
-    }
-    results = validResults;
 
-    const formattedResults = await Promise.all(results.map(async (result) => {
+    // Run count + paginated find concurrently
+    const [totalResults, results] = await Promise.all([
+      TestResult.countDocuments(resultFilter),
+      TestResult.find(resultFilter)
+        .populate('examId', 'title testType courseId moduleId courseName moduleName marksPerQuestion negativeMark negativeMarkPenalty durationMinutes totalQuestions')
+        .sort({ createdAt: -1 })
+        .skip(skip)
+        .limit(limit)
+        .lean()
+    ]);
+
+    // Batch resolve course access and course names (replaces two N+1 loops)
+    const courseAccessResults = await Promise.all(
+      results.map(async (r) => {
+        if (!r.examId) return false;
+        const exam = r.examId;
+        if (exam.courseId && normalizeTestType(exam.testType) === 'course_test') {
+          return verifyStudentCourseAccess(req.user, exam.courseId);
+        }
+        return true; // Grand mock results are global
+      })
+    );
+    const validResults = results.filter((_, i) => courseAccessResults[i]);
+
+    // Batch resolve course names for all exam metadata
+    const examsForBatch = validResults.map(r => r.examId).filter(Boolean);
+    const courseMap = await batchResolveCourseNames(examsForBatch);
+
+    const formattedResults = validResults.map((result) => {
       const exam = result.examId;
       const questionMap = new Map();
       if (exam && Array.isArray(exam.questions)) {
@@ -901,23 +1026,42 @@ async function getStudentResults(req, res) {
 
       const formattedAnswers = (result.answers || []).map((ans) => {
         let correctOpt = ans.correctOption || ans.correctAnswer || null;
-        if (!correctOpt && ans.questionId) {
-          const targetQ = questionMap.get(ans.questionId.toString());
-          if (targetQ) {
-            correctOpt = normalizeOptionKey(targetQ.correctOption, targetQ.options) || targetQ.correctOption;
+        let targetQ = null;
+        if (ans.questionId) {
+          targetQ = questionMap.get(ans.questionId.toString());
+          if (!correctOpt && targetQ) {
+            correctOpt = getQuestionCorrectOption(targetQ);
           }
         }
         return {
           questionId: ans.questionId,
           selectedOption: ans.selectedOption !== undefined ? ans.selectedOption : null,
+          selectedAnswer: ans.selectedOption !== undefined ? ans.selectedOption : null,
+          selectedOptionText: targetQ && targetQ.options && ans.selectedOption ? targetQ.options[ans.selectedOption] : null,
           correctOption: correctOpt || null,
+          correctAnswer: correctOpt || null,
+          correctOptionText: targetQ && targetQ.options && correctOpt ? (targetQ.options[correctOpt] || null) : null,
           isCorrect: ans.isCorrect
         };
       });
 
       let examMetadata = exam;
       if (exam) {
-        const { courseName: resolvedCourseName, moduleName: resolvedModuleName } = await resolveCourseAndModuleNames(exam);
+        // Resolve from batch map instead of N+1 query
+        let resolvedCourseName = exam.courseName || null;
+        let resolvedModuleName = exam.moduleName || null;
+        if (exam.courseId && typeof exam.courseId === 'string') {
+          const fc = courseMap.get(exam.courseId.trim());
+          if (fc) {
+            if (!resolvedCourseName) resolvedCourseName = fc.courseTitle || fc.title || null;
+            if (!resolvedModuleName && exam.moduleId && Array.isArray(fc.modules)) {
+              const modObj = fc.modules.find(
+                (m) => m && ((m._id && m._id.toString() === exam.moduleId.toString()) || m.moduleName === exam.moduleId)
+              );
+              if (modObj) resolvedModuleName = modObj.moduleName || null;
+            }
+          }
+        }
         if (exam.questions) {
           const { questions, ...restExam } = exam;
           examMetadata = {
@@ -932,6 +1076,14 @@ async function getStudentResults(req, res) {
             moduleName: resolvedModuleName
           };
         }
+        const formattedQuestions = (exam.questions || []).map(formatQuestionWithAnswerKey);
+
+        examMetadata = {
+          ...exam,
+          courseName: resolvedCourseName,
+          moduleName: resolvedModuleName,
+          questions: formattedQuestions
+        };
       }
 
       return {
@@ -939,12 +1091,15 @@ async function getStudentResults(req, res) {
         examId: examMetadata,
         answers: formattedAnswers
       };
-    }));
+    });
+
+    const pagination = buildPaginationResponse(totalResults, page, limit);
 
     return res.status(200).json({
       success: true,
       count: formattedResults.length,
-      data: formattedResults
+      data: formattedResults,
+      pagination
     });
   } catch (error) {
     console.error('Error fetching student test results:', error);

@@ -64,8 +64,11 @@ const facultySchema = new mongoose.Schema(
   }
 );
 
-// Indexes for high-performance searching
+// Indexes for high-performance searching, sorting, and pagination
 facultySchema.index({ fullName: 'text', department: 'text', role: 'text', qualification: 'text' });
 facultySchema.index({ status: 1, department: 1 });
+facultySchema.index({ status: 1, createdAt: -1 });
+facultySchema.index({ createdAt: -1 });
+facultySchema.index({ fullName: 1 });
 
 module.exports = mongoose.model('Faculty', facultySchema);

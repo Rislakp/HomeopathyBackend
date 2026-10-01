@@ -102,12 +102,24 @@ const adminAuth = async (req, res, next) => {
       });
     }
 
-    // 4. Verify admin exists in the database
+    // 4. Verify admin exists in the database (check Admin model, fallback to User model)
     let admin = null;
     try {
       admin = await Admin.findById(adminId).select('-password');
     } catch (dbErr) {
       console.warn('[adminAuth.middleware] Error querying Admin:', dbErr.message);
+    }
+
+    if (!admin) {
+      try {
+        const User = require('../models/User');
+        const user = await User.findById(adminId).select('-password');
+        if (user && ['admin', 'superadmin', 'teacher', 'staff'].includes((user.role || '').toLowerCase())) {
+          admin = user;
+        }
+      } catch (userErr) {
+        console.warn('[adminAuth.middleware] Error querying User fallback:', userErr.message);
+      }
     }
     
     if (!admin) {
