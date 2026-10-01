@@ -1,7 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const courseController = require('../controllers/courseController');
-const { requireAdmin, requireAuth } = require('../middleware/rbac');
+const { requireAdmin, requireAuth, optionalAuth } = require('../middleware/rbac');
 const { getMyCourseContent, updateLessonProgress, updateContentItemProgress, getMyProgress, saveCourseProgress, addStudyTime } = require('../controllers/studentCurriculumController');
 const upload = require('../middleware/upload');
 const { handleUploadError, processUploadsToCloudinary } = upload;
@@ -21,7 +21,7 @@ const handleUpload = (req, res, next) => {
 // ==========================================
 
 // GET /api/courses - Fetch all courses
-router.get('/', courseController.getCourses);
+router.get('/', optionalAuth, courseController.getCourses);
 
 // POST /api/courses - Create a new course (supports multipart banner image upload)
 router.post('/', requireAdmin, handleUpload, courseController.createCourse);
@@ -33,7 +33,7 @@ router.patch('/:courseId/modules/:moduleId/lessons/:lessonId/items/:itemId/progr
 router.patch('/:courseId/modules/:moduleId/lessons/:lessonId/progress', requireAuth, updateLessonProgress);
 router.post('/:courseId/progress', requireAuth, saveCourseProgress);
 router.post('/:courseId/study-time', requireAuth, addStudyTime);
-router.get('/:id', courseController.getCourseById);
+router.get('/:id', optionalAuth, courseController.getCourseById);
 
 // PUT /api/courses/:id - Update course metadata (supports multipart banner image upload)
 router.put('/:id', requireAdmin, handleUpload, courseController.updateCourse);
@@ -47,7 +47,7 @@ router.delete('/:id', requireAdmin, courseController.deleteCourse);
 // ==========================================
 
 // GET /api/courses/:courseId/modules - Get all modules for a course
-router.get('/:courseId/modules', courseController.getModules);
+router.get('/:courseId/modules', optionalAuth, courseController.getModules);
 
 // POST /api/courses/:courseId/modules - Add module to course
 router.post('/:courseId/modules', requireAdmin, courseController.addModule);
@@ -64,7 +64,7 @@ router.delete('/:courseId/modules/:moduleId', requireAdmin, courseController.del
 // ==========================================
 
 // GET /api/courses/:courseId/modules/:moduleId/lessons - Get all lessons for a module
-router.get('/:courseId/modules/:moduleId/lessons', courseController.getLessonsByModule);
+router.get('/:courseId/modules/:moduleId/lessons', optionalAuth, courseController.getLessonsByModule);
 
 // POST /api/courses/:courseId/modules/:moduleId/lessons - Add lesson to module
 router.post('/:courseId/modules/:moduleId/lessons', requireAdmin, handleUpload, courseController.addLesson);

@@ -6,7 +6,7 @@ const path = require('path');
 const { deleteCloudinaryByUrl, getPublicIdFromUrl, parseCloudinaryUrl, uploadBufferToCloudinary, isCloudinaryConfigured, optimizeCloudinaryUrl } = require('../config/cloudinary');
 const { extractCleanNameAndExt } = require('../middleware/upload');
 const memoryCache = require('../utils/cache');
-const { signS3Reference } = require('../utils/s3MediaSigner');
+const { signS3Reference, stripS3ReferenceUrls, normalizeS3Reference } = require('../utils/s3MediaSigner');
 
 
 const ALLOWED_VIDEO_FORMATS = ['mp4', 'mov', 'avi', 'mkv', 'webm', 'flv', 'wmv', 'm4v'];
@@ -56,6 +56,13 @@ const normalizeFileUrl = (value) => {
   if (normalizedPath.startsWith('/uploads/')) return normalizedPath;
   return `/uploads/${normalizedPath.replace(/^\/+/, '')}`;
 };
+
+const isValidS3MediaKey = (key, prefix) =>
+  typeof key === 'string' &&
+  key.startsWith(`${prefix}/`) &&
+  key.length <= 1024 &&
+  !key.includes('..') &&
+  !/[\\\r\n]/.test(key);
 
 /**
  * Normalise a single raw resource item (string or object) into the
@@ -374,32 +381,44 @@ const toAbsoluteUrl = (urlStr, req) => {
 /**
  * Serialize a lesson subdocument into a plain object with absolute file URLs.
  */
-const serializeLesson = (lesson, req) => {
+const serializeLesson = async (lesson, req) => {
   if (!lesson) return null;
-  const sanitizeResource = (items) => {
+  const canSignS3Media = ['admin', 'superadmin'].includes((req?.user?.role || '').toLowerCase());
+  const sanitizeResource = async (items) => {
     const list = Array.isArray(items) ? items : (items ? [items] : []);
-    return list.map((item) => {
+    return Promise.all(list.map(async (item) => {
       if (!item) return null;
-      const canonicalUrl = typeof item === 'string' ? item : (item.secure_url || item.url || item.fileUrl || item.documentUrl || item.path || '');
+      const resource = typeof item.toObject === 'function'
+        ? item.toObject({ virtuals: true })
+        : item;
+      const s3Reference = normalizeS3Reference(resource);
+      const media = s3Reference
+        ? canSignS3Media
+          ? await signS3Reference(s3Reference, s3Reference.contentType)
+          : stripS3ReferenceUrls(s3Reference)
+        : resource;
+      const canonicalUrl = typeof media === 'string' ? media : (media.secure_url || media.url || media.fileUrl || media.documentUrl || media.path || '');
       const absUrl = toAbsoluteUrl(canonicalUrl, req);
-      if (typeof item === 'string') {
+      if (typeof media === 'string') {
         return { title: 'Resource', url: absUrl, secure_url: absUrl, fileUrl: absUrl, documentUrl: absUrl, path: absUrl };
       }
       return {
-        ...item,
+        ...media,
         url: absUrl,
         secure_url: absUrl,
         fileUrl: absUrl,
         documentUrl: absUrl,
         path: absUrl,
       };
-    }).filter(Boolean);
+    })).then((items) => items.filter(Boolean));
   };
 
-  const rawVideoParts = sanitizeResource(lesson.videoParts);
-  const rawPdfNotes = sanitizeResource(lesson.pdfNotes);
-  const rawAssignments = sanitizeResource(lesson.assignments);
-  const rawAttachments = sanitizeResource(lesson.attachments);
+  const [rawVideoParts, rawPdfNotes, rawAssignments, rawAttachments] = await Promise.all([
+    sanitizeResource(lesson.videoParts),
+    sanitizeResource(lesson.pdfNotes),
+    sanitizeResource(lesson.assignments),
+    sanitizeResource(lesson.attachments),
+  ]);
 
   const isolated = {
     videoParts: rawVideoParts || [],
@@ -412,7 +431,14 @@ const serializeLesson = (lesson, req) => {
   const primaryDocUrl = primaryDoc ? (primaryDoc.url || primaryDoc.secure_url || '') : '';
   const firstVideo = (isolated.videoParts && isolated.videoParts.length > 0) ? isolated.videoParts[0] : null;
   const firstVideoUrl = firstVideo ? (firstVideo.url || firstVideo.secure_url || '') : '';
-  const primaryVideoUrl = toAbsoluteUrl(lesson.videoUrl || firstVideoUrl, req);
+  const s3VideoReference = normalizeS3Reference(lesson.videoUrl);
+  const primaryVideoUrl = firstVideo?.storageProvider === 's3'
+    ? firstVideoUrl
+    : s3VideoReference
+      ? canSignS3Media
+        ? (await signS3Reference(s3VideoReference, s3VideoReference.contentType)).url || ''
+        : ''
+      : toAbsoluteUrl(lesson.videoUrl || firstVideoUrl, req);
   const primaryLessonUrl = primaryDocUrl || primaryVideoUrl || '';
 
   return {
@@ -449,13 +475,13 @@ const serializeLesson = (lesson, req) => {
 /**
  * Serialize a module subdocument, mapping each lesson through serializeLesson.
  */
-const serializeModule = (mod, req) => {
+const serializeModule = async (mod, req) => {
   if (!mod) return null;
   const modObj = (typeof mod.toObject === 'function') ? mod.toObject({ virtuals: true }) : { ...mod };
   return {
     ...modObj,
     lessons: Array.isArray(modObj.lessons)
-      ? modObj.lessons.map((l) => serializeLesson(l, req))
+      ? await Promise.all(modObj.lessons.map((l) => serializeLesson(l, req)))
       : [],
   };
 };
@@ -469,7 +495,10 @@ const serializeCourse = async (courseDoc, req) => {
 
   let absoluteBanner;
   if (obj.thumbnailMedia?.storageProvider === 's3') {
-    obj.thumbnailMedia = await signS3Reference(obj.thumbnailMedia, obj.thumbnailMedia.contentType);
+    const canSignS3Media = ['admin', 'superadmin'].includes((req?.user?.role || '').toLowerCase());
+    obj.thumbnailMedia = canSignS3Media
+      ? await signS3Reference(obj.thumbnailMedia, obj.thumbnailMedia.contentType)
+      : stripS3ReferenceUrls(obj.thumbnailMedia);
     absoluteBanner = obj.thumbnailMedia.url || '';
   } else {
     const rawBanner = obj.courseBanner || obj.thumbnail || obj.bannerUrl || obj.banner || obj.thumbnailUrl || obj.image || obj.imageUrl || '';
@@ -485,7 +514,7 @@ const serializeCourse = async (courseDoc, req) => {
   obj.imageUrl = absoluteBanner;
 
   if (Array.isArray(obj.modules)) {
-    obj.modules = obj.modules.map((mod) => serializeModule(mod, req));
+    obj.modules = await Promise.all(obj.modules.map((mod) => serializeModule(mod, req)));
   }
 
   obj.totalModules = Array.isArray(obj.modules) ? obj.modules.length : (obj.modules ? obj.modules.length : 0);
@@ -555,6 +584,7 @@ exports.getCourses = async (req, res) => {
     }
 
     const role = (req.user?.role || '').toLowerCase();
+    const canSignS3Media = ['admin', 'superadmin'].includes(role);
     const cacheKey = `courses_list_${page}_${limit}_${search || ''}_${status || ''}_${category || ''}_${['admin', 'superadmin'].includes(role) ? 'admin' : 'public'}`;
     const cachedData = memoryCache.get(cacheKey);
     if (cachedData) {
@@ -590,7 +620,9 @@ exports.getCourses = async (req, res) => {
       let thumbnailMedia = course.thumbnailMedia;
       let absoluteBanner;
       if (thumbnailMedia?.storageProvider === 's3') {
-        thumbnailMedia = await signS3Reference(thumbnailMedia, thumbnailMedia.contentType);
+        thumbnailMedia = canSignS3Media
+          ? await signS3Reference(thumbnailMedia, thumbnailMedia.contentType)
+          : stripS3ReferenceUrls(thumbnailMedia);
         absoluteBanner = thumbnailMedia.url || '';
       } else {
         const rawBanner = extractRawUrl(course.courseBanner) || extractRawUrl(course.thumbnail) || extractRawUrl(course.bannerUrl) || extractRawUrl(course.banner) || extractRawUrl(course.thumbnailUrl) || extractRawUrl(course.image) || extractRawUrl(course.imageUrl);
@@ -931,7 +963,7 @@ exports.getModules = async (req, res) => {
       return res.status(404).json({ success: false, message: 'Course not found' });
     }
 
-    const modules = course.modules.map((m) => serializeModule(m, req));
+    const modules = await Promise.all(course.modules.map((m) => serializeModule(m, req)));
     return res.status(200).json({ success: true, data: modules });
   } catch (error) {
     return res.status(500).json({ success: false, message: 'Failed to fetch modules', error: error.message });
@@ -1050,7 +1082,7 @@ exports.getLessonsByModule = async (req, res) => {
       return res.status(404).json({ success: false, message: 'Module not found' });
     }
 
-    const lessons = moduleItem.lessons.map((l) => serializeLesson(l, req));
+    const lessons = await Promise.all(moduleItem.lessons.map((l) => serializeLesson(l, req)));
     res.status(200).json({ success: true, message: 'Lessons fetched successfully', data: lessons });
   } catch (error) {
     console.error('Get Lessons Detailed Error:', {
@@ -1405,7 +1437,9 @@ exports.addLesson = async (req, res) => {
 
     // Filter out fake / placeholder Cloudinary URLs (such as hardcoded wrong cloud names like doxb5l5vf)
     finalVideoParts = finalVideoParts.filter((p) => {
-      if (!p || !p.url) return false;
+      if (!p) return false;
+      if (p.storageProvider === 's3' && isValidS3MediaKey(p.s3Key, 'videos')) return true;
+      if (!p.url) return false;
       if (p.url.includes('doxb5l5vf')) {
         console.warn(`[addLesson] Rejecting fake placeholder video URL with invalid cloud name doxb5l5vf: "${p.url}"`);
         return false;
@@ -1494,12 +1528,20 @@ exports.addLesson = async (req, res) => {
     await course.save();
 
     const saved = moduleItem.lessons[moduleItem.lessons.length - 1];
+    const serializedLesson = await serializeLesson(saved, req);
     console.log('[addLesson] Successfully added lesson with ID:', saved._id);
+    console.info('[Course curriculum] lesson saved', {
+      courseId: course.courseId || course._id.toString(),
+      moduleId: moduleItem._id.toString(),
+      lessonId: saved._id.toString(),
+      videoItems: finalVideoParts.length,
+      pdfItems: finalPdfNotes.length,
+    });
     return res.status(201).json({
       success: true,
       message: 'Lesson added successfully',
-      data: serializeLesson(saved, req),
-      lesson: serializeLesson(saved, req),
+      data: serializedLesson,
+      lesson: serializedLesson,
     });
   } catch (error) {
     // Cleanup uploaded files on failure
@@ -1867,7 +1909,9 @@ exports.updateLesson = async (req, res) => {
     // Filter out fake / placeholder Cloudinary URLs (such as hardcoded wrong cloud names like doxb5l5vf)
     if (targetLesson.videoParts && targetLesson.videoParts.length > 0) {
       targetLesson.videoParts = targetLesson.videoParts.filter((p) => {
-        if (!p || !p.url) return false;
+        if (!p) return false;
+        if (p.storageProvider === 's3' && isValidS3MediaKey(p.s3Key, 'videos')) return true;
+        if (!p.url) return false;
         if (p.url.includes('doxb5l5vf')) {
           console.warn(`[updateLesson] Rejecting fake placeholder video URL with invalid cloud name doxb5l5vf: "${p.url}"`);
           return false;
@@ -1911,11 +1955,12 @@ exports.updateLesson = async (req, res) => {
 
     await course.save();
 
+    const serializedLesson = await serializeLesson(targetLesson, req);
     return res.status(200).json({
       success: true,
       message: 'Lesson updated successfully',
-      data: serializeLesson(targetLesson, req),
-      lesson: serializeLesson(targetLesson, req),
+      data: serializedLesson,
+      lesson: serializedLesson,
     });
   } catch (error) {
     // Cleanup uploaded files on failure

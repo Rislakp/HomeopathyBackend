@@ -165,6 +165,14 @@ const requireAuth = async (req, res, next) => {
   }
 };
 
+const optionalAuth = (req, res, next) => {
+  if (!req.headers.authorization) return next();
+  return requireAuth(req, {
+    status() { return this; },
+    json() { return next(); },
+  }, next);
+};
+
 /**
  * Role Authorization Middleware Factory
  * Allows passing one or more allowed roles (e.g. requireRole('admin', 'superadmin'))
@@ -333,6 +341,7 @@ const requireCourseAccess = (requiredCourseId) => {
 
 module.exports = {
   requireAuth,
+  optionalAuth,
   requireRole,
   requireAdmin,
   requireStudent,

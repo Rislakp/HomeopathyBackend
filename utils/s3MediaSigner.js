@@ -1,6 +1,6 @@
 const { GetObjectCommand } = require('@aws-sdk/client-s3');
 const { getSignedUrl } = require('@aws-sdk/s3-request-presigner');
-const { s3Client, bucket } = require('../config/s3');
+const { s3Client, bucket, region, publicBaseUrl } = require('../config/s3');
 
 const S3_MEDIA_URL_TTL_SECONDS = 900;
 const SAFE_S3_KEY = /^(videos|images|pdfs)\/[a-zA-Z0-9][a-zA-Z0-9._/-]*$/;
@@ -15,6 +15,44 @@ const stripS3ReferenceUrls = (reference) => ({
   documentUrl: '',
   path: '',
 });
+
+const normalizeS3Reference = (reference) => {
+  const source = typeof reference === 'string' ? { url: reference } : reference;
+  if (!source || typeof source !== 'object') return null;
+  if (source.storageProvider === 's3' && typeof source.s3Key === 'string' && source.s3Key) return source;
+
+  const rawUrl = source.url || source.secure_url || source.secureUrl || source.fileUrl || source.path;
+  if (typeof rawUrl !== 'string' || !/^https:\/\//i.test(rawUrl)) return null;
+
+  try {
+    const parsed = new URL(rawUrl);
+    let keyPath = '';
+    const expectedHosts = new Set([
+      `${bucket}.s3.${region}.amazonaws.com`,
+      `${bucket}.s3.amazonaws.com`,
+    ]);
+    if (publicBaseUrl) {
+      try { expectedHosts.add(new URL(publicBaseUrl).hostname); } catch (_) { /* Ignore invalid optional base URLs. */ }
+    }
+    if (!expectedHosts.has(parsed.hostname)) return null;
+
+    keyPath = decodeURIComponent(parsed.pathname.replace(/^\/+/, ''));
+    if (!SAFE_S3_KEY.test(keyPath) || keyPath.includes('..') || keyPath.includes('//') || /[\\\r\n]/.test(keyPath)) return null;
+    return {
+      ...source,
+      storageProvider: 's3',
+      s3Key: keyPath,
+      url: '',
+      secure_url: '',
+      secureUrl: '',
+      fileUrl: '',
+      documentUrl: '',
+      path: '',
+    };
+  } catch (_) {
+    return null;
+  }
+};
 
 const signS3Reference = async (reference, responseContentType) => {
   if (!reference || reference.storageProvider !== 's3') return reference;
@@ -58,4 +96,4 @@ const signS3Reference = async (reference, responseContentType) => {
   }
 };
 
-module.exports = { signS3Reference, stripS3ReferenceUrls, S3_MEDIA_URL_TTL_SECONDS };
+module.exports = { signS3Reference, stripS3ReferenceUrls, normalizeS3Reference, S3_MEDIA_URL_TTL_SECONDS };

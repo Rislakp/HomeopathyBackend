@@ -5,7 +5,9 @@ const config = require('../config/s3');
 const controller = require('../controllers/s3UploadController');
 const courseController = require('../controllers/courseController');
 const Course = require('../models/Course');
+const Recording = require('../models/Recording');
 const Student = require('../models/Student');
+const { getS3Url } = require('../services/s3Service');
 const defaultCredentialProvider = config.s3Client.config.credentials;
 // Synthetic, in-memory credentials are scoped to this test process only.
 config.s3Client.config.credentials = async () => ({ accessKeyId: 'AKIDEXAMPLE', secretAccessKey: 'local-test-only-secret' });
@@ -170,7 +172,7 @@ test('private video access signs the exact object key for the configured S3 buck
   Course.findOne = async () => ({
     _id: 'course-db-id',
     courseId: 'CRS-VIDEO',
-    modules: [{ lessons: [{ videoParts: [{ storageProvider: 's3', s3Key: key }] }] }],
+    modules: [{ lessons: [{ videoUrl: getS3Url(key) }] }],
   });
   t.after(() => { Course.findOne = originalFindOne; });
 
@@ -191,6 +193,88 @@ test('private video access signs the exact object key for the configured S3 buck
   assert.equal(signedUrl.searchParams.get('X-Amz-Algorithm'), 'AWS4-HMAC-SHA256');
   assert.match(signedUrl.searchParams.get('X-Amz-Credential'), /\/us-east-1\/s3\/aws4_request$/);
   assert.match(signedUrl.searchParams.get('X-Amz-Signature'), /^[a-f0-9]+$/);
+});
+
+test('private recorded video access signs an S3 key stored in a Recording document', async (t) => {
+  const originalFindOne = Course.findOne;
+  const originalRecordingFindOne = Recording.findOne;
+  const key = 'videos/1790869459766-e523705a-Recording-2026-08-20-135459.mp4';
+  Course.findOne = async () => null;
+  Recording.findOne = async () => ({ recordedVideoUrl: getS3Url(key), courseId: null });
+  t.after(() => {
+    Course.findOne = originalFindOne;
+    Recording.findOne = originalRecordingFindOne;
+  });
+
+  const response = await call(
+    controller.getMediaAccessUrl,
+    {},
+    { id: 'admin-test', role: 'admin' },
+    { s3Key: key },
+  );
+
+  assert.equal(response.statusCode, 200);
+  assert.equal(response.body.s3Key, key);
+  assert.match(response.body.url, /X-Amz-Signature=/);
+});
+
+test('admin lesson creation persists key-only S3 video and PDF references', async (t) => {
+  const originalFindOne = Course.findOne;
+  const originalSave = Course.prototype.save;
+  const course = new Course({
+    courseId: 'CRS-S3-LESSON',
+    courseTitle: 'S3 lesson test',
+    instructor: 'Test',
+    price: 0,
+    modules: [{ moduleName: 'Module 1', lessons: [] }],
+  });
+  Course.findOne = async () => course;
+  Course.prototype.save = async function saveS3Lesson() { return this; };
+  t.after(() => {
+    Course.findOne = originalFindOne;
+    Course.prototype.save = originalSave;
+  });
+
+  const moduleId = course.modules[0]._id.toString();
+  const videoKey = 'videos/module-video.mp4';
+  const pdfKey = 'pdfs/module-notes.pdf';
+  const result = makeResponse();
+  await courseController.addLesson({
+    params: { courseId: 'CRS-S3-LESSON', moduleId },
+    body: {
+      lessonTitle: 'S3 lesson',
+      lessonType: 'Recorded Video',
+      videoParts: [{
+        title: 'module-video.mp4',
+        storageProvider: 's3',
+        s3Key: videoKey,
+        resourceType: 'video',
+        contentType: 'video/mp4',
+      }],
+      pdfNotes: [{
+        title: 'module-notes.pdf',
+        storageProvider: 's3',
+        s3Key: pdfKey,
+        resourceType: 'pdf',
+        contentType: 'application/pdf',
+      }],
+    },
+    user: { id: 'admin-test', role: 'admin' },
+  }, result);
+
+  assert.equal(result.statusCode, 201);
+  const savedLesson = course.modules[0].lessons[0];
+  assert.equal(savedLesson.videoParts[0].storageProvider, 's3');
+  assert.equal(
+    savedLesson.videoParts[0].s3Key,
+    videoKey,
+    JSON.stringify(savedLesson.toObject(), null, 2),
+  );
+  assert.equal(savedLesson.videoParts[0].url, '');
+  assert.equal(savedLesson.pdfNotes[0].storageProvider, 's3');
+  assert.equal(savedLesson.pdfNotes[0].s3Key, pdfKey);
+  assert.equal(result.body.data.videoParts[0].s3Key, videoKey);
+  assert.equal(result.body.data.pdfNotes[0].s3Key, pdfKey);
 });
 
 test('multipart S3 failures become safe client errors', async (t) => {
@@ -229,6 +313,14 @@ test('Admin course list, detail, create, and update resolve S3 banners without r
     courseId: 'COURSE-S3', courseTitle: 'S3', instructor: 'Test', price: 0,
     thumbnail: cloudinaryBanner, bannerUrl: cloudinaryBanner, courseBanner: cloudinaryBanner,
     thumbnailMedia: { storageProvider: 's3', s3Key: 'images/banner.png', resourceType: 'image', contentType: 'image/png', originalFileName: 'banner.png', fileSize: 512 },
+    modules: [{ moduleName: 'Media', lessons: [{
+      lessonTitle: 'S3 video',
+      videoUrl: 'https://whitecoat-media-prod.s3.us-east-1.amazonaws.com/videos/detail-video.mp4',
+      videoParts: [
+        { storageProvider: 's3', s3Key: 'videos/detail-video.mp4', resourceType: 'video', contentType: 'video/mp4' },
+        { title: 'Legacy video', url: 'https://res.cloudinary.com/example/video/upload/legacy-video.mp4' },
+      ],
+    }] }],
   });
   const invalidS3Course = new Course({
     courseId: 'COURSE-BAD-S3', courseTitle: 'Bad S3', instructor: 'Test', price: 0,
@@ -259,12 +351,27 @@ test('Admin course list, detail, create, and update resolve S3 banners without r
   await courseController.getCourseById({ params: { id: 'COURSE-S3' }, user: { role: 'admin' } }, detailRes);
   assert.equal(detailRes.statusCode, 200);
   assert.match(detailRes.body.course.thumbnail, /X-Amz-Signature=/);
+  const serializedLesson = detailRes.body.course.modules[0].lessons[0];
+  assert.match(serializedLesson.videoUrl, /X-Amz-Signature=/);
+  assert.equal(serializedLesson.videoParts[0].s3Key, 'videos/detail-video.mp4');
+  assert.match(serializedLesson.videoParts[0].url, /X-Amz-Signature=/);
+  assert.equal(serializedLesson.videoParts[1].url, 'https://res.cloudinary.com/example/video/upload/legacy-video.mp4');
 
   const publicRes = makeResponse();
   await courseController.getCourses({}, publicRes);
   const publicS3Course = publicRes.body.data.find((item) => item.courseId === 'COURSE-S3');
-  assert.match(publicS3Course.thumbnail, /X-Amz-Signature=/);
+  assert.equal(publicS3Course.thumbnail, '');
   assert.equal(publicS3Course.thumbnailMedia.s3Key, 'images/banner.png');
+  assert.equal(publicS3Course.thumbnailMedia.url, '');
+
+  const publicDetailRes = makeResponse();
+  await courseController.getCourseById({ params: { id: 'COURSE-S3' } }, publicDetailRes);
+  assert.equal(publicDetailRes.statusCode, 200);
+  assert.equal(publicDetailRes.body.course.thumbnailMedia.s3Key, 'images/banner.png');
+  assert.equal(publicDetailRes.body.course.thumbnailMedia.url, '');
+  assert.equal(publicDetailRes.body.course.modules[0].lessons[0].videoUrl, '');
+  assert.equal(publicDetailRes.body.course.modules[0].lessons[0].videoParts[0].url, '');
+  assert.equal(publicDetailRes.body.course.modules[0].lessons[0].videoParts[1].url, 'https://res.cloudinary.com/example/video/upload/legacy-video.mp4');
 
   let createdDoc;
   Course.prototype.save = async function saveForS3Test() { createdDoc = this; return this; };

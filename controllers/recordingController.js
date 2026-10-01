@@ -9,6 +9,7 @@ const {
 } = require('../config/cloudinary');
 const { verifyStudentCourseAccess } = require('../utils/courseAccessHelper');
 const { parsePaginationParams, buildPaginationResponse } = require('../utils/pagination');
+const { normalizeS3Reference, signS3Reference } = require('../utils/s3MediaSigner');
 
 const findCourseByIdOrCustomId = async (id) => {
   if (!id) return null;
@@ -119,7 +120,7 @@ const extractFileUrl = (f) => {
 /**
  * Format a Recording document for dashboard consumption with normalized fields
  */
-const formatRecordingDocument = (rec) => {
+const formatRecordingDocument = async (rec) => {
   const course = rec.courseId;
   let courseName = rec.courseName || '';
   let moduleName = rec.moduleName || '';
@@ -154,7 +155,11 @@ const formatRecordingDocument = (rec) => {
 
   const streamUrl = (rec.streamUrl || rec.liveClassUrl || '').trim();
   // Ensure recordedVideoUrl is strictly clean public URL or empty string "" if pending
-  const recordedVideoUrl = sanitizeVideoUrl(rec.recordedVideoUrl || rec.recordingFileUrl || '');
+  const storedVideoUrl = sanitizeVideoUrl(rec.recordedVideoUrl || rec.recordingFileUrl || '');
+  const s3VideoReference = normalizeS3Reference(storedVideoUrl);
+  const recordedVideoUrl = s3VideoReference
+    ? (await signS3Reference(s3VideoReference, s3VideoReference.contentType)).url || ''
+    : storedVideoUrl;
 
   // Calculate resolution and quality metrics
   const metrics = calculateResolutionMetrics(
@@ -279,7 +284,7 @@ exports.createRecording = async (req, res) => {
     return res.status(201).json({
       success: true,
       message: 'Recording session created successfully',
-      data: formatRecordingDocument(recording),
+      data: await formatRecordingDocument(recording),
     });
   } catch (error) {
     console.error('Create Recording Error:', error);
@@ -385,7 +390,7 @@ exports.getRecordings = async (req, res) => {
         .lean(),
     ]);
 
-    const formattedList = recordings.map((rec) => formatRecordingDocument(rec));
+    const formattedList = await Promise.all(recordings.map((rec) => formatRecordingDocument(rec)));
     const pagination = buildPaginationResponse(total, page, limit);
 
     return res.status(200).json({
@@ -449,7 +454,7 @@ exports.getRecordingById = async (req, res) => {
 
     return res.status(200).json({
       success: true,
-      data: formatRecordingDocument(recording),
+      data: await formatRecordingDocument(recording),
     });
   } catch (error) {
     console.error('Get Recording By ID Error:', error);
@@ -497,7 +502,7 @@ exports.updateRecordingStatus = async (req, res) => {
     return res.status(200).json({
       success: true,
       message: `Recording status updated to '${targetStatus}'`,
-      data: formatRecordingDocument(populatedRec),
+      data: await formatRecordingDocument(populatedRec),
     });
   } catch (error) {
     console.error('Update Recording Status Error:', error);
@@ -596,11 +601,19 @@ exports.uploadRecordingVideo = async (req, res) => {
             const lessonItem = moduleItem.lessons.id(recording.lessonId);
             if (lessonItem) {
               if (!lessonItem.videoUrl) lessonItem.videoUrl = secureUrl;
-              const hasPart = lessonItem.videoParts.some((p) => p.url === secureUrl);
+              const s3Reference = normalizeS3Reference(uploaded);
+              const videoPart = s3Reference || {
+                title: `${lessonItem.lessonTitle} - Recorded Video`,
+                url: secureUrl,
+                secure_url: secureUrl,
+              };
+              const hasPart = lessonItem.videoParts.some((part) => (
+                (s3Reference && part.s3Key === s3Reference.s3Key) || part.url === secureUrl
+              ));
               if (!hasPart) {
                 lessonItem.videoParts.push({
-                  title: `${lessonItem.lessonTitle} - Recorded Video`,
-                  url: secureUrl,
+                  ...videoPart,
+                  title: videoPart.title || `${lessonItem.lessonTitle} - Recorded Video`,
                 });
               }
               await course.save();
@@ -613,14 +626,15 @@ exports.uploadRecordingVideo = async (req, res) => {
     }
 
     const populatedRec = await Recording.findById(id).populate('courseId', 'courseId courseTitle thumbnail category modules');
+    const formattedRecording = await formatRecordingDocument(populatedRec);
 
     return res.status(200).json({
       success: true,
       message: 'Recording uploaded successfully',
-      secureUrl,
-      recordedVideoUrl: secureUrl,
-      recordingFileUrl: secureUrl,
-      data: formatRecordingDocument(populatedRec),
+      secureUrl: formattedRecording.recordedVideoUrl,
+      recordedVideoUrl: formattedRecording.recordedVideoUrl,
+      recordingFileUrl: formattedRecording.recordingFileUrl,
+      data: formattedRecording,
     });
   } catch (error) {
     if (req.uploadedSecureUrl) {

@@ -12,8 +12,11 @@ const { randomUUID } = require('crypto');
 const mongoose = require('mongoose');
 const { s3Client, bucket, region, isS3Configured } = require('../config/s3');
 const Course = require('../models/Course');
+const Recording = require('../models/Recording');
 const Student = require('../models/Student');
+const { getS3Url } = require('../services/s3Service');
 const { verifyStudentCourseAccess } = require('../utils/courseAccessHelper');
+const { normalizeS3Reference } = require('../utils/s3MediaSigner');
 
 const PART_URL_TTL_SECONDS = 900;
 const MEDIA_URL_TTL_SECONDS = 900;
@@ -318,6 +321,7 @@ const courseContainsS3Key = (course, key) => {
   for (const moduleItem of course.modules || []) {
     for (const lesson of moduleItem.lessons || []) {
       if (lesson.videoS3Key === key) return true;
+      if (normalizeS3Reference(lesson.videoUrl)?.s3Key === key) return true;
       for (const collection of ['videoParts', 'pdfNotes', 'assignments', 'attachments']) {
         if ((lesson[collection] || []).some((item) => item.s3Key === key)) return true;
       }
@@ -333,23 +337,41 @@ const getMediaAccessUrl = async (req, res) => {
   const prefix = ['videos/', 'images/', 'pdfs/'].find((item) => typeof key === 'string' && key.startsWith(item));
   if (!prefix || !validStoredKey(key, prefix.slice(0, -1))) return fail(res, 400, 'Invalid S3 media key.');
   try {
-    const course = courseId
+    let course = courseId
       ? (mongoose.Types.ObjectId.isValid(courseId)
         ? await Course.findById(courseId)
         : await Course.findOne({ courseId }))
       : await Course.findOne({ $or: [
         { 'thumbnailMedia.s3Key': key },
         { 'modules.lessons.videoS3Key': key },
+        { 'modules.lessons.videoUrl': getS3Url(key) },
         { 'modules.lessons.videoParts.s3Key': key },
         { 'modules.lessons.pdfNotes.s3Key': key },
         { 'modules.lessons.assignments.s3Key': key },
         { 'modules.lessons.attachments.s3Key': key },
       ] });
-    if (!course || !courseContainsS3Key(course, key)) return fail(res, 404, 'S3 media was not found in this course.');
+    const courseContainsKey = course && courseContainsS3Key(course, key);
+    const recording = prefix === 'videos/' && !courseContainsKey
+      ? await Recording.findOne({
+        $and: [
+          { $or: [
+            { recordedVideoUrl: getS3Url(key) },
+            { recordingFileUrl: getS3Url(key) },
+          ] },
+          ...(course ? [{ courseId: course._id }] : []),
+        ],
+      })
+      : null;
+    if (course && !courseContainsKey && !recording) return fail(res, 404, 'S3 media was not found in this course.');
+    if (!course && !recording) return fail(res, 404, 'S3 media was not found in a course or recording.');
 
     const role = (req.user?.role || '').toLowerCase();
     const isStaff = ['admin', 'superadmin'].includes(role);
     if (!isStaff) {
+      if (!course && recording?.courseId) {
+        course = await Course.findById(recording.courseId);
+      }
+      if (!course) return fail(res, 403, 'Course access is required to access this recording.');
       const student = await findStudentForMedia(req.user || {});
       if (!student) return fail(res, 403, 'Student profile is required to access course media.');
       const accountOk = ['Active', 'Trial'].includes(student.status) || student.isActive || student.isApproved;
@@ -365,7 +387,8 @@ const getMediaAccessUrl = async (req, res) => {
       Key: key,
       ...(contentType ? { ResponseContentType: contentType, ResponseContentDisposition: 'inline' } : {}),
     }), { expiresIn: MEDIA_URL_TTL_SECONDS });
-    console.info('[S3 media] access URL issued', { courseId: String(course.courseId || course._id), key, userId: req.user?.id });
+    const mediaOwnerId = course?.courseId || course?._id || recording?.courseId || recording?._id || 'recording';
+    console.info('[S3 media] access URL issued', { courseId: String(mediaOwnerId), key, userId: req.user?.id });
     return res.json({ success: true, url, key, s3Key: key, expiresIn: MEDIA_URL_TTL_SECONDS });
   } catch (error) {
     return handleS3Error(res, error, 'media-access');
