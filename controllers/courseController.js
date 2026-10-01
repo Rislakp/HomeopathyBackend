@@ -6,7 +6,7 @@ const path = require('path');
 const { deleteCloudinaryByUrl, getPublicIdFromUrl, parseCloudinaryUrl, uploadBufferToCloudinary, isCloudinaryConfigured, optimizeCloudinaryUrl } = require('../config/cloudinary');
 const { extractCleanNameAndExt } = require('../middleware/upload');
 const memoryCache = require('../utils/cache');
-const { signS3Reference, stripS3ReferenceUrls } = require('../utils/s3MediaSigner');
+const { signS3Reference } = require('../utils/s3MediaSigner');
 
 
 const ALLOWED_VIDEO_FORMATS = ['mp4', 'mov', 'avi', 'mkv', 'webm', 'flv', 'wmv', 'm4v'];
@@ -301,6 +301,14 @@ const parseFileItems = (items) => {
   return [];
 };
 
+const findS3ThumbnailMedia = (...values) => {
+  for (const value of values) {
+    const media = parseFileItems(value).find((item) => item.storageProvider === 's3' && item.s3Key);
+    if (media) return media;
+  }
+  return null;
+};
+
 
 /**
  * Sanitize a multi-file array (videoParts, pdfNotes, attachments).
@@ -461,10 +469,7 @@ const serializeCourse = async (courseDoc, req) => {
 
   let absoluteBanner;
   if (obj.thumbnailMedia?.storageProvider === 's3') {
-    const role = (req?.user?.role || '').toLowerCase();
-    obj.thumbnailMedia = ['admin', 'superadmin'].includes(role)
-      ? await signS3Reference(obj.thumbnailMedia, obj.thumbnailMedia.contentType)
-      : stripS3ReferenceUrls(obj.thumbnailMedia);
+    obj.thumbnailMedia = await signS3Reference(obj.thumbnailMedia, obj.thumbnailMedia.contentType);
     absoluteBanner = obj.thumbnailMedia.url || '';
   } else {
     const rawBanner = obj.courseBanner || obj.thumbnail || obj.bannerUrl || obj.banner || obj.thumbnailUrl || obj.image || obj.imageUrl || '';
@@ -550,8 +555,7 @@ exports.getCourses = async (req, res) => {
     }
 
     const role = (req.user?.role || '').toLowerCase();
-    const canSignS3Media = ['admin', 'superadmin'].includes(role);
-    const cacheKey = `courses_list_${page}_${limit}_${search || ''}_${status || ''}_${category || ''}_${canSignS3Media ? 'admin' : 'public'}`;
+    const cacheKey = `courses_list_${page}_${limit}_${search || ''}_${status || ''}_${category || ''}_${['admin', 'superadmin'].includes(role) ? 'admin' : 'public'}`;
     const cachedData = memoryCache.get(cacheKey);
     if (cachedData) {
       return res.status(200).json(cachedData);
@@ -586,9 +590,7 @@ exports.getCourses = async (req, res) => {
       let thumbnailMedia = course.thumbnailMedia;
       let absoluteBanner;
       if (thumbnailMedia?.storageProvider === 's3') {
-        thumbnailMedia = canSignS3Media
-          ? await signS3Reference(thumbnailMedia, thumbnailMedia.contentType)
-          : stripS3ReferenceUrls(thumbnailMedia);
+        thumbnailMedia = await signS3Reference(thumbnailMedia, thumbnailMedia.contentType);
         absoluteBanner = thumbnailMedia.url || '';
       } else {
         const rawBanner = extractRawUrl(course.courseBanner) || extractRawUrl(course.thumbnail) || extractRawUrl(course.bannerUrl) || extractRawUrl(course.banner) || extractRawUrl(course.thumbnailUrl) || extractRawUrl(course.image) || extractRawUrl(course.imageUrl);
@@ -713,11 +715,21 @@ exports.createCourse = async (req, res) => {
       }
     }
 
-    const parsedThumbnailMedia = parseFileItems(thumbnailMedia)[0] || null;
+    const parsedThumbnailMedia = findS3ThumbnailMedia(
+      thumbnailMedia,
+      courseBannerfileUrlOrLink,
+      thumbnail,
+      banner,
+      bannerUrl,
+      thumbnailUrl,
+      image,
+      imageUrl,
+      courseBanner,
+    ) || parseFileItems(thumbnailMedia)[0] || null;
     const hasS3Thumbnail = parsedThumbnailMedia?.storageProvider === 's3';
     const actualThumbnail = hasS3Thumbnail
       ? ''
-      : (uploadedBannerUrl || thumbnail || banner || bannerUrl || thumbnailUrl || image || imageUrl || courseBanner || '');
+      : (uploadedBannerUrl || courseBannerfileUrlOrLink || thumbnail || banner || bannerUrl || thumbnailUrl || image || imageUrl || courseBanner || '');
 
     if (!courseTitle && !title) {
       return res.status(400).json({ success: false, message: 'courseTitle is required' });
@@ -772,9 +784,19 @@ exports.updateCourse = async (req, res) => {
     const query = getQueryById(id);
     const updateData = { ...req.body };
 
-    if (updateData.thumbnailMedia !== undefined) {
-      updateData.thumbnailMedia = parseFileItems(updateData.thumbnailMedia)[0] || null;
-    }
+    const s3ThumbnailMedia = findS3ThumbnailMedia(
+      updateData.thumbnailMedia,
+      updateData.courseBannerfileUrlOrLink,
+      updateData.thumbnail,
+      updateData.banner,
+      updateData.bannerUrl,
+      updateData.thumbnailUrl,
+      updateData.image,
+      updateData.imageUrl,
+      updateData.courseBanner,
+    );
+    if (s3ThumbnailMedia) updateData.thumbnailMedia = s3ThumbnailMedia;
+    else if (updateData.thumbnailMedia !== undefined) updateData.thumbnailMedia = parseFileItems(updateData.thumbnailMedia)[0] || null;
     const hasS3Thumbnail = updateData.thumbnailMedia?.storageProvider === 's3';
 
     delete updateData.courseId; // Prevent mutating auto-generated courseId
@@ -795,7 +817,7 @@ exports.updateCourse = async (req, res) => {
 
     const bannerVal = hasS3Thumbnail
       ? ''
-      : (updateData.thumbnail || updateData.banner || updateData.bannerUrl || updateData.thumbnailUrl || updateData.image || updateData.imageUrl || updateData.courseBanner);
+      : (updateData.courseBannerfileUrlOrLink || updateData.thumbnail || updateData.banner || updateData.bannerUrl || updateData.thumbnailUrl || updateData.image || updateData.imageUrl || updateData.courseBanner);
 
     if (hasS3Thumbnail) {
       updateData.thumbnail = '';
@@ -805,6 +827,7 @@ exports.updateCourse = async (req, res) => {
       delete updateData.thumbnailUrl;
       delete updateData.image;
       delete updateData.imageUrl;
+      delete updateData.courseBannerfileUrlOrLink;
     }
 
     // Extract banner URL from uploaded file if present (multipart image upload from Flutter admin)

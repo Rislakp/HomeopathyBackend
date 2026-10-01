@@ -183,12 +183,14 @@ test('Admin course list, detail, create, and update resolve S3 banners without r
     find: Course.find,
     findOne: Course.findOne,
     findOneAndUpdate: Course.findOneAndUpdate,
+    countDocuments: Course.countDocuments,
     save: Course.prototype.save,
   };
   t.after(() => {
     Course.find = originals.find;
     Course.findOne = originals.findOne;
     Course.findOneAndUpdate = originals.findOneAndUpdate;
+    Course.countDocuments = originals.countDocuments;
     Course.prototype.save = originals.save;
   });
 
@@ -206,6 +208,7 @@ test('Admin course list, detail, create, and update resolve S3 banners without r
   });
 
   Course.find = async () => [cloudCourse, s3Course, invalidS3Course];
+  Course.countDocuments = async () => 3;
   Course.findOne = async () => s3Course;
   const listRes = makeResponse();
   await courseController.getCourses({ user: { role: 'admin' } }, listRes);
@@ -231,7 +234,7 @@ test('Admin course list, detail, create, and update resolve S3 banners without r
   const publicRes = makeResponse();
   await courseController.getCourses({}, publicRes);
   const publicS3Course = publicRes.body.data.find((item) => item.courseId === 'COURSE-S3');
-  assert.equal(publicS3Course.thumbnail, '');
+  assert.match(publicS3Course.thumbnail, /X-Amz-Signature=/);
   assert.equal(publicS3Course.thumbnailMedia.s3Key, 'images/banner.png');
 
   let createdDoc;
@@ -240,7 +243,7 @@ test('Admin course list, detail, create, and update resolve S3 banners without r
   const createRes = makeResponse();
   await courseController.createCourse({
     user: { role: 'admin' },
-    body: { courseTitle: 'Created S3', instructor: 'Test', price: 0, thumbnailMedia: bannerMetadata, thumbnail: cloudinaryBanner, courseBanner: cloudinaryBanner },
+    body: { courseTitle: 'Created S3', instructor: 'Test', banner: bannerMetadata, thumbnail: cloudinaryBanner, courseBanner: cloudinaryBanner },
   }, createRes);
   assert.equal(createRes.statusCode, 201);
   assert.equal(createdDoc.get('thumbnail', null, { getters: false }), '');
@@ -250,6 +253,17 @@ test('Admin course list, detail, create, and update resolve S3 banners without r
   assert.equal(createRes.body.course.thumbnailMedia.contentType, 'image/png');
   assert.equal(createRes.body.course.thumbnailMedia.fileSize, 512);
   assert.match(createRes.body.course.thumbnail, /X-Amz-Signature=/);
+
+  require('../utils/cache').del('courses_list_');
+  Course.find = async () => [createdDoc];
+  Course.countDocuments = async () => 1;
+  const createdListRes = makeResponse();
+  await courseController.getCourses({ user: { role: 'admin' }, query: {} }, createdListRes);
+  const listedCreatedCourse = createdListRes.body.data.find((item) => item.courseTitle === 'Created S3');
+  assert.ok(listedCreatedCourse, 'created course must appear in the course list');
+  assert.equal(listedCreatedCourse.thumbnailMedia.s3Key, 'images/new-banner.png');
+  assert.match(listedCreatedCourse.thumbnail, /X-Amz-Signature=/);
+  assert.equal(listedCreatedCourse.thumbnail.includes('/uploads/images/'), false);
 
   const oldCloudCourse = new Course({ courseId: 'COURSE-UPDATE', courseTitle: 'Update S3', instructor: 'Test', price: 0, thumbnail: cloudinaryBanner, bannerUrl: cloudinaryBanner, courseBanner: cloudinaryBanner });
   let persistedUpdate;
@@ -262,7 +276,7 @@ test('Admin course list, detail, create, and update resolve S3 banners without r
   await courseController.updateCourse({
     user: { role: 'admin' },
     params: { id: 'COURSE-UPDATE' },
-    body: { thumbnailMedia: { ...bannerMetadata, s3Key: 'images/updated-banner.png' }, thumbnail: cloudinaryBanner, bannerUrl: cloudinaryBanner },
+    body: { banner: { ...bannerMetadata, s3Key: 'images/updated-banner.png' }, thumbnail: cloudinaryBanner, bannerUrl: cloudinaryBanner },
   }, updateRes);
   assert.equal(updateRes.statusCode, 200);
   assert.equal(persistedUpdate.thumbnail, '');
