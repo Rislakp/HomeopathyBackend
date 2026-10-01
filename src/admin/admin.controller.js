@@ -428,6 +428,7 @@ async function getAllGrandMocks(req, res) {
     if (isGrandMockEndpoint || isExplicitGrandMock) {
       // Grand mock query without requiring courseId
       filter.testType = { $ne: 'course_test' };
+      filter.courseId = { $nin: ['unani', 'UNANI', 'Unani'] };
       filter.$or = [
         { testType: 'grand_mock' },
         { testType: { $regex: /^(grand[-_ ]?mock|mock)$/i } },
@@ -445,6 +446,9 @@ async function getAllGrandMocks(req, res) {
       // Returns all tests including course tests and grand mocks!
       if (reqQuery.courseId && String(reqQuery.courseId).trim()) {
         filter.courseId = String(reqQuery.courseId).trim();
+      } else {
+        // Defensive exclusion: Normal test history must never return Unani exams
+        filter.courseId = { $nin: ['unani', 'UNANI', 'Unani'] };
       }
     }
 

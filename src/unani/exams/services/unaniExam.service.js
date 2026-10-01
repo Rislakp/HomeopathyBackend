@@ -585,7 +585,7 @@ async function getRank(examId) {
     courseId: 'unani',
     examType: 'grand_mock_test',
   })
-    .populate('studentId', 'name email phone userId')
+    .populate('studentId', 'name email phone userId profileImage avatar')
     .sort({ score: -1, percentage: -1, createdAt: 1 })
     .lean();
 
@@ -642,10 +642,14 @@ async function getRank(examId) {
       studentName = 'Student';
     }
 
+    const profileImage =
+      (res.studentId && (res.studentId.profileImage || res.studentId.avatar)) || '';
+
     return {
       rank: index + 1,
       studentId: sId,
       studentName: studentName,
+      name: studentName,
       score: res.score,
       totalMarks: res.totalMarks,
       correct: res.correctAnswers,
@@ -656,6 +660,9 @@ async function getRank(examId) {
       percentage: res.percentage,
       timeTakenSeconds: res.timeTakenSeconds || 0,
       submittedAt: res.createdAt,
+      submittedAtRaw: res.createdAt ? (res.createdAt.toISOString ? res.createdAt.toISOString() : String(res.createdAt)) : null,
+      profileImage: profileImage,
+      avatar: profileImage,
     };
   });
 
@@ -666,6 +673,9 @@ async function getRank(examId) {
       title: exam.title,
       courseId: 'unani',
       examType: 'grand_mock_test',
+      totalQuestions: exam.totalQuestions || (Array.isArray(exam.questions) ? exam.questions.length : 0),
+      duration: exam.durationMinutes || 0,
+      durationMinutes: exam.durationMinutes || 0,
     },
     rankings,
   };
@@ -1093,6 +1103,97 @@ async function getStudentResultByExam(examId, reqUser) {
   };
 }
 
+/**
+ * Update student rank profile image
+ */
+async function updateRankImage(examId, studentId, imageUrl) {
+  const finalUrl = (imageUrl || '').trim();
+  if (!studentId) {
+    return { error: 'studentId is required to update student rank profile image', status: 400 };
+  }
+  if (!finalUrl) {
+    return { error: 'A valid imageUrl/profileImage is required', status: 400 };
+  }
+
+  let User;
+  try { User = require('../../../../models/User'); } catch (e) {}
+
+  let updatedStudent = null;
+  if (Student) {
+    if (mongoose.Types.ObjectId.isValid(studentId)) {
+      updatedStudent = await Student.findByIdAndUpdate(
+        studentId,
+        { profileImage: finalUrl, avatar: finalUrl },
+        { new: true }
+      );
+    }
+    if (!updatedStudent) {
+      updatedStudent = await Student.findOneAndUpdate(
+        { $or: [{ studentId }, { email: studentId }, { userId: studentId }] },
+        { profileImage: finalUrl, avatar: finalUrl },
+        { new: true }
+      );
+    }
+  }
+
+  if (User) {
+    if (mongoose.Types.ObjectId.isValid(studentId)) {
+      await User.findByIdAndUpdate(
+        studentId,
+        { profileImage: finalUrl, avatar: finalUrl },
+        { new: true }
+      );
+    }
+    if (updatedStudent && updatedStudent.userId) {
+      await User.findByIdAndUpdate(
+        updatedStudent.userId,
+        { profileImage: finalUrl, avatar: finalUrl },
+        { new: true }
+      );
+    }
+  }
+
+  return {
+    studentId,
+    profileImage: finalUrl,
+    imageUrl: finalUrl,
+    avatar: finalUrl,
+  };
+}
+
+/**
+ * Delete student rank profile image
+ */
+async function deleteRankImage(examId, studentId) {
+  if (!studentId) {
+    return { error: 'studentId is required to delete student rank profile image', status: 400 };
+  }
+
+  let User;
+  try { User = require('../../../../models/User'); } catch (e) {}
+
+  if (Student) {
+    if (mongoose.Types.ObjectId.isValid(studentId)) {
+      await Student.findByIdAndUpdate(studentId, { profileImage: '', avatar: '' });
+    }
+    await Student.findOneAndUpdate(
+      { $or: [{ studentId }, { email: studentId }, { userId: studentId }] },
+      { profileImage: '', avatar: '' }
+    );
+  }
+
+  if (User) {
+    if (mongoose.Types.ObjectId.isValid(studentId)) {
+      await User.findByIdAndUpdate(studentId, { profileImage: '', avatar: '' });
+    }
+  }
+
+  return {
+    studentId,
+    profileImage: null,
+  };
+}
+
 module.exports = {
   createExam,
   getAllExams,
@@ -1118,4 +1219,6 @@ module.exports = {
   getStudentExamById,
   submitStudentExam,
   getStudentResultByExam,
+  updateRankImage,
+  deleteRankImage,
 };

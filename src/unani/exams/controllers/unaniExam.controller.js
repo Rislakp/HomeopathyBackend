@@ -709,6 +709,69 @@ async function getStudentResultByExam(req, res) {
   }
 }
 
+/**
+ * PUT/POST /api/unani-exams/:examId/rank-image
+ * Update Unani Rank Student Profile Image
+ */
+async function updateRankImage(req, res) {
+  try {
+    const { examId } = req.params;
+    const studentId = (req.body && req.body.studentId) || (req.query && req.query.studentId);
+    const finalUrl = (req.body && (req.body.imageUrl || req.body.profileImage || req.body.avatar)) || '';
+
+    const result = await unaniExamService.updateRankImage(examId, studentId, finalUrl);
+    if (result.error) {
+      return res.status(result.status || 400).json({
+        success: false,
+        message: result.error,
+      });
+    }
+
+    return res.status(200).json({
+      success: true,
+      message: 'Unani rank student profile image updated successfully',
+      data: result,
+    });
+  } catch (error) {
+    return res.status(500).json({
+      success: false,
+      message: 'Failed to update Unani rank student profile image',
+      error: error.message,
+    });
+  }
+}
+
+/**
+ * DELETE /api/unani-exams/:examId/rank-image
+ * Delete Unani Rank Student Profile Image
+ */
+async function deleteRankImage(req, res) {
+  try {
+    const { examId } = req.params;
+    const studentId = (req.body && req.body.studentId) || (req.query && req.query.studentId);
+
+    const result = await unaniExamService.deleteRankImage(examId, studentId);
+    if (result.error) {
+      return res.status(result.status || 400).json({
+        success: false,
+        message: result.error,
+      });
+    }
+
+    return res.status(200).json({
+      success: true,
+      message: 'Unani rank student profile image removed successfully',
+      data: result,
+    });
+  } catch (error) {
+    return res.status(500).json({
+      success: false,
+      message: 'Failed to delete Unani rank student profile image',
+      error: error.message,
+    });
+  }
+}
+
 module.exports = {
   createExam,
   getAllExams,
@@ -734,4 +797,6 @@ module.exports = {
   getStudentExamById,
   submitStudentExam,
   getStudentResultByExam,
+  updateRankImage,
+  deleteRankImage,
 };
