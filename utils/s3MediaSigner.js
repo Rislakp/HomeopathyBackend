@@ -30,23 +30,32 @@ const signS3Reference = async (reference, responseContentType) => {
     return stripS3ReferenceUrls(reference);
   }
 
-  const url = await getSignedUrl(s3Client, new GetObjectCommand({
-    Bucket: bucket,
-    Key: key,
-    ...(responseContentType ? { ResponseContentType: responseContentType, ResponseContentDisposition: 'inline' } : {}),
-  }), { expiresIn: S3_MEDIA_URL_TTL_SECONDS });
+  try {
+    const url = await getSignedUrl(s3Client, new GetObjectCommand({
+      Bucket: bucket,
+      Key: key,
+      ...(responseContentType ? { ResponseContentType: responseContentType, ResponseContentDisposition: 'inline' } : {}),
+    }), { expiresIn: S3_MEDIA_URL_TTL_SECONDS });
 
-  return {
-    ...reference,
-    fileName: reference.fileName || reference.originalFileName || '',
-    url,
-    secure_url: url,
-    secureUrl: url,
-    fileUrl: url,
-    documentUrl: url,
-    path: url,
-    accessUrlExpiresIn: S3_MEDIA_URL_TTL_SECONDS,
-  };
+    return {
+      ...reference,
+      fileName: reference.fileName || reference.originalFileName || '',
+      url,
+      secure_url: url,
+      secureUrl: url,
+      fileUrl: url,
+      documentUrl: url,
+      path: url,
+      accessUrlExpiresIn: S3_MEDIA_URL_TTL_SECONDS,
+    };
+  } catch (err) {
+    console.error('[S3 media signer] Failed to sign media reference:', {
+      key,
+      code: err.name || err.Code,
+      message: err.message,
+    });
+    return stripS3ReferenceUrls(reference);
+  }
 };
 
 module.exports = { signS3Reference, stripS3ReferenceUrls, S3_MEDIA_URL_TTL_SECONDS };

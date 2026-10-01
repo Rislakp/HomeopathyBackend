@@ -78,12 +78,43 @@ const makeReference = ({ key, fileName, contentType, fileSize, uploadStatus = 'u
 const handleS3Error = (res, error, action) => {
   const status = Number(error.$metadata?.httpStatusCode) || 0;
   const code = error.name || error.Code || 'S3Error';
-  console.error(`[S3 multipart] ${action} failed`, { code, status, message: error.message });
-  if (status === 404 || ['NoSuchUpload', 'NotFound'].includes(code)) return fail(res, 404, 'Multipart upload was not found.', code);
-  if (status === 403 || ['AccessDenied', 'InvalidAccessKeyId'].includes(code)) return fail(res, 502, 'S3 denied the multipart operation.', code);
-  if (['EntityTooSmall', 'InvalidPart', 'InvalidPartOrder', 'MalformedXML'].includes(code)) return fail(res, 400, 'S3 rejected the multipart completion data.', code);
-  return fail(res, status >= 400 && status < 500 ? status : 502, 'S3 multipart operation failed.', code);
+  const isSingleObject = ['object-presign', 'object-complete', 'media-access'].includes(action);
+  const operationType = isSingleObject ? 'object' : 'multipart';
+
+  console.error(`[S3 ${operationType}] ${action} failed:`, {
+    action,
+    code,
+    status,
+    message: error.message,
+    hasCredentials: Boolean(
+      process.env.AWS_ACCESS_KEY_ID ||
+      process.env.S3_ACCESS_KEY ||
+      process.env.AWS_KEY
+    ),
+    region: process.env.AWS_REGION || process.env.S3_REGION || 'us-east-1',
+    bucket: process.env.AWS_S3_BUCKET || process.env.S3_BUCKET || 'whitecoat-media-prod',
+  });
+
+  if (code === 'CredentialsProviderError' || code === 'NoCredentials' || error.message?.includes('Could not load credentials')) {
+    return fail(
+      res,
+      502,
+      'AWS credentials are not configured or could not be loaded on the server. Please verify AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY in the deployment environment.',
+      'CredentialsProviderError'
+    );
+  }
+  if (status === 404 || ['NoSuchUpload', 'NotFound', 'NoSuchBucket', 'NoSuchKey'].includes(code)) {
+    return fail(res, 404, isSingleObject ? 'S3 resource or bucket was not found.' : 'Multipart upload was not found.', code);
+  }
+  if (status === 403 || ['AccessDenied', 'InvalidAccessKeyId', 'SignatureDoesNotMatch'].includes(code)) {
+    return fail(res, 502, 'S3 denied the operation. Check AWS credentials, region, and bucket permissions.', code);
+  }
+  if (['EntityTooSmall', 'InvalidPart', 'InvalidPartOrder', 'MalformedXML'].includes(code)) {
+    return fail(res, 400, 'S3 rejected the upload completion data.', code);
+  }
+  return fail(res, status >= 400 && status < 500 ? status : 502, error.message || `S3 ${operationType} operation failed.`, code);
 };
+
 
 const initiateMultipartUpload = async (req, res) => {
   const fileName = req.body?.fileName;
