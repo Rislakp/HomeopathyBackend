@@ -5,6 +5,7 @@ const fs = require('fs');
 const path = require('path');
 const { deleteCloudinaryByUrl, getPublicIdFromUrl, parseCloudinaryUrl, uploadBufferToCloudinary, isCloudinaryConfigured } = require('../config/cloudinary');
 const { extractCleanNameAndExt } = require('../middleware/upload');
+const { signS3Reference, stripS3ReferenceUrls } = require('../utils/s3MediaSigner');
 
 const ALLOWED_VIDEO_FORMATS = ['mp4', 'mov', 'avi', 'mkv', 'webm', 'flv', 'wmv', 'm4v'];
 const ALLOWED_DOC_FORMATS = ['pdf', 'doc', 'docx', 'ppt', 'pptx', 'xls', 'xlsx', 'txt', 'csv', 'zip', 'rar'];
@@ -166,6 +167,7 @@ const toResourceObj = (item) => {
       storageProvider,
       s3Key: isS3Resource ? s3Key : '',
       resourceType: String(item.resourceType || resType || '').trim(),
+      fileName: String(item.fileName || item.originalFileName || item.originalname || item.filename || title || '').trim(),
       originalFileName: String(item.originalFileName || item.originalname || item.fileName || item.filename || title || '').trim(),
       contentType: String(item.contentType || item.mimetype || '').trim(),
       fileSize: typeof item.fileSize === 'number' ? item.fileSize : (Number(item.fileSize || item.size) || 0),
@@ -440,12 +442,21 @@ const serializeModule = (mod, req) => ({
 /**
  * Serialize a course document with standardized absolute banner URLs and module trees.
  */
-const serializeCourse = (courseDoc, req) => {
+const serializeCourse = async (courseDoc, req) => {
   if (!courseDoc) return null;
   const obj = courseDoc.toObject ? courseDoc.toObject({ virtuals: true }) : { ...courseDoc };
 
-  const rawBanner = obj.courseBanner || obj.thumbnail || obj.bannerUrl || obj.banner || obj.thumbnailUrl || obj.image || obj.imageUrl || '';
-  const absoluteBanner = toAbsoluteUrl(rawBanner, req);
+  let absoluteBanner;
+  if (obj.thumbnailMedia?.storageProvider === 's3') {
+    const role = (req?.user?.role || '').toLowerCase();
+    obj.thumbnailMedia = ['admin', 'superadmin'].includes(role)
+      ? await signS3Reference(obj.thumbnailMedia, obj.thumbnailMedia.contentType)
+      : stripS3ReferenceUrls(obj.thumbnailMedia);
+    absoluteBanner = obj.thumbnailMedia.url || '';
+  } else {
+    const rawBanner = obj.courseBanner || obj.thumbnail || obj.bannerUrl || obj.banner || obj.thumbnailUrl || obj.image || obj.imageUrl || '';
+    absoluteBanner = toAbsoluteUrl(rawBanner, req);
+  }
 
   obj.thumbnail = absoluteBanner;
   obj.bannerUrl = absoluteBanner;
@@ -488,7 +499,7 @@ const findCourseByIdOrCustomId = async (id) => {
 exports.getCourses = async (req, res) => {
   try {
     const courses = await Course.find();
-    const serialized = courses.map((course) => serializeCourse(course, req));
+    const serialized = await Promise.all(courses.map((course) => serializeCourse(course, req)));
     return res.status(200).json({
       success: true,
       count: serialized.length,
@@ -517,7 +528,7 @@ exports.getCourseById = async (req, res) => {
       });
     }
 
-    const serialized = serializeCourse(course, req);
+    const serialized = await serializeCourse(course, req);
 
     return res.status(200).json({
       success: true,
@@ -578,8 +589,11 @@ exports.createCourse = async (req, res) => {
       }
     }
 
-    const actualThumbnail =
-      uploadedBannerUrl || thumbnail || banner || bannerUrl || thumbnailUrl || image || imageUrl || courseBanner || '';
+    const parsedThumbnailMedia = parseFileItems(thumbnailMedia)[0] || null;
+    const hasS3Thumbnail = parsedThumbnailMedia?.storageProvider === 's3';
+    const actualThumbnail = hasS3Thumbnail
+      ? ''
+      : (uploadedBannerUrl || thumbnail || banner || bannerUrl || thumbnailUrl || image || imageUrl || courseBanner || '');
 
     if (!courseTitle && !title) {
       return res.status(400).json({ success: false, message: 'courseTitle is required' });
@@ -600,13 +614,13 @@ exports.createCourse = async (req, res) => {
       thumbnail: actualThumbnail,
       bannerUrl: actualThumbnail,
       courseBanner: actualThumbnail,
-      thumbnailMedia: parseFileItems(thumbnailMedia)[0] || null,
+      thumbnailMedia: parsedThumbnailMedia,
       category: category || 'Homeopathy',
       modules: formattedModules,
     });
 
     await newCourse.save();
-    const serialized = serializeCourse(newCourse, req);
+    const serialized = await serializeCourse(newCourse, req);
 
     return res.status(201).json({
       success: true,
@@ -636,6 +650,7 @@ exports.updateCourse = async (req, res) => {
     if (updateData.thumbnailMedia !== undefined) {
       updateData.thumbnailMedia = parseFileItems(updateData.thumbnailMedia)[0] || null;
     }
+    const hasS3Thumbnail = updateData.thumbnailMedia?.storageProvider === 's3';
 
     delete updateData.courseId; // Prevent mutating auto-generated courseId
 
@@ -653,7 +668,20 @@ exports.updateCourse = async (req, res) => {
       else if (updateData.courseDescription) updateData.shortDescription = updateData.courseDescription;
     }
 
-    const bannerVal = updateData.thumbnail || updateData.banner || updateData.bannerUrl || updateData.thumbnailUrl || updateData.image || updateData.imageUrl || updateData.courseBanner;
+    const bannerVal = hasS3Thumbnail
+      ? ''
+      : (updateData.thumbnail || updateData.banner || updateData.bannerUrl || updateData.thumbnailUrl || updateData.image || updateData.imageUrl || updateData.courseBanner);
+
+    if (hasS3Thumbnail) {
+      // Do not let legacy aliases from the request persist as active banner fields.
+      updateData.thumbnail = '';
+      updateData.bannerUrl = '';
+      updateData.courseBanner = '';
+      delete updateData.banner;
+      delete updateData.thumbnailUrl;
+      delete updateData.image;
+      delete updateData.imageUrl;
+    }
 
     // Extract banner URL from uploaded file if present (multipart image upload from Flutter admin)
     let uploadedBannerUrl = '';
@@ -681,6 +709,10 @@ exports.updateCourse = async (req, res) => {
     }
     const oldBanner = oldCourse.courseBanner || oldCourse.thumbnail || oldCourse.bannerUrl;
 
+    if (hasS3Thumbnail && oldBanner && oldBanner.includes('cloudinary.com')) {
+      deleteCloudinaryByUrl(oldBanner).catch(err => console.error('Failed to delete old course banner:', err));
+    }
+
     if (effectiveBanner && oldBanner && effectiveBanner !== oldBanner) {
       updateData.thumbnail = effectiveBanner;
       updateData.bannerUrl = effectiveBanner;
@@ -695,7 +727,7 @@ exports.updateCourse = async (req, res) => {
 
     const updatedCourse = await Course.findOneAndUpdate(query, updateData, { new: true, runValidators: true });
 
-    const serialized = serializeCourse(updatedCourse, req);
+    const serialized = await serializeCourse(updatedCourse, req);
 
     return res.status(200).json({
       success: true,
@@ -833,7 +865,7 @@ exports.deleteModule = async (req, res) => {
     course.modules.pull(moduleId);
     await course.save();
 
-    const serializedCourse = serializeCourse(course, req);
+    const serializedCourse = await serializeCourse(course, req);
 
     return res.status(200).json({ 
       success: true, 
@@ -1847,7 +1879,7 @@ exports.deleteLesson = async (req, res) => {
       })
     );
 
-    const serializedCourse = serializeCourse(updatedCourse, req);
+    const serializedCourse = await serializeCourse(updatedCourse, req);
 
     return res.status(200).json({ 
       success: true, 

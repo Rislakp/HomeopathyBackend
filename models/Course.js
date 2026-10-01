@@ -22,6 +22,7 @@ const resourceSchema = new mongoose.Schema({
   storageProvider: { type: String, trim: true, default: '' },
   s3Key:         { type: String, trim: true, default: '' },
   resourceType:  { type: String, trim: true, default: '' },
+  fileName:      { type: String, trim: true, default: '' },
   originalFileName: { type: String, trim: true, default: '' },
   contentType:   { type: String, trim: true, default: '' },
   fileSize:      { type: Number, default: 0 },

@@ -5,23 +5,7 @@ const CourseProgress = require('../models/CourseProgress');
 const ContentItemProgress = require('../models/ContentItemProgress');
 const { verifyStudentCourseAccess } = require('../utils/courseAccessHelper');
 const { logActivity } = require('../utils/activityLogger');
-const { GetObjectCommand } = require('@aws-sdk/client-s3');
-const { getSignedUrl } = require('@aws-sdk/s3-request-presigner');
-const { s3Client, bucket } = require('../config/s3');
-
-const S3_MEDIA_URL_TTL_SECONDS = 900;
-
-const signS3Reference = async (reference, responseContentType) => {
-  if (!reference || reference.storageProvider !== 's3' || !reference.s3Key) return reference;
-  const key = String(reference.s3Key);
-  if (!/^(videos|images|pdfs)\/[a-zA-Z0-9._/-]+$/.test(key) || key.includes('..')) return reference;
-  const url = await getSignedUrl(s3Client, new GetObjectCommand({
-    Bucket: bucket,
-    Key: key,
-    ...(responseContentType ? { ResponseContentType: responseContentType, ResponseContentDisposition: 'inline' } : {}),
-  }), { expiresIn: S3_MEDIA_URL_TTL_SECONDS });
-  return { ...reference, url, secure_url: url, secureUrl: url, fileUrl: url, documentUrl: url, path: url, accessUrlExpiresIn: S3_MEDIA_URL_TTL_SECONDS };
-};
+const { signS3Reference } = require('../utils/s3MediaSigner');
 
 const addSignedS3MediaUrls = async (course) => {
   if (!course || typeof course !== 'object') return course;

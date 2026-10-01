@@ -3,6 +3,7 @@ const assert = require('node:assert/strict');
 
 const config = require('../config/s3');
 const controller = require('../controllers/s3UploadController');
+const courseController = require('../controllers/courseController');
 const Course = require('../models/Course');
 const Student = require('../models/Student');
 const defaultCredentialProvider = config.s3Client.config.credentials;
@@ -175,4 +176,100 @@ test('multipart S3 failures become safe client errors', async (t) => {
   const failed = await call(controller.abortMultipartUpload, { uploadId: 'missing-upload', key: 'videos/1790796864035-lesson.mp4' });
   assert.equal(failed.statusCode, 404);
   assert.equal(failed.body.message, 'Multipart upload was not found.');
+});
+
+test('Admin course list, detail, create, and update resolve S3 banners without replacing Cloudinary behavior', async (t) => {
+  const originals = {
+    find: Course.find,
+    findOne: Course.findOne,
+    findOneAndUpdate: Course.findOneAndUpdate,
+    save: Course.prototype.save,
+  };
+  t.after(() => {
+    Course.find = originals.find;
+    Course.findOne = originals.findOne;
+    Course.findOneAndUpdate = originals.findOneAndUpdate;
+    Course.prototype.save = originals.save;
+  });
+
+  const cloudinaryBanner = 'https://res.cloudinary.com/example/image/upload/course-banner.jpg';
+  const cloudCourse = new Course({ courseId: 'COURSE-CLOUD', courseTitle: 'Cloudinary', instructor: 'Test', price: 0, thumbnail: cloudinaryBanner, bannerUrl: cloudinaryBanner, courseBanner: cloudinaryBanner });
+  const s3Course = new Course({
+    courseId: 'COURSE-S3', courseTitle: 'S3', instructor: 'Test', price: 0,
+    thumbnail: cloudinaryBanner, bannerUrl: cloudinaryBanner, courseBanner: cloudinaryBanner,
+    thumbnailMedia: { storageProvider: 's3', s3Key: 'images/banner.png', resourceType: 'image', contentType: 'image/png', originalFileName: 'banner.png', fileSize: 512 },
+  });
+  const invalidS3Course = new Course({
+    courseId: 'COURSE-BAD-S3', courseTitle: 'Bad S3', instructor: 'Test', price: 0,
+    thumbnail: cloudinaryBanner, bannerUrl: cloudinaryBanner, courseBanner: cloudinaryBanner,
+    thumbnailMedia: { storageProvider: 's3', s3Key: '../private/key.png', resourceType: 'image', url: cloudinaryBanner },
+  });
+
+  Course.find = async () => [cloudCourse, s3Course, invalidS3Course];
+  Course.findOne = async () => s3Course;
+  const listRes = makeResponse();
+  await courseController.getCourses({ user: { role: 'admin' } }, listRes);
+  assert.equal(listRes.statusCode, 200);
+  const cloudResult = listRes.body.data.find((item) => item.courseId === 'COURSE-CLOUD');
+  assert.equal(cloudResult.thumbnail, cloudinaryBanner);
+  const s3Result = listRes.body.data.find((item) => item.courseId === 'COURSE-S3');
+  assert.match(s3Result.thumbnail, /X-Amz-Signature=/);
+  assert.equal(s3Result.thumbnailMedia.s3Key, 'images/banner.png');
+  assert.equal(s3Result.thumbnailMedia.resourceType, 'image');
+  assert.equal(s3Result.thumbnailMedia.fileName, 'banner.png');
+  assert.equal(s3Result.courseBanner, s3Result.thumbnail);
+  assert.equal(s3Result.thumbnail.includes('cloudinary.com'), false);
+  const badS3Result = listRes.body.data.find((item) => item.courseId === 'COURSE-BAD-S3');
+  assert.equal(badS3Result.thumbnail, '');
+  assert.equal(badS3Result.thumbnailMedia.url, '');
+
+  const detailRes = makeResponse();
+  await courseController.getCourseById({ params: { id: 'COURSE-S3' }, user: { role: 'admin' } }, detailRes);
+  assert.equal(detailRes.statusCode, 200);
+  assert.match(detailRes.body.course.thumbnail, /X-Amz-Signature=/);
+
+  const publicRes = makeResponse();
+  await courseController.getCourses({}, publicRes);
+  const publicS3Course = publicRes.body.data.find((item) => item.courseId === 'COURSE-S3');
+  assert.equal(publicS3Course.thumbnail, '');
+  assert.equal(publicS3Course.thumbnailMedia.s3Key, 'images/banner.png');
+
+  let createdDoc;
+  Course.prototype.save = async function saveForS3Test() { createdDoc = this; return this; };
+  const bannerMetadata = { storageProvider: 's3', s3Key: 'images/new-banner.png', resourceType: 'image', contentType: 'image/png', fileName: 'new-banner.png', fileSize: 512 };
+  const createRes = makeResponse();
+  await courseController.createCourse({
+    user: { role: 'admin' },
+    body: { courseTitle: 'Created S3', instructor: 'Test', price: 0, thumbnailMedia: bannerMetadata, thumbnail: cloudinaryBanner, courseBanner: cloudinaryBanner },
+  }, createRes);
+  assert.equal(createRes.statusCode, 201);
+  assert.equal(createdDoc.get('thumbnail', null, { getters: false }), '');
+  assert.equal(createRes.body.course.thumbnailMedia.s3Key, 'images/new-banner.png');
+  assert.equal(createRes.body.course.thumbnailMedia.fileName, 'new-banner.png');
+  assert.equal(createRes.body.course.thumbnailMedia.storageProvider, 's3');
+  assert.equal(createRes.body.course.thumbnailMedia.contentType, 'image/png');
+  assert.equal(createRes.body.course.thumbnailMedia.fileSize, 512);
+  assert.match(createRes.body.course.thumbnail, /X-Amz-Signature=/);
+
+  const oldCloudCourse = new Course({ courseId: 'COURSE-UPDATE', courseTitle: 'Update S3', instructor: 'Test', price: 0, thumbnail: cloudinaryBanner, bannerUrl: cloudinaryBanner, courseBanner: cloudinaryBanner });
+  let persistedUpdate;
+  Course.findOne = async () => oldCloudCourse;
+  Course.findOneAndUpdate = async (_query, update) => {
+    persistedUpdate = update;
+    return new Course({ ...oldCloudCourse.toObject({ virtuals: false }), ...update });
+  };
+  const updateRes = makeResponse();
+  await courseController.updateCourse({
+    user: { role: 'admin' },
+    params: { id: 'COURSE-UPDATE' },
+    body: { thumbnailMedia: { ...bannerMetadata, s3Key: 'images/updated-banner.png' }, thumbnail: cloudinaryBanner, bannerUrl: cloudinaryBanner },
+  }, updateRes);
+  assert.equal(updateRes.statusCode, 200);
+  assert.equal(persistedUpdate.thumbnail, '');
+  assert.equal(persistedUpdate.bannerUrl, '');
+  assert.equal(persistedUpdate.courseBanner, '');
+  assert.equal(persistedUpdate.thumbnailMedia.s3Key, 'images/updated-banner.png');
+  assert.equal(updateRes.body.course.thumbnailMedia.s3Key, 'images/updated-banner.png');
+  assert.match(updateRes.body.course.thumbnail, /X-Amz-Signature=/);
+  assert.equal(updateRes.body.course.thumbnail.includes('cloudinary.com'), false);
 });
