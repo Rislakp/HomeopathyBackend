@@ -1,4 +1,4 @@
-const mongoose = require('mongoose');
+﻿const mongoose = require('mongoose');
 const jwt = require('jsonwebtoken');
 const User = require('../models/User');
 const Course = require('../models/Course');
@@ -316,35 +316,24 @@ const registerStudent = async (req, res) => {
 
     let enrolledCourse = null;
     if (finalCourse) {
-      const escapedCourse = finalCourse.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
       const cleanCourse = finalCourse.trim();
-      const escapedCourse = cleanCourse.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+      const escapedCourse = cleanCourse.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
       const courseQuery = [
-        { courseId: new RegExp(`^${escapedCourse}$`, 'i') },
-        { courseTitle: new RegExp(`^${escapedCourse}$`, 'i') },
-        { title: new RegExp(`^${escapedCourse}$`, 'i') },
+        { courseId: new RegExp('^' + escapedCourse + '$', 'i') },
+        { courseTitle: new RegExp('^' + escapedCourse + '$', 'i') },
+        { title: new RegExp('^' + escapedCourse + '$', 'i') },
         { courseId: cleanCourse },
         { courseTitle: cleanCourse },
-        { courseTitle: new RegExp("^" + escapedCourse + "$", "i") },
-        { courseId: new RegExp("^" + escapedCourse + "$", "i") },
       ];
-      if (mongoose.Types.ObjectId.isValid(finalCourse)) {
-        courseQuery.push({ _id: new mongoose.Types.ObjectId(finalCourse) });
-      if (require("mongoose").Types.ObjectId.isValid(cleanCourse)) {
-        courseQuery.push({ _id: cleanCourse });
+      if (mongoose.Types.ObjectId.isValid(cleanCourse)) {
+        courseQuery.push({ _id: new mongoose.Types.ObjectId(cleanCourse) });
       }
       if (/^unani$/i.test(cleanCourse)) {
         courseQuery.push({ category: /^unani$/i });
       }
-      enrolledCourse = await Course.findOne({ $or: courseQuery }).select('_id courseId courseTitle title');
-      enrolledCourse = await Course.findOne({ $or: courseQuery }).select("_id courseId courseTitle category");
+      enrolledCourse = await Course.findOne({ $or: courseQuery }).select('_id courseId courseTitle category');
     }
 
-    if (finalCourse && !enrolledCourse) {
-      return res.status(400).json({
-        success: false,
-        message: 'Please select a valid course during registration.',
-      });
     if (!enrolledCourse) {
       // Course not found in DB - allow registration to proceed.
       // preferredCourse is stored as a string; courseRef/courseId will be empty.
@@ -352,7 +341,6 @@ const registerStudent = async (req, res) => {
       // corresponding Course document in the database.
       console.warn('[registerStudent] Course not found for preferredCourse="' + finalCourse + '". Proceeding without courseRef.');
     }
-
     // -----------------------------
     // CHECK DUPLICATE USER (EMAIL / PHONE)
     // -----------------------------
@@ -445,7 +433,7 @@ const registerStudent = async (req, res) => {
             isActive: false,
           });
         } catch (studentErr) {
-          // Log but never block registration — Student doc is supplementary
+          // Log but never block registration â€” Student doc is supplementary
           console.warn('[registerStudent] Student sync warning:', studentErr.message);
         }
       }
@@ -470,7 +458,7 @@ const registerStudent = async (req, res) => {
           // course & subscription now have safe defaults in the schema
         });
       } catch (studentErr) {
-        // Log but never block registration â€” Student doc is supplementary
+        // Log but never block registration Ã¢â‚¬â€ Student doc is supplementary
         console.warn('[registerStudent] Student sync warning:', studentErr.message);
       }
     }

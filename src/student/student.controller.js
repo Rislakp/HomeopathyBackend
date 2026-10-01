@@ -598,7 +598,7 @@ async function startExam(req, res) {
 
     // Sanitize questions to prevent cheating - completely remove `correctOption`
     const sanitizedQuestions = (exam.questions || []).map((q) => {
-      const { correctOption, ...questionWithoutAnswer } = q;
+      const { correctOption, explanation, ...questionWithoutAnswer } = q;
       return questionWithoutAnswer;
     });
 
@@ -1076,7 +1076,6 @@ async function getStudentResults(req, res) {
             moduleName: resolvedModuleName
           };
         }
-        const { courseName: resolvedCourseName, moduleName: resolvedModuleName } = await resolveCourseAndModuleNames(exam);
         const formattedQuestions = (exam.questions || []).map(formatQuestionWithAnswerKey);
 
         examMetadata = {
