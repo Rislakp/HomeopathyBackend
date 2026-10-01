@@ -1,4 +1,4 @@
-const Recording = require('../models/Recording');
+﻿const Recording = require('../models/Recording');
 const Course = require('../models/Course');
 const mongoose = require('mongoose');
 const {
@@ -6,6 +6,7 @@ const {
   uploadBufferToCloudinary,
 } = require('../config/cloudinary');
 const { verifyStudentCourseAccess } = require('../utils/courseAccessHelper');
+const { parsePaginationParams, buildPaginationResponse } = require('../utils/pagination');
 
 const findCourseByIdOrCustomId = async (id) => {
   if (!id) return null;
@@ -296,13 +297,37 @@ exports.createRecording = async (req, res) => {
  */
 exports.getRecordings = async (req, res) => {
   try {
+    const { parsePaginationParams, buildPaginationResponse } = require('../utils/pagination');
+
+    let page, limit, skip;
+    try {
+      const parsed = parsePaginationParams(req.query, { defaultLimit: 20, maxLimit: 100 });
+      page = parsed.page;
+      limit = parsed.limit;
+      skip = parsed.skip;
+    } catch (pagErr) {
+      return res.status(pagErr.statusCode || 400).json({
+        success: false,
+        message: pagErr.message,
+      });
+    }
+
     const filter = {};
     const query = req ? (req.query || {}) : {};
-    if (query.status) {
-      filter.status = query.status;
+    if (query.status && query.status.toLowerCase() !== 'all') {
+      filter.status = new RegExp(`^${query.status.trim()}$`, 'i');
     }
     if (query.courseId && mongoose.Types.ObjectId.isValid(query.courseId)) {
       filter.courseId = query.courseId;
+    }
+    if (query.search && typeof query.search === 'string' && query.search.trim()) {
+      const searchStr = query.search.trim().replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      const searchRegex = new RegExp(searchStr, 'i');
+      filter.$or = [
+        { lessonTitle: searchRegex },
+        { courseName: searchRegex },
+        { moduleName: searchRegex },
+      ];
     }
 
     // Add student authorization filter
@@ -317,7 +342,9 @@ exports.getRecordings = async (req, res) => {
           success: true,
           message: 'Registered course could not be loaded or is not assigned to student profile.',
           data: [],
+          recordings: [],
           count: 0,
+          pagination: buildPaginationResponse(0, page, limit),
         });
       }
 
@@ -333,22 +360,41 @@ exports.getRecordings = async (req, res) => {
       }
 
       if (courseOrFilter.length > 0) {
-        filter.$or = courseOrFilter;
+        filter.$and = filter.$or ? [{ $or: filter.$or }, { $or: courseOrFilter }] : courseOrFilter;
+        delete filter.$or;
       } else {
-        return res.status(200).json({ success: true, count: 0, data: [] });
+        return res.status(200).json({
+          success: true,
+          count: 0,
+          data: [],
+          recordings: [],
+          pagination: buildPaginationResponse(0, page, limit),
+        });
       }
     }
 
-    const recordings = await Recording.find(filter)
-      .populate('courseId', 'courseId courseTitle thumbnail category modules')
-      .sort({ createdAt: -1 });
+    const [total, recordings] = await Promise.all([
+      Recording.countDocuments(filter),
+      Recording.find(filter)
+        .select('_id courseId moduleId lessonId courseName moduleName lessonTitle streamUrl recordedVideoUrl liveClassUrl recordingFileUrl duration status width height bytes format resolution qualityTag createdAt updatedAt')
+        .sort({ createdAt: -1 })
+        .skip(skip)
+        .limit(limit)
+        .lean(),
+    ]);
 
     const formattedList = recordings.map((rec) => formatRecordingDocument(rec));
+    const pagination = buildPaginationResponse(total, page, limit);
 
     return res.status(200).json({
       success: true,
-      count: formattedList.length,
       data: formattedList,
+      pagination,
+      count: formattedList.length,
+      total: pagination.total,
+      page: pagination.page,
+      limit: pagination.limit,
+      totalPages: pagination.totalPages,
     });
   } catch (error) {
     console.error('Get Recordings Error:', error);

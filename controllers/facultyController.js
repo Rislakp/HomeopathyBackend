@@ -1,15 +1,21 @@
 const Faculty = require('../models/Faculty');
+const memoryCache = require('../utils/cache');
 
 /**
  * Format a faculty document to ensure all ID and image fields are normalized
  * across both Landing Page and Student Portal client expectations.
  */
-const formatFacultyDoc = (doc) => {
+const formatFacultyDoc = (doc, options = {}) => {
   if (!doc) return null;
   const idStr = doc._id ? doc._id.toString() : (doc.id ? doc.id.toString() : '');
-  const imageVal = doc.avatarUrl || doc.profileImage || doc.avatar || doc.image || '';
+  let imageVal = doc.avatarUrl || doc.profileImage || doc.avatar || doc.image || '';
+
+  // Never send large base64 image payloads in list APIs (Section 4 requirement)
+  if (options.isList && imageVal && imageVal.length > 1024 && (imageVal.startsWith('data:image') || !imageVal.startsWith('http'))) {
+    imageVal = '';
+  }
+
   return {
-    ...doc,
     _id: idStr,
     id: idStr,
     fullName: doc.fullName || doc.name || '',
@@ -18,10 +24,8 @@ const formatFacultyDoc = (doc) => {
     role: doc.role || doc.designation || 'Faculty',
     qualification: doc.qualification || '',
     phone: doc.phone || '',
-    bio: doc.bio || '',
+    bio: options.isList ? (doc.bio ? doc.bio.slice(0, 200) : '') : (doc.bio || ''),
     avatarUrl: imageVal,
-    profileImage: imageVal,
-    avatar: imageVal,
     experience: doc.experience || '',
     status: doc.status || 'Active',
     createdAt: doc.createdAt,
@@ -36,7 +40,28 @@ const formatFacultyDoc = (doc) => {
  */
 exports.getStudentFaculty = async (req, res) => {
   try {
-    const { search, department, all, paginate, pagination } = req.query;
+    const { parsePaginationParams, buildPaginationResponse } = require('../utils/pagination');
+
+    let page, limit, skip;
+    try {
+      const parsed = parsePaginationParams(req.query, { defaultLimit: 20, maxLimit: 100 });
+      page = parsed.page;
+      limit = parsed.limit;
+      skip = parsed.skip;
+    } catch (pagErr) {
+      return res.status(pagErr.statusCode || 400).json({
+        success: false,
+        message: pagErr.message,
+      });
+    }
+
+    const { search, department } = req.query;
+
+    const cacheKey = `faculty_student_${page}_${limit}_${(search || '').trim()}_${(department || '').trim()}`;
+    const cached = memoryCache.get(cacheKey);
+    if (cached) {
+      return res.status(200).json(cached);
+    }
 
     // Only fetch active faculty for students/public (case-insensitive for safety)
     const filter = {
@@ -48,9 +73,10 @@ exports.getStudentFaculty = async (req, res) => {
       filter.department = { $regex: new RegExp(`^${department.trim()}$`, 'i') };
     }
 
-    // Search by full name, email, department, role, or qualification
+    // Search by full name, email, department, role, or qualification in MongoDB
     if (search && search.trim()) {
-      const searchRegex = new RegExp(search.trim(), 'i');
+      const escaped = search.trim().replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      const searchRegex = new RegExp(escaped, 'i');
       filter.$or = [
         { fullName: searchRegex },
         { email: searchRegex },
@@ -60,81 +86,36 @@ exports.getStudentFaculty = async (req, res) => {
       ];
     }
 
-    // Total count of matching faculty
-    const total = await Faculty.countDocuments(filter);
+    // Execute count and paginated query concurrently
+    const [total, rawFacultyList] = await Promise.all([
+      Faculty.countDocuments(filter),
+      Faculty.find(filter)
+        .select('_id fullName email department role qualification phone bio avatarUrl profileImage avatar experience status createdAt updatedAt')
+        .sort({ fullName: 1 })
+        .skip(skip)
+        .limit(limit)
+        .lean(),
+    ]);
 
-    // Determine pagination:
-    // 1. Explicit all requested (all=true, limit=all, limit=0, limit=-1) -> return all records
-    // 2. Default call (no limit or legacy landing default limit=10 without explicit paginate flag) -> return all records
-    // 3. Explicit pagination (paginate=true, pagination=true, page > 1, or custom numeric limit != 10) -> paginate
-    const rawLimit = req.query.limit;
-    const rawPage = req.query.page;
-    const parsedPage = parseInt(rawPage, 10);
-    const parsedLimit = parseInt(rawLimit, 10);
+    const facultyList = rawFacultyList.map((f) => formatFacultyDoc(f, { isList: true }));
+    const pagination = buildPaginationResponse(total, page, limit);
 
-    const isAllRequested =
-      all === 'true' ||
-      all === '1' ||
-      rawLimit === 'all' ||
-      rawLimit === '0' ||
-      rawLimit === '-1';
-
-    const isExplicitPagination =
-      paginate === 'true' ||
-      pagination === 'true' ||
-      (Number.isInteger(parsedPage) && parsedPage > 1);
-
-    const isCustomLimit =
-      Number.isInteger(parsedLimit) && parsedLimit > 0 && parsedLimit !== 10;
-
-    const shouldPaginate = !isAllRequested && (isExplicitPagination || isCustomLimit);
-
-    let page = 1;
-    let limit = total;
-    let skip = 0;
-    let pages = 1;
-    let totalPages = 1;
-    let hasNextPage = false;
-    let hasPrevPage = false;
-
-    let query = Faculty.find(filter)
-      .select('_id fullName email department role qualification phone bio avatarUrl experience createdAt status')
-      .sort({ fullName: 1 })
-      .lean();
-
-    if (shouldPaginate) {
-      page = Math.max(1, parsedPage || 1);
-      limit = Math.min(1000, Math.max(1, parsedLimit || 10));
-      skip = (page - 1) * limit;
-      pages = total > 0 ? Math.ceil(total / limit) : 1;
-      totalPages = pages;
-      hasNextPage = page < pages;
-      hasPrevPage = page > 1;
-
-      query = query.skip(skip).limit(limit);
-    } else {
-      limit = total;
-      pages = 1;
-      totalPages = 1;
-      hasNextPage = false;
-      hasPrevPage = false;
-    }
-
-    const rawFacultyList = await query;
-    const facultyList = rawFacultyList.map(formatFacultyDoc);
-
-    return res.status(200).json({
+    const responsePayload = {
       success: true,
-      count: facultyList.length,
-      total,
-      page,
-      pages,
-      totalPages,
-      limit,
-      hasNextPage,
-      hasPrevPage,
       data: facultyList,
-    });
+      pagination: pagination,
+      count: facultyList.length,
+      total: pagination.total,
+      page: pagination.page,
+      limit: pagination.limit,
+      totalPages: pagination.totalPages,
+      pages: pagination.totalPages,
+      hasNextPage: pagination.hasNextPage,
+      hasPrevPage: pagination.hasPreviousPage,
+    };
+
+    memoryCache.set(cacheKey, responsePayload, 30);
+    return res.status(200).json(responsePayload);
   } catch (error) {
     console.error('Get Student Faculty Error:', error);
     return res.status(500).json({
@@ -186,7 +167,28 @@ exports.getStudentFacultyById = async (req, res) => {
  */
 exports.getAllFacultyAdmin = async (req, res) => {
   try {
-    const { search, department, status, all, paginate, pagination } = req.query;
+    const { parsePaginationParams, buildPaginationResponse } = require('../utils/pagination');
+
+    let page, limit, skip;
+    try {
+      const parsed = parsePaginationParams(req.query, { defaultLimit: 20, maxLimit: 100 });
+      page = parsed.page;
+      limit = parsed.limit;
+      skip = parsed.skip;
+    } catch (pagErr) {
+      return res.status(pagErr.statusCode || 400).json({
+        success: false,
+        message: pagErr.message,
+      });
+    }
+
+    const { search, department, status } = req.query;
+    const cacheKey = `faculty_admin_${page}_${limit}_${(search || '').trim()}_${(department || '').trim()}_${(status || '').trim()}`;
+    const cached = memoryCache.get(cacheKey);
+    if (cached) {
+      return res.status(200).json(cached);
+    }
+
     const filter = {};
 
     if (status && status.toLowerCase() !== 'all') {
@@ -198,7 +200,8 @@ exports.getAllFacultyAdmin = async (req, res) => {
     }
 
     if (search && search.trim()) {
-      const searchRegex = new RegExp(search.trim(), 'i');
+      const escaped = search.trim().replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      const searchRegex = new RegExp(escaped, 'i');
       filter.$or = [
         { fullName: searchRegex },
         { email: searchRegex },
@@ -208,75 +211,36 @@ exports.getAllFacultyAdmin = async (req, res) => {
       ];
     }
 
-    const total = await Faculty.countDocuments(filter);
+    // Execute count and paginated query concurrently with projection
+    const [total, rawFacultyList] = await Promise.all([
+      Faculty.countDocuments(filter),
+      Faculty.find(filter)
+        .select('_id fullName email department role qualification phone bio avatarUrl profileImage avatar experience status createdAt updatedAt')
+        .sort({ createdAt: -1 })
+        .skip(skip)
+        .limit(limit)
+        .lean(),
+    ]);
 
-    const rawLimit = req.query.limit;
-    const rawPage = req.query.page;
-    const parsedPage = parseInt(rawPage, 10);
-    const parsedLimit = parseInt(rawLimit, 10);
+    const facultyList = rawFacultyList.map((f) => formatFacultyDoc(f, { isList: true }));
+    const pagination = buildPaginationResponse(total, page, limit);
 
-    const isAllRequested =
-      all === 'true' ||
-      all === '1' ||
-      rawLimit === 'all' ||
-      rawLimit === '0' ||
-      rawLimit === '-1';
-
-    const isExplicitPagination =
-      paginate === 'true' ||
-      pagination === 'true' ||
-      (Number.isInteger(parsedPage) && parsedPage > 1);
-
-    const isCustomLimit =
-      Number.isInteger(parsedLimit) && parsedLimit > 0 && parsedLimit !== 20;
-
-    const shouldPaginate = !isAllRequested && (isExplicitPagination || isCustomLimit);
-
-    let page = 1;
-    let limit = total;
-    let skip = 0;
-    let pages = 1;
-    let totalPages = 1;
-    let hasNextPage = false;
-    let hasPrevPage = false;
-
-    let query = Faculty.find(filter)
-      .sort({ createdAt: -1 })
-      .lean();
-
-    if (shouldPaginate) {
-      page = Math.max(1, parsedPage || 1);
-      limit = Math.min(1000, Math.max(1, parsedLimit || 20));
-      skip = (page - 1) * limit;
-      pages = total > 0 ? Math.ceil(total / limit) : 1;
-      totalPages = pages;
-      hasNextPage = page < pages;
-      hasPrevPage = page > 1;
-
-      query = query.skip(skip).limit(limit);
-    } else {
-      limit = total;
-      pages = 1;
-      totalPages = 1;
-      hasNextPage = false;
-      hasPrevPage = false;
-    }
-
-    const rawFacultyList = await query;
-    const facultyList = rawFacultyList.map(formatFacultyDoc);
-
-    return res.status(200).json({
+    const responsePayload = {
       success: true,
-      count: facultyList.length,
-      total,
-      page,
-      pages,
-      totalPages,
-      limit,
-      hasNextPage,
-      hasPrevPage,
       data: facultyList,
-    });
+      pagination: pagination,
+      count: facultyList.length,
+      total: pagination.total,
+      page: pagination.page,
+      limit: pagination.limit,
+      totalPages: pagination.totalPages,
+      pages: pagination.totalPages,
+      hasNextPage: pagination.hasNextPage,
+      hasPrevPage: pagination.hasPreviousPage,
+    };
+
+    memoryCache.set(cacheKey, responsePayload, 30);
+    return res.status(200).json(responsePayload);
   } catch (error) {
     console.error('Admin Get All Faculty Error:', error);
     return res.status(500).json({
@@ -330,6 +294,7 @@ exports.createFaculty = async (req, res) => {
     });
 
     await faculty.save();
+    memoryCache.del('faculty_');
 
     return res.status(201).json({
       success: true,
@@ -381,6 +346,8 @@ exports.updateFaculty = async (req, res) => {
       });
     }
 
+    memoryCache.del('faculty_');
+
     return res.status(200).json({
       success: true,
       message: 'Faculty member updated successfully',
@@ -388,6 +355,26 @@ exports.updateFaculty = async (req, res) => {
     });
   } catch (error) {
     console.error('Update Faculty Error:', error);
+    
+    if (error.code === 11000 && error.keyPattern && error.keyPattern.email) {
+      return res.status(400).json({
+        success: false,
+        message: 'A faculty member with this email address already exists',
+      });
+    }
+
+    if (error.name === 'ValidationError') {
+      const errors = {};
+      Object.keys(error.errors).forEach((key) => {
+        errors[key] = error.errors[key].message;
+      });
+      return res.status(400).json({
+        success: false,
+        message: 'Validation failed',
+        errors,
+      });
+    }
+
     return res.status(500).json({
       success: false,
       message: 'Failed to update faculty member',
@@ -413,6 +400,8 @@ exports.deleteFaculty = async (req, res) => {
         message: 'Faculty member not found',
       });
     }
+
+    memoryCache.del('faculty_');
 
     return res.status(200).json({
       success: true,

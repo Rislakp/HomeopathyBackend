@@ -209,16 +209,17 @@ async function runTests() {
     assert('Returns students array', Array.isArray(res1.data.data.students));
     assert('Returns pagination metadata', res1.data.data.pagination && res1.data.data.pagination.total >= 3);
 
-    // TEST 2: Route aliases check (/api/v1/students, /api/admin/students, /api/students)
+    // TEST 2: Route aliases check (/api/v1/admin/students, /api/admin/students)
     console.log('\n--- Test 2: Route Aliases ---');
-    const resV1Students = await makeRequest('/api/v1/students');
-    assert('GET /api/v1/students returns 200', resV1Students.status === 200);
+    const resV1Students = await makeRequest('/api/v1/admin/students');
+    assert('GET /api/v1/admin/students returns 200', resV1Students.status === 200);
 
     const resAdminStudents = await makeRequest('/api/admin/students');
     assert('GET /api/admin/students returns 200', resAdminStudents.status === 200);
 
-    const resStudents = await makeRequest('/api/students');
-    assert('GET /api/students returns 200', resStudents.status === 200);
+
+
+
 
     // TEST 3: Attended Exams and Scores Structure
     console.log('\n--- Test 3: Attended Exams & Data Shape ---');

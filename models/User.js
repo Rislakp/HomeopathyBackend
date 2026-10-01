@@ -47,6 +47,16 @@ const userSchema = new mongoose.Schema(
       type: String,
       trim: true,
     },
+    profileImage: {
+      type: String,
+      trim: true,
+      default: "",
+    },
+    avatar: {
+      type: String,
+      trim: true,
+      default: "",
+    },
     preferredCourse: {
       type: String,
       trim: true,
@@ -72,6 +82,21 @@ const userSchema = new mongoose.Schema(
       type: mongoose.Schema.Types.ObjectId,
       ref: 'Course',
       default: null,
+    },
+    status: {
+      type: String,
+      enum: ['Pending', 'Active', 'Inactive', 'Trial', 'Expired'],
+      default: 'Pending',
+    },
+    accountStatus: {
+      type: String,
+      enum: ['Pending', 'Approved', 'Rejected', 'Suspended'],
+      default: 'Pending',
+      trim: true,
+    },
+    isApproved: {
+      type: Boolean,
+      default: false,
     },
   },
   {
@@ -111,5 +136,10 @@ userSchema.pre('save', async function () {
 userSchema.methods.matchPassword = async function (enteredPassword) {
   return await bcrypt.compare(enteredPassword, this.password);
 };
+
+// MongoDB performance indexes
+userSchema.index({ role: 1, createdAt: -1 });
+userSchema.index({ phone: 1 });
+userSchema.index({ contactNumber: 1 });
 
 module.exports = mongoose.models.User || mongoose.model('User', userSchema);

@@ -87,7 +87,17 @@ router.get('/:id/results', adminAuth, adminStudentController.getAdminStudentResu
 // ─────────────────────────────────────────────────────────────────────────────
 // 7. PARAMETERIZED /:id ROUTE (Admin management or Student own profile)
 // ─────────────────────────────────────────────────────────────────────────────
+const RESERVED_SUB_ROUTES = new Set(['courses', 'faculty', 'export', 'unani', 'exams']);
+const isProfileIdParam = (id) => {
+  if (!id) return false;
+  if (RESERVED_SUB_ROUTES.has(id.toLowerCase())) return false;
+  return true;
+};
+
 router.get('/:id', requireAuth, (req, res, next) => {
+  if (!isProfileIdParam(req.params.id)) {
+    return next();
+  }
   const role = (req.user?.role || '').toLowerCase().trim();
   if (role === 'admin' || role === 'superadmin') {
     return adminStudentController.getStudentById(req, res, next);
@@ -96,6 +106,9 @@ router.get('/:id', requireAuth, (req, res, next) => {
 });
 
 router.patch('/:id', requireAuth, (req, res, next) => {
+  if (!isProfileIdParam(req.params.id)) {
+    return next();
+  }
   const role = (req.user?.role || '').toLowerCase().trim();
   if (role === 'admin' || role === 'superadmin') {
     return adminStudentController.updateStudent(req, res, next);
@@ -104,6 +117,9 @@ router.patch('/:id', requireAuth, (req, res, next) => {
 });
 
 router.put('/:id', requireAuth, (req, res, next) => {
+  if (!isProfileIdParam(req.params.id)) {
+    return next();
+  }
   const role = (req.user?.role || '').toLowerCase().trim();
   if (role === 'admin' || role === 'superadmin') {
     return adminStudentController.updateStudent(req, res, next);
@@ -112,6 +128,9 @@ router.put('/:id', requireAuth, (req, res, next) => {
 });
 
 router.delete('/:id', requireAuth, (req, res, next) => {
+  if (!isProfileIdParam(req.params.id)) {
+    return next();
+  }
   const role = (req.user?.role || '').toLowerCase().trim();
   if (role === 'admin' || role === 'superadmin') {
     return adminStudentController.deleteStudent(req, res, next);

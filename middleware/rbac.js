@@ -55,20 +55,6 @@ const requireAuth = async (req, res, next) => {
       });
     }
 
-    // ── DEBUG: Print the raw decoded JWT payload ───────────────────────────
-    console.log('\n╔══════════════════════════════════════════════════════╗');
-    console.log('║  [verifyToken / requireAuth] DECODED JWT PAYLOAD      ║');
-    console.log('╚══════════════════════════════════════════════════════╝');
-    console.log('  Route            :', req.method, req.originalUrl);
-    console.log('  decoded.id       :', decoded.id);
-    console.log('  decoded.userId   :', decoded.userId);
-    console.log('  decoded.adminId  :', decoded.adminId);
-    console.log('  decoded.studentId:', decoded.studentId);
-    console.log('  decoded.role     :', decoded.role);
-    console.log('  decoded.email    :', decoded.email);
-    console.log('  Full payload     :', JSON.stringify(decoded));
-    console.log('──────────────────────────────────────────────────────\n');
-
     const userId =
       decoded.userId ||
       decoded.id ||
@@ -83,11 +69,20 @@ const requireAuth = async (req, res, next) => {
       });
     }
 
+    const memoryCache = require('../utils/cache');
+    const cacheKey = `user_auth_${userId}`;
+    const cachedUser = memoryCache.get(cacheKey);
+    if (cachedUser) {
+      req.user = cachedUser;
+      return next();
+    }
+
     // ------------------------------------------------------------------
-    // 1. Try the primary User collection first
+    // 1. Primary User collection lookup (.lean() for speed)
     // ------------------------------------------------------------------
-    let foundUser = await User.findById(userId).select('-password');
+    let foundUser = await User.findById(userId).select('_id email name role courseId courseRef course preferredCourse').lean();
     let normalizedRole = null;
+    let modelName = 'User';
 
     if (foundUser) {
       normalizedRole = (foundUser.role || decoded.role || 'student')
@@ -98,34 +93,29 @@ const requireAuth = async (req, res, next) => {
 
     // ------------------------------------------------------------------
     // 2. Fallback: Admin collection
-    //    Covers admins created directly in the Admin collection who may
-    //    not have a corresponding User document.
     // ------------------------------------------------------------------
     if (!foundUser && Admin) {
-      const adminDoc = await Admin.findById(userId).select('-password');
+      const adminDoc = await Admin.findById(userId).select('_id email name role').lean();
       if (adminDoc) {
         foundUser = adminDoc;
-        // Admins in this collection carry role field (ADMIN / SUPERADMIN)
+        modelName = 'Admin';
         normalizedRole = (adminDoc.role || decoded.role || 'admin').toString().toLowerCase().trim();
       }
     }
 
     // ------------------------------------------------------------------
     // 3. Fallback: Student collection
-    //    Covers students created directly in the Student collection.
     // ------------------------------------------------------------------
     if (!foundUser && Student) {
-      const studentDoc = await Student.findById(userId).select('-password');
+      const studentDoc = await Student.findById(userId).select('_id email name role courseId courseRef course').lean();
       if (studentDoc) {
         foundUser = studentDoc;
+        modelName = 'Student';
         normalizedRole = (decoded.role || 'student').toString().toLowerCase().trim();
       }
     }
 
     if (!foundUser) {
-      console.warn(
-        `[requireAuth] Token userId ${userId} not found in User, Admin, or Student collections.`
-      );
       return res.status(401).json({
         success: false,
         message: 'User associated with this token no longer exists.',
@@ -133,8 +123,8 @@ const requireAuth = async (req, res, next) => {
     }
 
     let studentDoc = null;
-    if (Student) {
-      if (foundUser.constructor && foundUser.constructor.modelName === 'Student') {
+    if (Student && normalizedRole === 'student') {
+      if (modelName === 'Student') {
         studentDoc = foundUser;
       } else {
         studentDoc = await Student.findOne({
@@ -142,7 +132,7 @@ const requireAuth = async (req, res, next) => {
             { userId: foundUser._id },
             { email: foundUser.email ? foundUser.email.toLowerCase() : '' },
           ],
-        });
+        }).lean();
       }
     }
 
@@ -162,18 +152,9 @@ const requireAuth = async (req, res, next) => {
       course: courseTitle,
     };
 
-    // ── DEBUG: Print what was resolved from the DB and what req.user looks like ──
-    console.log('\n╔══════════════════════════════════════════════════════╗');
-    console.log('║  [verifyToken / requireAuth] REQ.USER ATTACHED        ║');
-    console.log('╚══════════════════════════════════════════════════════╝');
-    console.log('  DB collection resolved :', foundUser.constructor.modelName || 'unknown');
-    console.log('  req.user.id            :', req.user.id);
-    console.log('  req.user.role          :', req.user.role, '  ← must be "admin" or "superadmin" for admin routes');
-    console.log('  req.user.email         :', req.user.email);
-    console.log('  Full req.user          :', JSON.stringify(req.user));
-    console.log('──────────────────────────────────────────────────────\n');
-
+    memoryCache.set(cacheKey, req.user, 30);
     next();
+
   } catch (error) {
     console.error('RBAC requireAuth Error:', error);
     return res.status(500).json({
@@ -202,13 +183,6 @@ const requireRole = (...allowedRoles) => {
 
         try {
           const userRole = (req.user?.role || '').toLowerCase().trim();
-          // ── DEBUG: verifyAdmin role check (req.user populated by requireAuth)
-          console.log('\n╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌');
-          console.log('  [verifyAdmin] Role check (via requireAuth callback)');
-          console.log('  req.user.role (resolved) :', userRole);
-          console.log('  allowedRoles             :', normalizedAllowedRoles);
-          console.log('  Access granted?          :', normalizedAllowedRoles.includes(userRole) || (userRole === 'superadmin' && normalizedAllowedRoles.includes('admin')));
-          console.log('╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌\n');
           if (
             normalizedAllowedRoles.includes(userRole) ||
             (userRole === 'superadmin' && normalizedAllowedRoles.includes('admin'))
@@ -229,13 +203,6 @@ const requireRole = (...allowedRoles) => {
     }
 
     const userRole = (req.user.role || '').toLowerCase().trim();
-    // ── DEBUG: verifyAdmin role check (req.user was pre-populated by a prior middleware)
-    console.log('\n╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌');
-    console.log('  [verifyAdmin] Role check (req.user already populated)');
-    console.log('  req.user.role  :', userRole);
-    console.log('  allowedRoles   :', normalizedAllowedRoles);
-    console.log('  Access granted?:', normalizedAllowedRoles.includes(userRole) || (userRole === 'superadmin' && normalizedAllowedRoles.includes('admin')));
-    console.log('╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌\n');
     if (
       normalizedAllowedRoles.includes(userRole) ||
       (userRole === 'superadmin' && normalizedAllowedRoles.includes('admin'))

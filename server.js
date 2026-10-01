@@ -1,11 +1,11 @@
-require('dotenv').config();
+﻿require('dotenv').config({ path: require('path').join(__dirname, '.env') });
 
-// ── Process-level safety net ──────────────────────────────────────────────────
+// â”€â”€ Process-level safety net â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 // Catches any async promise rejection that escapes a try/catch.
 // Without this, Node silently ignores the error and the HTTP request hangs forever.
 process.on('unhandledRejection', (reason, promise) => {
   console.error('[UnhandledRejection] Unhandled Promise Rejection:', reason);
-  // Do NOT exit — let Express keep serving; individual request already timed out.
+  // Do NOT exit â€” let Express keep serving; individual request already timed out.
 });
 
 // Catches synchronous throws that escape all error boundaries.
@@ -18,6 +18,7 @@ process.on('uncaughtException', (err) => {
 const express = require('express');
 const cors = require('cors');
 const connectDB = require('./config/db');
+const requestLogger = require('./utils/requestLogger');
 const path = require('path');
 const fs = require('fs');
 
@@ -36,6 +37,7 @@ const allowedOrigins = [
   'https://admin.whitecoat.academy',
   'https://student.whitecoat.academy',
   'https://student-portal.whitecoat.academy',
+  'https://unani.whitecoat.academy',
   'https://whitecoatacademy.com',
   'https://www.whitecoatacademy.com',
   'https://admin.whitecoatacademy.com',
@@ -44,6 +46,11 @@ const allowedOrigins = [
   'https://www.whitecodeacademy.com',
   'https://admin.whitecodeacademy.com',
   'https://student.whitecodeacademy.com',
+  'http://localhost:50079',
+  'http://localhost:5000',
+  'http://localhost:5001',
+  'http://localhost:3000',
+  'http://localhost:5173',
 ];
 
 if (process.env.ALLOWED_ORIGINS) {
@@ -77,9 +84,6 @@ const isOriginAllowed = (origin) => {
     /^https?:\/\/([a-zA-Z0-9-]+\.)*whitecoat\.academy$/i,
     /^https?:\/\/([a-zA-Z0-9-]+\.)*whitecoatacademy\.com$/i,
     /^https?:\/\/([a-zA-Z0-9-]+\.)*whitecodeacademy\.com$/i,
-    /^https?:\/\/([a-zA-Z0-9-]+\.)*onrender\.com$/i,
-    /^https?:\/\/([a-zA-Z0-9-]+\.)*vercel\.app$/i,
-    /^https?:\/\/([a-zA-Z0-9-]+\.)*netlify\.app$/i,
     /^https?:\/\/(10\.0\.2\.2|0\.0\.0\.0)(:\d+)?$/i,
   ];
 
@@ -150,16 +154,20 @@ app.use(cors(corsOptionsDelegate));
 app.options('*', cors(corsOptionsDelegate));
 
 // Body Parser Middleware (Must be registered before any routes are defined)
-app.use(express.json({ limit: '100mb' }));
-app.use(express.urlencoded({ limit: '100mb', extended: true }));
+// JSON is for metadata and answers, not media. Multipart uploads are handled
+// by multer and retain their own route-specific file-size limits.
+app.use(express.json({ limit: '2mb' }));
+app.use(express.urlencoded({ limit: '1mb', extended: true }));
 
 
-// ── Request timeout middleware ─────────────────────────────────────────────
+app.use(requestLogger);
+
+// â”€â”€ Request timeout middleware â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 // Uses 120s timeout for video uploads/recordings, 30s for general REST endpoints.
 app.use((req, res, next) => {
   const url = (req.originalUrl || req.url || '').toLowerCase();
   const isUploadRoute = url.includes('/upload') || url.includes('/recordings') || url.includes('/media');
-  const timeoutMs = isUploadRoute ? 120000 : 60000;
+  const timeoutMs = isUploadRoute ? 60000 : 30000;
 
   res.setTimeout(timeoutMs, () => {
     if (!res.headersSent) {
@@ -208,11 +216,46 @@ app.use('/uploads', express.static(uploadsDir, {
 app.use(express.static(uploadsDir));
 app.use(express.static(path.join(__dirname, 'public')));
 
+
+
+// â”€â”€ Health Check Endpoints (Lightweight, stateless, Render load balancer compatible) â”€â”€
+app.get('/health', (req, res) => {
+  res.status(200).json({
+    status: 'ok',
+  });
+});
+
+app.get('/api/health', (req, res) => {
+  res.status(200).json({
+    status: 'ok',
+    success: true,
+    message: 'Server is awake',
+    timestamp: Date.now(),
+  });
+});
+app.get('/api/v1/health', (req, res) => {
+  res.status(200).json({
+    status: 'ok',
+    success: true,
+    message: 'Server is awake',
+    timestamp: Date.now(),
+  });
+});
+
+// Test
+app.get('/', (req, res) => {
+  res.json({
+    success: true,
+    message: 'Backend is working',
+  });
+});
+
+
 // Routes
 const authRoutes = require('./routes/authRoutes');
 const adminAuthRoutes = require('./routes/adminAuthRoutes');
 
-// ── Public Authentication Endpoints (Strictly public, NO auth middleware) ───
+// â”€â”€ Public Authentication Endpoints (Strictly public, NO auth middleware) â”€â”€â”€
 app.use('/api/admin/auth', adminAuthRoutes);
 app.use('/api/v1/admin/auth', adminAuthRoutes);
 app.use('/admin/auth', adminAuthRoutes);
@@ -241,9 +284,16 @@ app.use('/api/v1', require('./routes/recordingRoutes'));
 
 
 
+const unaniSubscriptionRoutes = require('./src/unani/subscriptions/routes/unaniSubscription.routes');
+app.use(unaniSubscriptionRoutes);
+
 const studentFacultyRoutes = require('./routes/studentFacultyRoutes');
 app.use('/api/student/faculty', studentFacultyRoutes);
 app.use('/api/v1/student/faculty', studentFacultyRoutes);
+
+// Student curriculum and progress routes
+app.use('/api/student', require('./routes/studentCurriculumRoutes'));
+app.use('/api/v1/student', require('./routes/studentCurriculumRoutes'));
 
 // Student self-service profile and management routes
 const studentProfileRoutes = require('./routes/studentRoutes');
@@ -251,12 +301,14 @@ app.use('/api/students', studentProfileRoutes);
 app.use('/api/v1/students', studentProfileRoutes);
 app.use('/api/student', studentProfileRoutes);
 app.use('/api/v1/student', studentProfileRoutes);
-
-// Student curriculum and progress routes
-app.use('/api/student', require('./routes/studentCurriculumRoutes'));
-app.use('/api/v1/student', require('./routes/studentCurriculumRoutes'));
 app.use('/api/admin/students', require('./routes/adminStudentRoutes'));
 app.use('/api/v1/admin/students', require('./routes/adminStudentRoutes'));
+
+const rankImageRoutes = require('./routes/academicExamRankImage.routes');
+app.use('/api/exams', rankImageRoutes);
+app.use('/api/v1/exams', rankImageRoutes);
+app.use('/api/unani-exams', require('./routes/unaniExamRoutes'));
+app.use('/api/v1/unani-exams', require('./routes/unaniExamRoutes'));
 
 const examRoutes = require('./routes/exam.routes');
 app.use(examRoutes);
@@ -266,7 +318,10 @@ const adminExamRoutes = require('./src/admin/admin.routes');
 app.use(adminExamRoutes);
 const unaniExamRoutes = require('./src/unani/exams/routes/unaniExam.routes');
 app.use(unaniExamRoutes);
+
 const facultyRoutes = require('./routes/facultyRoutes');
+app.use('/api/faculty', facultyRoutes);
+app.use('/api/v1/faculty', facultyRoutes);
 app.use('/api/admin/faculty', facultyRoutes);
 app.use('/api/v1/admin/faculty', facultyRoutes);
 const adminDashboardRoutes = require('./routes/adminDashboardRoutes');
@@ -278,35 +333,6 @@ app.use('/api/v1/admin/activities', adminDashboardRoutes);
 const adminRoutes = require('./routes/adminRoutes');
 app.use('/api/v1/admin', adminRoutes);
 app.use('/api/admin', adminRoutes);
-
-
-// ── Health / Wake-up endpoint ──────────────────────────────────────────────
-// Zero-latency ping for the Flutter frontend to pre-warm the Render server
-// from its cold start. No DB queries — responds as soon as the Node process
-// is alive. The Flutter app fires this when the login screen loads so the
-// server is already awake by the time the user taps "Login".
-app.get('/api/health', (req, res) => {
-  res.status(200).json({
-    success: true,
-    message: 'Server is awake',
-    timestamp: Date.now(),
-  });
-});
-app.get('/api/v1/health', (req, res) => {
-  res.status(200).json({
-    success: true,
-    message: 'Server is awake',
-    timestamp: Date.now(),
-  });
-});
-
-// Test
-app.get('/', (req, res) => {
-  res.json({
-    success: true,
-    message: 'Backend is working',
-  });
-});
 
 // 404 Route Not Found Catch-All
 app.use((req, res, next) => {
@@ -337,15 +363,43 @@ const startServer = async () => {
     await seedInitialAdmin();
 
     const server = app.listen(PORT, () => {
-      console.log(`🚀 Server running on port ${PORT}`);
+      console.log(`ðŸš€ Server running on port ${PORT}`);
     });
 
-    // Configure 10-minute timeout for handling large video file uploads
-    server.timeout = 600000;
+    // Normal requests are capped by middleware at 30s; route-level response
+    // timeouts allow uploads/extraction up to 60s. Do not leave a 10-minute
+    // global socket timeout that masks stalled database work.
+    server.timeout = 35000;
     server.keepAliveTimeout = 65000;
     server.headersTimeout = 66000;
+
+    // Graceful Shutdown Handler for Render horizontal scaling
+    const mongoose = require('mongoose');
+    const handleGracefulShutdown = (signal) => {
+      console.log(`\nðŸ›‘ [${signal}] Graceful shutdown initiated. Closing HTTP server...`);
+      server.close(async () => {
+        console.log(`âœ… [${signal}] HTTP server closed. Closing MongoDB connection pool...`);
+        try {
+          await mongoose.connection.close(false);
+          console.log(`âœ… [${signal}] MongoDB connection closed cleanly.`);
+          process.exit(0);
+        } catch (err) {
+          console.error(`âŒ [${signal}] Error closing MongoDB connection:`, err.message);
+          process.exit(1);
+        }
+      });
+
+      // Force exit after 10s if connections refuse to close in time
+      setTimeout(() => {
+        console.error(`âš ï¸ [${signal}] Forced shutdown after 10s timeout.`);
+        process.exit(1);
+      }, 10000).unref();
+    };
+
+    process.on('SIGTERM', () => handleGracefulShutdown('SIGTERM'));
+    process.on('SIGINT', () => handleGracefulShutdown('SIGINT'));
   } catch (error) {
-    console.error('❌ Server startup failed:', error.message);
+    console.error('âŒ Server startup failed:', error.message);
     process.exit(1);
   }
 };

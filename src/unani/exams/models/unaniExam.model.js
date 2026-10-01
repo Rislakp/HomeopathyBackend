@@ -120,5 +120,11 @@ const unaniExamSchema = new mongoose.Schema(
   }
 );
 
+// MongoDB performance indexes for Unani test history and admin queries
+unaniExamSchema.index({ courseId: 1, examType: 1, createdAt: -1 });
+unaniExamSchema.index({ courseId: 1, status: 1 });
+unaniExamSchema.index({ title: 1 });
+unaniExamSchema.index({ createdAt: -1 });
+
 module.exports =
   mongoose.models.UnaniExam || mongoose.model('UnaniExam', unaniExamSchema);

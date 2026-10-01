@@ -49,6 +49,12 @@ const questionSchema = new mongoose.Schema({
     type: String,
     enum: ['A', 'B', 'C', 'D'],
     required: true
+  },
+  explanation: {
+    type: String,
+    trim: true,
+    required: false,
+    default: ''
   }
 }, { _id: true });
 
@@ -118,4 +124,11 @@ const examSchema = new mongoose.Schema({
   timestamps: true
 });
 
+// MongoDB performance indexes
+examSchema.index({ testType: 1, createdAt: -1 });
+examSchema.index({ courseId: 1, moduleId: 1 });
+examSchema.index({ courseId: 1 });
+examSchema.index({ createdAt: -1 });
+
 module.exports = mongoose.models.Exam || mongoose.model('Exam', examSchema);
+

@@ -98,4 +98,11 @@ const recordingSchema = new mongoose.Schema(
   }
 );
 
+// MongoDB performance indexes
+recordingSchema.index({ courseId: 1, createdAt: -1 });
+recordingSchema.index({ status: 1, createdAt: -1 });
+recordingSchema.index({ createdAt: -1 });
+
 module.exports = mongoose.model('Recording', recordingSchema);
+
+

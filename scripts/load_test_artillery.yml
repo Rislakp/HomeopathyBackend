@@ -1,0 +1,42 @@
+config:
+  target: "http://localhost:5000"
+  phases:
+    - duration: 30
+      arrivalRate: 5
+      rampTo: 10
+      name: "Phase 1: 50 Concurrent Users"
+    - duration: 60
+      arrivalRate: 10
+      name: "Sustained 50 Users"
+    - duration: 30
+      arrivalRate: 10
+      rampTo: 20
+      name: "Phase 2: 100 Concurrent Users"
+    - duration: 60
+      arrivalRate: 20
+      name: "Sustained 100 Users"
+    - duration: 30
+      arrivalRate: 20
+      rampTo: 50
+      name: "Phase 3: 250 Concurrent Users"
+    - duration: 60
+      arrivalRate: 50
+      name: "Sustained 250 Users"
+    - duration: 30
+      arrivalRate: 50
+      rampTo: 100
+      name: "Phase 4: 500 Concurrent Users"
+    - duration: 60
+      arrivalRate: 100
+      name: "Sustained 500 Users"
+scenarios:
+  - name: "Public Browsing & Health Check Scenario"
+    flow:
+      - get:
+          url: "/health"
+      - think: 1
+      - get:
+          url: "/api/courses"
+      - think: 2
+      - get:
+          url: "/api/subscriptions"
