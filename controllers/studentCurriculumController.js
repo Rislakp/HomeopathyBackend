@@ -5,6 +5,55 @@ const CourseProgress = require('../models/CourseProgress');
 const ContentItemProgress = require('../models/ContentItemProgress');
 const { verifyStudentCourseAccess } = require('../utils/courseAccessHelper');
 const { logActivity } = require('../utils/activityLogger');
+const { GetObjectCommand } = require('@aws-sdk/client-s3');
+const { getSignedUrl } = require('@aws-sdk/s3-request-presigner');
+const { s3Client, bucket } = require('../config/s3');
+
+const S3_MEDIA_URL_TTL_SECONDS = 900;
+
+const signS3Reference = async (reference, responseContentType) => {
+  if (!reference || reference.storageProvider !== 's3' || !reference.s3Key) return reference;
+  const key = String(reference.s3Key);
+  if (!/^(videos|images|pdfs)\/[a-zA-Z0-9._/-]+$/.test(key) || key.includes('..')) return reference;
+  const url = await getSignedUrl(s3Client, new GetObjectCommand({
+    Bucket: bucket,
+    Key: key,
+    ...(responseContentType ? { ResponseContentType: responseContentType, ResponseContentDisposition: 'inline' } : {}),
+  }), { expiresIn: S3_MEDIA_URL_TTL_SECONDS });
+  return { ...reference, url, secure_url: url, secureUrl: url, fileUrl: url, documentUrl: url, path: url, accessUrlExpiresIn: S3_MEDIA_URL_TTL_SECONDS };
+};
+
+const addSignedS3MediaUrls = async (course) => {
+  if (!course || typeof course !== 'object') return course;
+  if (course.thumbnailMedia?.storageProvider === 's3') {
+    course.thumbnailMedia = await signS3Reference(course.thumbnailMedia, course.thumbnailMedia.contentType);
+    const bannerUrl = course.thumbnailMedia.url;
+    course.thumbnail = bannerUrl;
+    course.bannerUrl = bannerUrl;
+    course.courseBanner = bannerUrl;
+    course.banner = bannerUrl;
+    course.thumbnailUrl = bannerUrl;
+    course.image = bannerUrl;
+    course.imageUrl = bannerUrl;
+  }
+  for (const moduleItem of course.modules || []) {
+    for (const lesson of moduleItem.lessons || []) {
+      for (const [field, type] of [['videoParts', undefined], ['pdfNotes', 'application/pdf'], ['assignments', undefined], ['attachments', undefined]]) {
+        if (Array.isArray(lesson[field])) {
+          lesson[field] = await Promise.all(lesson[field].map((resource) => signS3Reference(resource, type)));
+        }
+      }
+      const firstVideo = (lesson.videoParts || []).find((resource) => resource.storageProvider === 's3' && resource.s3Key);
+      if (firstVideo && !lesson.videoUrl) lesson.videoUrl = firstVideo.url;
+      const firstPdf = (lesson.pdfNotes || []).find((resource) => resource.storageProvider === 's3' && resource.s3Key);
+      if (firstPdf && !lesson.pdfUrl) {
+        lesson.pdfUrl = firstPdf.url;
+        lesson.fileUrl = lesson.documentUrl = lesson.path = lesson.url = firstPdf.url;
+      }
+    }
+  }
+  return course;
+};
 
 const isFiniteNonNegativeNumber = (value) => typeof value === 'number' && Number.isFinite(value) && value >= 0;
 
@@ -354,7 +403,7 @@ const getMyCourses = async (req, res) => {
     }
 
     const formatted = await Promise.all(courses.map(async (c) => {
-      const formattedCourse = formatCourseForStudent(c);
+      const formattedCourse = await addSignedS3MediaUrls(formatCourseForStudent(c));
       let totalLessons = 0;
       let totalModules = 0;
       if (Array.isArray(formattedCourse.modules)) {
@@ -573,7 +622,7 @@ const getMyCourseContent = async (req, res) => {
     }
 
     // 3. Format full curriculum with absolute URLs and attached progress
-    const formattedCourse = formatCourseForStudent(course);
+    const formattedCourse = await addSignedS3MediaUrls(formatCourseForStudent(course));
     if (Array.isArray(formattedCourse.modules)) {
       formattedCourse.modules = formattedCourse.modules.map((mod) => ({
         ...mod,

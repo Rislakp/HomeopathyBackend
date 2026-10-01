@@ -6,6 +6,7 @@ const resourceSchema = new mongoose.Schema({
   title:         { type: String, trim: true, default: '' },
   url:           { type: String, trim: true, default: '' },
   secure_url:    { type: String, trim: true, default: '' },
+  secureUrl:     { type: String, trim: true, default: '' },
   fileUrl:       { type: String, trim: true, default: '' },
   documentUrl:   { type: String, trim: true, default: '' },
   path:          { type: String, trim: true, default: '' },
@@ -18,6 +19,13 @@ const resourceSchema = new mongoose.Schema({
   height:        { type: Number, default: null },
   format:        { type: String, trim: true, default: '' },
   bytes:         { type: Number, default: 0 },
+  storageProvider: { type: String, trim: true, default: '' },
+  s3Key:         { type: String, trim: true, default: '' },
+  resourceType:  { type: String, trim: true, default: '' },
+  originalFileName: { type: String, trim: true, default: '' },
+  contentType:   { type: String, trim: true, default: '' },
+  fileSize:      { type: Number, default: 0 },
+  uploadStatus:  { type: String, trim: true, default: '' },
 });
 
 // Subdocument Schema for Lessons
@@ -189,6 +197,10 @@ const courseSchema = new mongoose.Schema({
     type: String,
     trim: true,
     default: '',
+  },
+  thumbnailMedia: {
+    type: resourceSchema,
+    default: null,
   },
   bannerUrl: {
     type: String,
