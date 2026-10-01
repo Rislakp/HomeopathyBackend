@@ -17,9 +17,9 @@ const makeResponse = () => ({
   json(body) { this.body = body; return this; },
 });
 
-const call = async (handler, body = {}, user = { id: 'admin-test', role: 'admin' }) => {
+const call = async (handler, body = {}, user = { id: 'admin-test', role: 'admin' }, query = {}) => {
   const res = makeResponse();
-  await handler({ body, user }, res);
+  await handler({ body, query, user }, res);
   return res;
 };
 
@@ -28,14 +28,16 @@ test('S3 configuration, controller exports, and route callbacks load', async (t)
   assert.equal(config.bucket, 'whitecoat-media-prod');
   const courseWithS3Media = new Course({
     courseTitle: 'S3 media schema check', instructor: 'Test', price: 0,
-    thumbnailMedia: { storageProvider: 's3', s3Key: 'images/test.png', title: 'test.png', contentType: 'image/png', fileSize: 512, uploadStatus: 'uploaded' },
+    thumbnailMedia: { storageProvider: 's3', s3Key: 'images/test.png', resourceType: 'image', secureUrl: 'https://signed.example/test.png', title: 'test.png', contentType: 'image/png', fileSize: 512, uploadStatus: 'uploaded' },
     modules: [{ moduleName: 'Module', lessons: [{
       lessonTitle: 'Lesson',
-      videoParts: [{ storageProvider: 's3', s3Key: 'videos/test.mp4', title: 'test.mp4', contentType: 'video/mp4', fileSize: 512, uploadStatus: 'uploaded' }],
+      videoParts: [{ storageProvider: 's3', s3Key: 'videos/test.mp4', resourceType: 'video', secureUrl: 'https://signed.example/test.mp4', title: 'test.mp4', contentType: 'video/mp4', fileSize: 512, uploadStatus: 'uploaded' }],
       pdfNotes: [{ storageProvider: 's3', s3Key: 'pdfs/test.pdf', title: 'test.pdf', contentType: 'application/pdf', fileSize: 512, uploadStatus: 'uploaded' }],
     }] }],
   });
   assert.equal(courseWithS3Media.validateSync(), undefined, 'existing course model must accept S3 media metadata');
+  assert.equal(courseWithS3Media.thumbnailMedia.resourceType, 'image');
+  assert.equal(courseWithS3Media.modules[0].lessons[0].videoParts[0].secureUrl, 'https://signed.example/test.mp4');
   for (const name of ['initiateMultipartUpload', 'partUrl', 'completeMultipartUpload', 'abortMultipartUpload']) {
     assert.equal(typeof controller[name], 'function', `${name} must be exported`);
   }
@@ -45,6 +47,9 @@ test('S3 configuration, controller exports, and route callbacks load', async (t)
     assert.ok(layer, `missing route ${path}`);
     assert.ok(layer.route.stack.every((routeHandler) => typeof routeHandler.handle === 'function'));
   }
+  const mediaAccessRoutes = router.stack.filter((item) => item.route && item.route.path === '/media/access-url');
+  assert.deepEqual(mediaAccessRoutes.map((item) => Object.keys(item.route.methods)[0]).sort(), ['get', 'post']);
+  assert.ok(mediaAccessRoutes.every((item) => item.route.stack[0].handle.name === 'requireAuth'));
 });
 
 test('multipart initiate, part URL, complete, and abort use the expected S3 commands', async (t) => {
@@ -75,6 +80,7 @@ test('multipart initiate, part URL, complete, and abort use the expected S3 comm
   });
   assert.equal(completed.statusCode, 200);
   assert.equal(completed.body.media.s3Key, initiated.body.key);
+  assert.equal(completed.body.media.resourceType, 'video');
   assert.equal(completed.body.media.uploadStatus, 'uploaded');
 
   const aborted = await call(controller.abortMultipartUpload, { uploadId: 'upload-test', key: initiated.body.key });
@@ -114,6 +120,7 @@ test('image and PDF presigning validate inputs and verify uploaded metadata', as
   headResult = { ContentLength: 512, ContentType: 'application/pdf' };
   const pdfVerified = await call(controller.completeObjectUpload, { mediaType: 'pdf', key: pdf.body.key, fileName: 'notes.pdf', contentType: 'application/pdf', fileSize: 512 });
   assert.equal(pdfVerified.body.media.uploadStatus, 'uploaded');
+  assert.equal(pdfVerified.body.media.resourceType, 'pdf');
   headResult = { ContentLength: 513, ContentType: 'application/pdf' };
   const mismatch = await call(controller.completeObjectUpload, { mediaType: 'pdf', key: pdf.body.key, fileName: 'notes.pdf', contentType: 'application/pdf', fileSize: 512 });
   assert.equal(mismatch.statusCode, 400);
@@ -144,9 +151,13 @@ test('private media access requires the key to be referenced by an authorized co
   Student.findOne = async () => null;
   const unauthorized = await call(controller.getMediaAccessUrl, { courseId: 'CRS-123', key: 'pdfs/stored-notes.pdf' }, { id: 'student-test', email: 'learner@example.test', role: 'student' });
   assert.equal(unauthorized.statusCode, 403);
+  const missingKey = await call(controller.getMediaAccessUrl, {}, { id: 'student-test', role: 'student' });
+  assert.equal(missingKey.statusCode, 400);
   Student.findOne = async () => ({ courseId: 'CRS-123', status: 'Active', subscriptionStatus: 'Active', email: 'learner@example.test' });
-  const studentAccess = await call(controller.getMediaAccessUrl, { courseId: 'CRS-123', key: 'pdfs/stored-notes.pdf' }, { id: 'student-test', email: 'learner@example.test', role: 'student' });
+  const studentAccess = await call(controller.getMediaAccessUrl, {}, { id: 'student-test', email: 'learner@example.test', role: 'student' }, { s3Key: 'pdfs/stored-notes.pdf' });
   assert.equal(studentAccess.statusCode, 200);
+  assert.equal(studentAccess.body.s3Key, 'pdfs/stored-notes.pdf');
+  assert.match(studentAccess.body.url, /X-Amz-Signature=/);
   const allowed = await call(controller.getMediaAccessUrl, { courseId: 'CRS-123', key: 'pdfs/stored-notes.pdf' });
   assert.equal(allowed.statusCode, 200);
   assert.match(allowed.body.url, /X-Amz-Signature=/);

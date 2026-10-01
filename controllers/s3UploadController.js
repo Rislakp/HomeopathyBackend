@@ -59,11 +59,14 @@ const makeReference = ({ key, fileName, contentType, fileSize, uploadStatus = 'u
   title: fileName,
   url: '',
   secure_url: '',
+  secureUrl: '',
   fileUrl: '',
   documentUrl: '',
   path: '',
   storageProvider: 's3',
   s3Key: key,
+  resourceType: contentType?.startsWith('video/') ? 'video' : (contentType === 'application/pdf' ? 'pdf' : 'image'),
+  resource_type: contentType?.startsWith('video/') ? 'video' : (contentType === 'application/pdf' ? 'raw' : 'image'),
   originalFileName: fileName,
   contentType,
   mimetype: contentType,
@@ -256,14 +259,24 @@ const courseContainsS3Key = (course, key) => {
 };
 
 const getMediaAccessUrl = async (req, res) => {
-  const { courseId, key } = req.body || {};
-  if (typeof courseId !== 'string' || !courseId.trim()) return fail(res, 400, 'courseId is required.');
+  const courseId = req.query?.courseId || req.body?.courseId;
+  const key = req.query?.s3Key || req.query?.key || req.body?.s3Key || req.body?.key;
+  if (typeof key !== 'string' || !key.trim()) return fail(res, 400, 's3Key is required.');
   const prefix = ['videos/', 'images/', 'pdfs/'].find((item) => typeof key === 'string' && key.startsWith(item));
   if (!prefix || !validStoredKey(key, prefix.slice(0, -1))) return fail(res, 400, 'Invalid S3 media key.');
   try {
-    const course = mongoose.Types.ObjectId.isValid(courseId)
-      ? await Course.findById(courseId)
-      : await Course.findOne({ courseId });
+    const course = courseId
+      ? (mongoose.Types.ObjectId.isValid(courseId)
+        ? await Course.findById(courseId)
+        : await Course.findOne({ courseId }))
+      : await Course.findOne({ $or: [
+        { 'thumbnailMedia.s3Key': key },
+        { 'modules.lessons.videoS3Key': key },
+        { 'modules.lessons.videoParts.s3Key': key },
+        { 'modules.lessons.pdfNotes.s3Key': key },
+        { 'modules.lessons.assignments.s3Key': key },
+        { 'modules.lessons.attachments.s3Key': key },
+      ] });
     if (!course || !courseContainsS3Key(course, key)) return fail(res, 404, 'S3 media was not found in this course.');
 
     const role = (req.user?.role || '').toLowerCase();
@@ -285,7 +298,7 @@ const getMediaAccessUrl = async (req, res) => {
       ...(contentType ? { ResponseContentType: contentType, ResponseContentDisposition: 'inline' } : {}),
     }), { expiresIn: MEDIA_URL_TTL_SECONDS });
     console.info('[S3 media] access URL issued', { courseId: String(course.courseId || course._id), key, userId: req.user?.id });
-    return res.json({ success: true, url, key, expiresIn: MEDIA_URL_TTL_SECONDS });
+    return res.json({ success: true, url, key, s3Key: key, expiresIn: MEDIA_URL_TTL_SECONDS });
   } catch (error) {
     return handleS3Error(res, error, 'media-access');
   }

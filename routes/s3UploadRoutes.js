@@ -9,6 +9,7 @@ router.post('/multipart/complete', requireAdmin, controller.completeMultipartUpl
 router.post('/multipart/abort', requireAdmin, controller.abortMultipartUpload);
 router.post('/objects/presign', requireAdmin, controller.initiateObjectUpload);
 router.post('/objects/complete', requireAdmin, controller.completeObjectUpload);
+router.get('/media/access-url', requireAuth, controller.getMediaAccessUrl);
 router.post('/media/access-url', requireAuth, controller.getMediaAccessUrl);
 
 module.exports = router;

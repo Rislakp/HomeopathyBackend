@@ -20,7 +20,7 @@ const signS3Reference = async (reference, responseContentType) => {
     Key: key,
     ...(responseContentType ? { ResponseContentType: responseContentType, ResponseContentDisposition: 'inline' } : {}),
   }), { expiresIn: S3_MEDIA_URL_TTL_SECONDS });
-  return { ...reference, url, secure_url: url, fileUrl: url, documentUrl: url, path: url, accessUrlExpiresIn: S3_MEDIA_URL_TTL_SECONDS };
+  return { ...reference, url, secure_url: url, secureUrl: url, fileUrl: url, documentUrl: url, path: url, accessUrlExpiresIn: S3_MEDIA_URL_TTL_SECONDS };
 };
 
 const addSignedS3MediaUrls = async (course) => {

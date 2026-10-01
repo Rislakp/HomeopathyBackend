@@ -102,8 +102,8 @@ const toResourceObj = (item) => {
     const isS3Resource = storageProvider === 's3' && !!s3Key;
     const rawId = item._id || item.id;
     const resolvedId = rawId ? rawId.toString() : undefined;
-    const cloudUrl = (item.secure_url && item.secure_url.startsWith('http'))
-      ? item.secure_url
+    const cloudUrl = ((item.secure_url || item.secureUrl) && (item.secure_url || item.secureUrl).startsWith('http'))
+      ? (item.secure_url || item.secureUrl)
       : (item.url && item.url.startsWith('http'))
         ? item.url
         : (item.path && item.path.startsWith('http'))
@@ -130,7 +130,7 @@ const toResourceObj = (item) => {
       ? item.secure_url
       : (cloudUrl || url || ''));
 
-    let resType = item.resource_type || '';
+    let resType = item.resource_type || item.resourceType || '';
     const lowerUrl = (secureUrl || url || '').toLowerCase();
     if (!resType && lowerUrl) {
       if (lowerUrl.includes('/video/upload/')) resType = 'video';
@@ -150,6 +150,7 @@ const toResourceObj = (item) => {
       title: (title || '').trim(),
       url: (url || '').trim(),
       secure_url: finalSecureUrl,
+      secureUrl: finalSecureUrl,
       fileUrl: finalSecureUrl,
       documentUrl: finalSecureUrl,
       path: finalSecureUrl,
@@ -164,6 +165,7 @@ const toResourceObj = (item) => {
       bytes: typeof item.bytes === 'number' ? item.bytes : (Number(item.bytes || item.size) || 0),
       storageProvider,
       s3Key: isS3Resource ? s3Key : '',
+      resourceType: String(item.resourceType || resType || '').trim(),
       originalFileName: String(item.originalFileName || item.originalname || item.fileName || item.filename || title || '').trim(),
       contentType: String(item.contentType || item.mimetype || '').trim(),
       fileSize: typeof item.fileSize === 'number' ? item.fileSize : (Number(item.fileSize || item.size) || 0),
