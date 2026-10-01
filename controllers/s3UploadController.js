@@ -10,7 +10,7 @@ const {
 const { getSignedUrl } = require('@aws-sdk/s3-request-presigner');
 const { randomUUID } = require('crypto');
 const mongoose = require('mongoose');
-const { s3Client, bucket } = require('../config/s3');
+const { s3Client, bucket, region, isS3Configured } = require('../config/s3');
 const Course = require('../models/Course');
 const Student = require('../models/Student');
 const { verifyStudentCourseAccess } = require('../utils/courseAccessHelper');
@@ -98,8 +98,8 @@ const handleS3Error = (res, error, action) => {
   if (code === 'CredentialsProviderError' || code === 'NoCredentials' || error.message?.includes('Could not load credentials')) {
     return fail(
       res,
-      502,
-      'AWS credentials are not configured or could not be loaded on the server. Please verify AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY in the deployment environment.',
+      503,
+      'S3 upload service is not configured',
       'CredentialsProviderError'
     );
   }
@@ -221,22 +221,58 @@ const initiateObjectUpload = async (req, res) => {
   if (!validSize(fileSize, rule.maxBytes)) {
     return fail(res, 400, `fileSize must be between 1 byte and ${rule.maxBytes} bytes for ${mediaType} uploads.`);
   }
+
+  const s3Ready = isS3Configured();
   const key = `${rule.prefix}/${Date.now()}-${randomUUID()}-${fileName}`;
+
+  console.info('[S3 PRESIGN]', {
+    'bucket configured': Boolean(bucket),
+    'region configured': Boolean(region),
+    'credentials configured': s3Ready,
+    'requested key': key,
+    'requested content type': contentType.toLowerCase(),
+    'generated presigned URL': false,
+  });
+
+  if (!s3Ready) {
+    console.error('[S3 PRESIGN] S3 upload service is not configured (missing credentials or bucket)');
+    return fail(res, 503, 'S3 upload service is not configured', 'S3NotConfigured');
+  }
+
   try {
     const command = new PutObjectCommand({ Bucket: bucket, Key: key, ContentType: contentType.toLowerCase(), ContentLength: fileSize });
     const url = await getSignedUrl(s3Client, command, { expiresIn: SINGLE_UPLOAD_URL_TTL_SECONDS });
     const media = makeReference({ key, fileName, contentType: contentType.toLowerCase(), fileSize, uploadStatus: 'pending' });
+    console.info('[S3 PRESIGN]', {
+      'bucket configured': Boolean(bucket),
+      'region configured': Boolean(region),
+      'credentials configured': true,
+      'requested key': key,
+      'requested content type': contentType.toLowerCase(),
+      'generated presigned URL': Boolean(url),
+    });
     console.info('[S3 media] upload URL issued', { mediaType, key, fileSize, userId: req.user?.id });
-    return res.status(201).json({
+    return res.status(200).json({
       success: true,
       url,
+      uploadUrl: url,
+      presignedUrl: url,
       method: 'PUT',
       headers: { 'Content-Type': contentType.toLowerCase() },
       expiresIn: SINGLE_UPLOAD_URL_TTL_SECONDS,
       key,
+      s3Key: key,
       media,
     });
   } catch (error) {
+    console.info('[S3 PRESIGN]', {
+      'bucket configured': Boolean(bucket),
+      'region configured': Boolean(region),
+      'credentials configured': s3Ready,
+      'requested key': key,
+      'requested content type': contentType.toLowerCase(),
+      'generated presigned URL': false,
+    });
     return handleS3Error(res, error, 'object-presign');
   }
 };

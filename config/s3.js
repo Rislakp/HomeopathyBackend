@@ -58,6 +58,7 @@ if (customEndpoint) {
 }
 
 const s3Client = new S3Client(clientConfig);
+const defaultCredentialProvider = s3Client.config.credentials;
 
 console.info('[S3 Config]', {
   region,
@@ -74,13 +75,19 @@ console.info('[S3 Config]', {
 const isS3Configured = () => {
   if (process.env.STORAGE_PROVIDER === 'cloudinary') return false;
   if (!bucket) return false;
-  return Boolean(
+  const hasExplicitCredentials = Boolean(
     (accessKeyId && secretAccessKey) ||
     process.env.AWS_CONTAINER_CREDENTIALS_RELATIVE_URI ||
     process.env.AWS_CONTAINER_CREDENTIALS_FULL_URI ||
     process.env.AWS_WEB_IDENTITY_TOKEN_FILE
   );
+  if (hasExplicitCredentials) return true;
+  if (s3Client && s3Client.config && typeof s3Client.config.credentials === 'function' && s3Client.config.credentials !== defaultCredentialProvider) {
+    return true;
+  }
+  return false;
 };
+
 
 module.exports = {
   s3Client,
