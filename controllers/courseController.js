@@ -97,6 +97,9 @@ const toResourceObj = (item) => {
     };
   }
   if (typeof item === 'object' && !Array.isArray(item)) {
+    const s3Key = String(item.s3Key || item.key || '').trim();
+    const storageProvider = String(item.storageProvider || item.storage_provider || (s3Key ? 's3' : '')).trim().toLowerCase();
+    const isS3Resource = storageProvider === 's3' && !!s3Key;
     const rawId = item._id || item.id;
     const resolvedId = rawId ? rawId.toString() : undefined;
     const cloudUrl = (item.secure_url && item.secure_url.startsWith('http'))
@@ -106,8 +109,8 @@ const toResourceObj = (item) => {
         : (item.path && item.path.startsWith('http'))
           ? item.path
           : null;
-    const rawUrl = cloudUrl || item.url || item.secure_url || item.path || item.partUrl || item.fileUrl || item.link || item.filename || '';
-    const url = normalizeFileUrl(rawUrl);
+    const rawUrl = isS3Resource ? '' : (cloudUrl || item.url || item.secure_url || item.path || item.partUrl || item.fileUrl || item.link || item.filename || '');
+    const url = isS3Resource ? '' : normalizeFileUrl(rawUrl);
     let title = item.title || item.name || item.partTitle || item.originalname || item.filename || '';
     if (!title && url) {
       try {
@@ -123,9 +126,9 @@ const toResourceObj = (item) => {
       }
     }
 
-    const secureUrl = (item.secure_url && item.secure_url.startsWith('http'))
+    const secureUrl = isS3Resource ? '' : ((item.secure_url && item.secure_url.startsWith('http'))
       ? item.secure_url
-      : (cloudUrl || url || '');
+      : (cloudUrl || url || ''));
 
     let resType = item.resource_type || '';
     const lowerUrl = (secureUrl || url || '').toLowerCase();
@@ -159,6 +162,12 @@ const toResourceObj = (item) => {
       height: typeof item.height === 'number' ? item.height : (item.height ? Number(item.height) : null),
       format: (item.format || '').trim(),
       bytes: typeof item.bytes === 'number' ? item.bytes : (Number(item.bytes || item.size) || 0),
+      storageProvider,
+      s3Key: isS3Resource ? s3Key : '',
+      originalFileName: String(item.originalFileName || item.originalname || item.fileName || item.filename || title || '').trim(),
+      contentType: String(item.contentType || item.mimetype || '').trim(),
+      fileSize: typeof item.fileSize === 'number' ? item.fileSize : (Number(item.fileSize || item.size) || 0),
+      uploadStatus: String(item.uploadStatus || '').trim(),
     };
   }
   return null;
@@ -178,10 +187,11 @@ const deduplicateResourceArray = (arr) => {
   const seen = new Set();
   return arr.filter((item) => {
     if (!item) return false;
+    const storageKey = (item.storageProvider === 's3' && item.s3Key) ? `s3:${item.s3Key}` : '';
     const urlKey = (item.secure_url || item.url || '').trim();
     const idKey = (item.public_id || item.publicId || '').trim();
     const titleKey = (item.title || item.name || '').trim();
-    const key = idKey ? ('id:' + idKey) : (urlKey ? ('url:' + urlKey) : (titleKey ? ('title:' + titleKey) : ''));
+    const key = storageKey || (idKey ? ('id:' + idKey) : (urlKey ? ('url:' + urlKey) : (titleKey ? ('title:' + titleKey) : '')));
     if (!key) return false;
     if (seen.has(key)) return false;
     seen.add(key);
@@ -195,6 +205,7 @@ const deduplicateResourceArray = (arr) => {
  */
 const getResourceKey = (item) => {
   if (!item) return '';
+  if (item.storageProvider === 's3' && item.s3Key) return `s3:${item.s3Key}`;
   const pubId = (item.public_id || item.publicId || '').trim();
   if (pubId) return `pub:${pubId}`;
   const url = (item.secure_url || item.url || '').trim();
@@ -541,6 +552,7 @@ exports.createCourse = async (req, res) => {
       image,
       imageUrl,
       courseBanner,
+      thumbnailMedia,
       category,
       modules,
     } = req.body;
@@ -586,6 +598,7 @@ exports.createCourse = async (req, res) => {
       thumbnail: actualThumbnail,
       bannerUrl: actualThumbnail,
       courseBanner: actualThumbnail,
+      thumbnailMedia: parseFileItems(thumbnailMedia)[0] || null,
       category: category || 'Homeopathy',
       modules: formattedModules,
     });
@@ -617,6 +630,10 @@ exports.updateCourse = async (req, res) => {
     const { id } = req.params;
     const query = getQueryById(id);
     const updateData = { ...req.body };
+
+    if (updateData.thumbnailMedia !== undefined) {
+      updateData.thumbnailMedia = parseFileItems(updateData.thumbnailMedia)[0] || null;
+    }
 
     delete updateData.courseId; // Prevent mutating auto-generated courseId
 
