@@ -164,6 +164,35 @@ test('private media access requires the key to be referenced by an authorized co
   assert.match(allowed.body.url, /X-Amz-Signature=/);
 });
 
+test('private video access signs the exact object key for the configured S3 bucket', async (t) => {
+  const originalFindOne = Course.findOne;
+  const key = 'videos/1790869459766-e523705a-Recording-2026-08-20-135459.mp4';
+  Course.findOne = async () => ({
+    _id: 'course-db-id',
+    courseId: 'CRS-VIDEO',
+    modules: [{ lessons: [{ videoParts: [{ storageProvider: 's3', s3Key: key }] }] }],
+  });
+  t.after(() => { Course.findOne = originalFindOne; });
+
+  const response = await call(
+    controller.getMediaAccessUrl,
+    {},
+    { id: 'admin-test', role: 'admin' },
+    { s3Key: key },
+  );
+
+  assert.equal(response.statusCode, 200);
+  assert.equal(response.body.s3Key, key);
+  assert.equal(response.body.expiresIn, 900);
+  const signedUrl = new URL(response.body.url);
+  assert.equal(signedUrl.hostname, 'whitecoat-media-prod.s3.us-east-1.amazonaws.com');
+  assert.equal(decodeURIComponent(signedUrl.pathname.slice(1)), key);
+  assert.equal(signedUrl.searchParams.get('X-Amz-Expires'), '900');
+  assert.equal(signedUrl.searchParams.get('X-Amz-Algorithm'), 'AWS4-HMAC-SHA256');
+  assert.match(signedUrl.searchParams.get('X-Amz-Credential'), /\/us-east-1\/s3\/aws4_request$/);
+  assert.match(signedUrl.searchParams.get('X-Amz-Signature'), /^[a-f0-9]+$/);
+});
+
 test('multipart S3 failures become safe client errors', async (t) => {
   const originalSend = config.s3Client.send;
   config.s3Client.send = async () => {
