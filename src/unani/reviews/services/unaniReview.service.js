@@ -1,5 +1,6 @@
 const mongoose = require('mongoose');
 const UnaniReview = require('../models/unaniReview.model');
+const { resolveProfileImageUrl } = require('../../../../utils/s3MediaSigner');
 
 /**
  * Create a new Unani Review (Admin only)
@@ -26,7 +27,9 @@ async function createReview(payload = {}) {
 
   const newReview = new UnaniReview(reviewData);
   await newReview.save();
-  return newReview;
+  const obj = newReview.toObject({ virtuals: true });
+  obj.profileImage = await resolveProfileImageUrl(obj.profileImage);
+  return obj;
 }
 
 /**
@@ -79,20 +82,22 @@ async function getAdminReviews({ page = 1, limit = 20, search = '', isActive, so
     UnaniReview.countDocuments(filter),
   ]);
 
-  const formattedReviews = reviews.map((r) => ({
-    id: r._id.toString(),
-    _id: r._id.toString(),
-    name: r.name,
-    subtitle: r.subtitle || '',
-    review: r.review,
-    rating: r.rating,
-    profileImage: r.profileImage || '',
-    displayOrder: r.displayOrder ?? 0,
-    isActive: r.isActive ?? true,
-    courseId: r.courseId || 'unani',
-    createdAt: r.createdAt,
-    updatedAt: r.updatedAt,
-  }));
+  const formattedReviews = await Promise.all(
+    reviews.map(async (r) => ({
+      id: r._id.toString(),
+      _id: r._id.toString(),
+      name: r.name,
+      subtitle: r.subtitle || '',
+      review: r.review,
+      rating: r.rating,
+      profileImage: await resolveProfileImageUrl(r.profileImage || ''),
+      displayOrder: r.displayOrder ?? 0,
+      isActive: r.isActive ?? true,
+      courseId: r.courseId || 'unani',
+      createdAt: r.createdAt,
+      updatedAt: r.updatedAt,
+    }))
+  );
 
   return {
     reviews: formattedReviews,
@@ -125,7 +130,7 @@ async function getReviewById(id) {
     subtitle: review.subtitle || '',
     review: review.review,
     rating: review.rating,
-    profileImage: review.profileImage || '',
+    profileImage: await resolveProfileImageUrl(review.profileImage || ''),
     displayOrder: review.displayOrder ?? 0,
     isActive: review.isActive ?? true,
     courseId: review.courseId || 'unani',
@@ -160,9 +165,6 @@ async function updateReview(id, payload = {}) {
     updateFields.isActive = Boolean(payload.isActive === true || payload.isActive === 'true');
   }
 
-  // Never allow courseId to be changed from frontend
-  // courseId is always 'unani'
-
   const updated = await UnaniReview.findOneAndUpdate(
     { _id: id, courseId: 'unani', isDeleted: { $ne: true } },
     { $set: updateFields },
@@ -178,7 +180,7 @@ async function updateReview(id, payload = {}) {
     subtitle: updated.subtitle || '',
     review: updated.review,
     rating: updated.rating,
-    profileImage: updated.profileImage || '',
+    profileImage: await resolveProfileImageUrl(updated.profileImage || ''),
     displayOrder: updated.displayOrder ?? 0,
     isActive: updated.isActive ?? true,
     courseId: updated.courseId || 'unani',
@@ -247,19 +249,21 @@ async function getPublicReviews() {
     .sort({ displayOrder: 1, createdAt: -1 })
     .lean();
 
-  return reviews.map((r) => ({
-    id: r._id.toString(),
-    _id: r._id.toString(),
-    name: r.name,
-    subtitle: r.subtitle || '',
-    review: r.review,
-    rating: r.rating,
-    profileImage: r.profileImage || '',
-    displayOrder: r.displayOrder ?? 0,
-    isActive: r.isActive ?? true,
-    courseId: 'unani',
-    createdAt: r.createdAt,
-  }));
+  return await Promise.all(
+    reviews.map(async (r) => ({
+      id: r._id.toString(),
+      _id: r._id.toString(),
+      name: r.name,
+      subtitle: r.subtitle || '',
+      review: r.review,
+      rating: r.rating,
+      profileImage: await resolveProfileImageUrl(r.profileImage || ''),
+      displayOrder: r.displayOrder ?? 0,
+      isActive: r.isActive ?? true,
+      courseId: 'unani',
+      createdAt: r.createdAt,
+    }))
+  );
 }
 
 module.exports = {

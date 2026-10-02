@@ -1,5 +1,6 @@
 const mongoose = require('mongoose');
 const UnaniRank = require('../models/unaniRank.model');
+const { resolveProfileImageUrl } = require('../../../../utils/s3MediaSigner');
 
 /**
  * Create a new Unani Rank Holder (Admin only)
@@ -24,7 +25,9 @@ async function createRank(payload = {}) {
 
   const newRank = new UnaniRank(rankData);
   await newRank.save();
-  return newRank;
+  const obj = newRank.toObject({ virtuals: true });
+  obj.profileImage = await resolveProfileImageUrl(obj.profileImage);
+  return obj;
 }
 
 /**
@@ -64,24 +67,26 @@ async function getAdminRanks({ page = 1, limit = 50, search = '', isActive } = {
     UnaniRank.countDocuments(filter),
   ]);
 
-  const formattedRanks = ranks.map((r) => ({
-    id: r._id.toString(),
-    _id: r._id.toString(),
-    name: r.name,
-    examName: r.examName || '',
-    rankLabel: r.rankLabel || '',
-    year: r.year,
-    category: r.category || '',
-    score: r.score,
-    percentage: r.percentage,
-    profileImage: r.profileImage || '',
-    description: r.description || '',
-    displayOrder: r.displayOrder ?? 0,
-    isActive: r.isActive ?? true,
-    courseId: r.courseId || 'unani',
-    createdAt: r.createdAt,
-    updatedAt: r.updatedAt,
-  }));
+  const formattedRanks = await Promise.all(
+    ranks.map(async (r) => ({
+      id: r._id.toString(),
+      _id: r._id.toString(),
+      name: r.name,
+      examName: r.examName || '',
+      rankLabel: r.rankLabel || '',
+      year: r.year,
+      category: r.category || '',
+      score: r.score,
+      percentage: r.percentage,
+      profileImage: await resolveProfileImageUrl(r.profileImage || ''),
+      description: r.description || '',
+      displayOrder: r.displayOrder ?? 0,
+      isActive: r.isActive ?? true,
+      courseId: r.courseId || 'unani',
+      createdAt: r.createdAt,
+      updatedAt: r.updatedAt,
+    }))
+  );
 
   return {
     ranks: formattedRanks,
@@ -117,7 +122,7 @@ async function getRankById(id) {
     category: rank.category || '',
     score: rank.score,
     percentage: rank.percentage,
-    profileImage: rank.profileImage || '',
+    profileImage: await resolveProfileImageUrl(rank.profileImage || ''),
     description: rank.description || '',
     displayOrder: rank.displayOrder ?? 0,
     isActive: rank.isActive ?? true,
@@ -181,7 +186,7 @@ async function updateRank(id, payload = {}) {
     category: updated.category || '',
     score: updated.score,
     percentage: updated.percentage,
-    profileImage: updated.profileImage || '',
+    profileImage: await resolveProfileImageUrl(updated.profileImage || ''),
     description: updated.description || '',
     displayOrder: updated.displayOrder ?? 0,
     isActive: updated.isActive ?? true,
@@ -251,23 +256,25 @@ async function getPublicRanks() {
     .sort({ displayOrder: 1, createdAt: -1 })
     .lean();
 
-  return ranks.map((r) => ({
-    id: r._id.toString(),
-    _id: r._id.toString(),
-    name: r.name,
-    examName: r.examName || '',
-    rankLabel: r.rankLabel || '',
-    year: r.year,
-    category: r.category || '',
-    score: r.score,
-    percentage: r.percentage,
-    profileImage: r.profileImage || '',
-    description: r.description || '',
-    displayOrder: r.displayOrder ?? 0,
-    isActive: r.isActive ?? true,
-    courseId: 'unani',
-    createdAt: r.createdAt,
-  }));
+  return await Promise.all(
+    ranks.map(async (r) => ({
+      id: r._id.toString(),
+      _id: r._id.toString(),
+      name: r.name,
+      examName: r.examName || '',
+      rankLabel: r.rankLabel || '',
+      year: r.year,
+      category: r.category || '',
+      score: r.score,
+      percentage: r.percentage,
+      profileImage: await resolveProfileImageUrl(r.profileImage || ''),
+      description: r.description || '',
+      displayOrder: r.displayOrder ?? 0,
+      isActive: r.isActive ?? true,
+      courseId: 'unani',
+      createdAt: r.createdAt,
+    }))
+  );
 }
 
 module.exports = {
