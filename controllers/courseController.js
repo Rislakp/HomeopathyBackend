@@ -42,6 +42,17 @@ const processAttachments = (filesArray) => {
 
 const isValidObjectId = (id) => mongoose.Types.ObjectId.isValid(id); 
 
+const isVideoMedia = (value) => {
+  if (!value || typeof value !== 'string') return false;
+  const clean = value.split('?')[0].toLowerCase().trim();
+  const ext = path.extname(clean).replace('.', '');
+  return clean.startsWith('videos/') ||
+    clean.includes('/videos/') ||
+    clean.includes('/video/upload/') ||
+    clean.includes('.amazonaws.com/videos/') ||
+    ALLOWED_VIDEO_FORMATS.includes(ext);
+};
+
 const normalizeFileUrl = (value) => {
   if (typeof value !== 'string') return '';
   const trimmed = value.trim();
@@ -1237,7 +1248,14 @@ exports.addLesson = async (req, res) => {
 
     console.log('[addLesson] Step 4: Processing lesson type, links, and uploaded files');
     const actualLessonType = (lessonType || type || 'Recorded Video').trim();
-    let actualMeetingUrl = (meetingUrl || '').trim();
+    let actualMeetingUrl = (
+      meetingUrl ||
+      req.body.liveLink ||
+      req.body.meetingLink ||
+      req.body.liveMeetingUrl ||
+      req.body.googleMeetUrl ||
+      ''
+    ).trim();
     let finalVideoUrl = (videoUrl || '').trim();
     let finalVideoParts = parseFileItems(videoParts);
     let finalPdfNotes = parseFileItems(pdfNotes !== undefined ? pdfNotes : pdfFiles);
@@ -1282,7 +1300,7 @@ exports.addLesson = async (req, res) => {
         const item = { title: actualLessonTitle || 'Attachment', url: singleLink, secure_url: singleLink, resource_type: 'auto' };
         if (!finalAttachments.some((p) => p.url === singleLink)) finalAttachments.push(item);
         registerExplicitCategory(item, 'attachments');
-      } else if (lowerType.includes('video') || lowerType === 'recorded video') {
+      } else if (lowerType.includes('video') || lowerType === 'recorded video' || isVideoMedia(singleLink)) {
         if (!finalVideoUrl) finalVideoUrl = singleLink;
         const item = { title: actualLessonTitle || 'Video Part 1', url: singleLink, secure_url: singleLink, resource_type: 'video' };
         if (!finalVideoParts.some((p) => p.url === singleLink)) finalVideoParts.push(item);
@@ -1295,8 +1313,6 @@ exports.addLesson = async (req, res) => {
         const item = { title: actualLessonTitle || 'PDF Notes', url: singleLink, secure_url: singleLink, resource_type: 'auto' };
         if (!finalPdfNotes.some((p) => p.url === singleLink)) finalPdfNotes.push(item);
         registerExplicitCategory(item, 'pdfNotes');
-      } else if (lowerType.includes('live') || lowerType === 'link') {
-        if (!actualMeetingUrl) actualMeetingUrl = singleLink;
       } else {
         const item = { title: actualLessonTitle || 'Attachment', url: singleLink, secure_url: singleLink, resource_type: 'auto' };
         if (!finalAttachments.some((p) => p.url === singleLink)) finalAttachments.push(item);
@@ -1685,7 +1701,16 @@ exports.updateLesson = async (req, res) => {
       targetLesson.durationOrPages = (durationOrPages || duration || pages || '').trim();
     }
     if (description !== undefined) targetLesson.description = description.trim();
-    if (meetingUrl !== undefined) targetLesson.meetingUrl = meetingUrl.trim();
+    if (meetingUrl !== undefined || req.body.liveLink !== undefined || req.body.meetingLink !== undefined || req.body.liveMeetingUrl !== undefined || req.body.googleMeetUrl !== undefined) {
+      const explicitMeeting = meetingUrl !== undefined
+        ? meetingUrl
+        : (req.body.liveLink !== undefined
+          ? req.body.liveLink
+          : (req.body.meetingLink !== undefined
+            ? req.body.meetingLink
+            : (req.body.liveMeetingUrl !== undefined ? req.body.liveMeetingUrl : req.body.googleMeetUrl)));
+      targetLesson.meetingUrl = String(explicitMeeting || '').trim();
+    }
     if (status !== undefined) targetLesson.status = status.trim();
     if (videoUrl !== undefined) targetLesson.videoUrl = videoUrl.trim();
 
@@ -1762,7 +1787,7 @@ exports.updateLesson = async (req, res) => {
         const item = { title: targetLesson.lessonTitle || 'Attachment', url: singleLink, secure_url: singleLink, resource_type: 'auto' };
         if (!targetLesson.attachments.some((p) => p.url === singleLink)) targetLesson.attachments.push(item);
         registerExplicitCategory(item, 'attachments');
-      } else if (lowerType.includes('video') || lowerType === 'recorded video') {
+      } else if (lowerType.includes('video') || lowerType === 'recorded video' || isVideoMedia(singleLink)) {
         targetLesson.videoUrl = singleLink;
         const item = { title: targetLesson.lessonTitle || 'Video Part', url: singleLink, secure_url: singleLink, resource_type: 'video' };
         if (!targetLesson.videoParts.some((p) => p.url === singleLink)) targetLesson.videoParts.push(item);
@@ -1775,8 +1800,6 @@ exports.updateLesson = async (req, res) => {
         const item = { title: targetLesson.lessonTitle || 'PDF Notes', url: singleLink, secure_url: singleLink, resource_type: 'auto' };
         if (!targetLesson.pdfNotes.some((p) => p.url === singleLink)) targetLesson.pdfNotes.push(item);
         registerExplicitCategory(item, 'pdfNotes');
-      } else if (lowerType.includes('live') || lowerType === 'link') {
-        targetLesson.meetingUrl = singleLink;
       } else {
         const item = { title: targetLesson.lessonTitle || 'Attachment', url: singleLink, secure_url: singleLink, resource_type: 'auto' };
         if (!targetLesson.attachments.some((p) => p.url === singleLink)) targetLesson.attachments.push(item);
