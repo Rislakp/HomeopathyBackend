@@ -7,6 +7,7 @@ const upload = require('../middleware/upload');
 const { handleUploadError, processUploadsToCloudinary } = upload;
 
 // Helper wrapper for file uploads with Cloudinary processing and error handling
+
 const handleUpload = (req, res, next) => {
   upload.any()(req, res, (err) => {
     if (err) {
@@ -17,11 +18,13 @@ const handleUpload = (req, res, next) => {
 };
 
 // All admin course routes require admin privileges
-router.use(requireAdmin);
+
+ router.use(requireAdmin);
 
 // ==========================================
 // COURSE MANAGEMENT CRUD
 // ==========================================
+
 router.get('/', courseController.getCourses);
 router.post('/', handleUpload, courseController.createCourse);
 router.get('/:id', courseController.getCourseById);
