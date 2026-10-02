@@ -128,6 +128,9 @@ const lessonSchema = new mongoose.Schema({
   pdfNotes:     { type: [resourceSchema], default: [] },
   assignments:  { type: [resourceSchema], default: [] },
   attachments:  { type: [resourceSchema], default: [] },
+  videoS3Key:   { type: String, trim: true, default: '' },
+  s3Key:        { type: String, trim: true, default: '' },
+  storageProvider: { type: String, trim: true, default: '' },
   status: {
     type: String,
     enum: ['Published', 'Draft'],

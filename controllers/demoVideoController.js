@@ -2,7 +2,32 @@ const DemoVideo = require('../models/DemoVideo');
 const Course = require('../models/Course');
 const mongoose = require('mongoose');
 const s3Service = require('../services/s3Service');
+const { s3Client, bucket } = require('../config/s3');
+const { GetObjectCommand } = require('@aws-sdk/client-s3');
+const { getSignedUrl } = require('@aws-sdk/s3-request-presigner');
 const { deleteCloudinaryByUrl } = require('../config/cloudinary');
+
+// Helper to sign S3 demo video for direct playback
+const signDemoVideo = async (doc) => {
+  if (!doc) return doc;
+  const obj = typeof doc.toObject === 'function' ? doc.toObject() : { ...doc };
+  const key = obj.s3Key || s3Service.getS3KeyFromUrl(obj.videoUrl);
+  if (key && (obj.storageProvider === 's3' || obj.videoUrl?.includes('amazonaws.com') || key.startsWith('videos/'))) {
+    try {
+      const signed = await getSignedUrl(s3Client, new GetObjectCommand({
+        Bucket: bucket,
+        Key: key,
+      }), { expiresIn: 900 });
+      obj.videoUrl = signed;
+      obj.signedVideoUrl = signed;
+      obj.storageProvider = 's3';
+      obj.s3Key = key;
+    } catch (e) {
+      console.error('[DemoVideo] Presigning error:', e.message);
+    }
+  }
+  return obj;
+};
 
 // Helper to extract file url from uploaded file object
 const extractUrl = (f) => {
@@ -75,11 +100,17 @@ exports.createDemoVideo = async (req, res) => {
 
     const canonicalCourseId = course.courseId || cleanCourseId;
 
+    const s3KeyFromBody = (req.body.s3Key || '').trim();
+    const resolvedS3Key = s3KeyFromBody || s3Service.getS3KeyFromUrl(videoUrl);
+    const storageProvider = req.body.storageProvider || (resolvedS3Key ? 's3' : (videoUrl.includes('cloudinary.com') ? 'cloudinary' : undefined));
+
     // 6. Create Demo Video Record
     const demoVideo = new DemoVideo({
       title: String(title).trim(),
       description: description ? String(description).trim() : '',
       videoUrl,
+      s3Key: resolvedS3Key || undefined,
+      storageProvider,
       thumbnailUrl,
       thumbnail: thumbnailUrl,
       duration: duration ? String(duration).trim() : '',
@@ -94,6 +125,7 @@ exports.createDemoVideo = async (req, res) => {
     console.log(`courseId: ${demoVideo.courseId}`);
     console.log(`title: ${demoVideo.title}`);
     console.log(`videoUrl: ${demoVideo.videoUrl}`);
+    console.log(`s3Key: ${demoVideo.s3Key}`);
     console.log('=======================================');
 
     return res.status(201).json({
@@ -151,18 +183,19 @@ exports.getDemoVideos = async (req, res) => {
     }
 
     const demoVideos = await DemoVideo.find(filter).sort({ createdAt: -1 });
+    const signedData = await Promise.all(demoVideos.map(signDemoVideo));
 
     // Debug Logging
     console.log('========== DEMO VIDEO QUERY ==========');
     console.log(`courseId: ${resolvedCourseId || courseId || (filter.$or ? 'STUDENT_FILTER' : 'ALL')}`);
     console.log(`Mongo query: ${JSON.stringify(filter)}`);
-    console.log(`results: ${demoVideos.length}`);
+    console.log(`results: ${signedData.length}`);
     console.log('=======================================');
 
     const responsePayload = {
       success: true,
-      count: demoVideos.length,
-      data: demoVideos,
+      count: signedData.length,
+      data: signedData,
     };
 
     if (resolvedCourseId) {
@@ -217,19 +250,20 @@ exports.getCourseDemoVideos = async (req, res) => {
     };
 
     const demoVideos = await DemoVideo.find(filter).sort({ createdAt: -1 });
+    const signedData = await Promise.all(demoVideos.map(signDemoVideo));
 
     // 3. Debug Logging
     console.log('========== DEMO VIDEO QUERY ==========');
     console.log(`courseId: ${canonicalCourseId}`);
     console.log(`Mongo query: ${JSON.stringify(filter)}`);
-    console.log(`results: ${demoVideos.length}`);
+    console.log(`results: ${signedData.length}`);
     console.log('=======================================');
 
     return res.status(200).json({
       success: true,
       courseId: canonicalCourseId,
-      count: demoVideos.length,
-      data: demoVideos,
+      count: signedData.length,
+      data: signedData,
     });
   } catch (error) {
     console.error('Get Course Demo Videos Error:', error);
@@ -261,9 +295,11 @@ exports.getDemoVideoById = async (req, res) => {
       });
     }
 
+    const signedDoc = await signDemoVideo(demoVideo);
+
     return res.status(200).json({
       success: true,
-      data: demoVideo,
+      data: signedDoc,
     });
   } catch (error) {
     console.error('Get Demo Video By ID Error:', error);
@@ -300,8 +336,23 @@ exports.updateDemoVideo = async (req, res) => {
     // If a new video file was uploaded, overwrite videoUrl with the uploaded public URL.
     if (req.file) {
       updateData.videoUrl = extractUrl(req.file);
+      const k = s3Service.getS3KeyFromUrl(updateData.videoUrl);
+      if (k) {
+        updateData.s3Key = k;
+        updateData.storageProvider = 's3';
+      }
     } else if (req.body.videoUrl) {
       updateData.videoUrl = String(req.body.videoUrl).trim();
+      const k = req.body.s3Key || s3Service.getS3KeyFromUrl(updateData.videoUrl);
+      if (k) {
+        updateData.s3Key = k;
+        updateData.storageProvider = 's3';
+      }
+    }
+
+    if (req.body.s3Key) {
+      updateData.s3Key = String(req.body.s3Key).trim();
+      updateData.storageProvider = 's3';
     }
 
     if (req.body.thumbnailUrl !== undefined || req.body.thumbnail !== undefined) {

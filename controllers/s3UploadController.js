@@ -13,8 +13,10 @@ const mongoose = require('mongoose');
 const { s3Client, bucket, region, isS3Configured } = require('../config/s3');
 const Course = require('../models/Course');
 const Recording = require('../models/Recording');
+const DemoVideo = require('../models/DemoVideo');
+const Lesson = require('../models/Lesson.model');
 const Student = require('../models/Student');
-const { getS3Url } = require('../services/s3Service');
+const { getS3Url, getS3KeyFromUrl } = require('../services/s3Service');
 const { verifyStudentCourseAccess } = require('../utils/courseAccessHelper');
 const { normalizeS3Reference } = require('../utils/s3MediaSigner');
 
@@ -316,14 +318,34 @@ const findStudentForMedia = async (user) => {
   return user.email ? Student.findOne({ email: user.email.toLowerCase() }) : null;
 };
 
-const courseContainsS3Key = (course, key) => {
-  if (course.thumbnailMedia?.s3Key === key) return true;
+const escapeRegex = (str) => String(str).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+const courseContainsMediaKey = (course, key) => {
+  if (!course) return false;
+  if (course.thumbnailMedia?.s3Key === key || getS3KeyFromUrl(course.thumbnailMedia?.url) === key) return true;
+  if (getS3KeyFromUrl(course.thumbnail) === key) return true;
+  if (getS3KeyFromUrl(course.bannerUrl) === key) return true;
+  if (getS3KeyFromUrl(course.courseBanner) === key) return true;
   for (const moduleItem of course.modules || []) {
     for (const lesson of moduleItem.lessons || []) {
-      if (lesson.videoS3Key === key) return true;
+      if (lesson.videoS3Key === key || lesson.s3Key === key) return true;
+      if (getS3KeyFromUrl(lesson.videoUrl) === key) return true;
       if (normalizeS3Reference(lesson.videoUrl)?.s3Key === key) return true;
+      if (getS3KeyFromUrl(lesson.fileUrl) === key) return true;
+      if (getS3KeyFromUrl(lesson.pdfUrl) === key) return true;
+      if (getS3KeyFromUrl(lesson.documentUrl) === key) return true;
+      if (getS3KeyFromUrl(lesson.url) === key) return true;
+      if (getS3KeyFromUrl(lesson.path) === key) return true;
       for (const collection of ['videoParts', 'pdfNotes', 'assignments', 'attachments']) {
-        if ((lesson[collection] || []).some((item) => item.s3Key === key)) return true;
+        if ((lesson[collection] || []).some((item) => (
+          item.s3Key === key ||
+          getS3KeyFromUrl(item.url) === key ||
+          getS3KeyFromUrl(item.secure_url) === key ||
+          getS3KeyFromUrl(item.secureUrl) === key ||
+          getS3KeyFromUrl(item.fileUrl) === key ||
+          getS3KeyFromUrl(item.documentUrl) === key ||
+          getS3KeyFromUrl(item.path) === key
+        ))) return true;
       }
     }
   }
@@ -332,62 +354,239 @@ const courseContainsS3Key = (course, key) => {
 
 const getMediaAccessUrl = async (req, res) => {
   const courseId = req.query?.courseId || req.body?.courseId;
-  const key = req.query?.s3Key || req.query?.key || req.body?.s3Key || req.body?.key;
-  if (typeof key !== 'string' || !key.trim()) return fail(res, 400, 's3Key is required.');
+  const rawKey = req.query?.s3Key || req.query?.key || req.body?.s3Key || req.body?.key;
+  if (typeof rawKey !== 'string' || !rawKey.trim()) return fail(res, 400, 's3Key is required.');
+
+  // Handle legacy Cloudinary or local media URLs seamlessly
+  const trimmedRawKey = rawKey.trim();
+  if (trimmedRawKey.includes('cloudinary.com') || trimmedRawKey.startsWith('/uploads/')) {
+    return res.json({ success: true, url: trimmedRawKey, key: trimmedRawKey, s3Key: trimmedRawKey });
+  }
+
+  const key = getS3KeyFromUrl(trimmedRawKey) || trimmedRawKey;
   const prefix = ['videos/', 'images/', 'pdfs/'].find((item) => typeof key === 'string' && key.startsWith(item));
   if (!prefix || !validStoredKey(key, prefix.slice(0, -1))) return fail(res, 400, 'Invalid S3 media key.');
-  try {
-    let course = courseId
-      ? (mongoose.Types.ObjectId.isValid(courseId)
-        ? await Course.findById(courseId)
-        : await Course.findOne({ courseId }))
-      : await Course.findOne({ $or: [
-        { 'thumbnailMedia.s3Key': key },
-        { 'modules.lessons.videoS3Key': key },
-        { 'modules.lessons.videoUrl': getS3Url(key) },
-        { 'modules.lessons.videoParts.s3Key': key },
-        { 'modules.lessons.pdfNotes.s3Key': key },
-        { 'modules.lessons.assignments.s3Key': key },
-        { 'modules.lessons.attachments.s3Key': key },
-      ] });
-    const courseContainsKey = course && courseContainsS3Key(course, key);
-    const recording = prefix === 'videos/' && !courseContainsKey
-      ? await Recording.findOne({
-        $and: [
-          { $or: [
-            { recordedVideoUrl: getS3Url(key) },
-            { recordingFileUrl: getS3Url(key) },
-          ] },
-          ...(course ? [{ courseId: course._id }] : []),
-        ],
-      })
-      : null;
-    if (course && !courseContainsKey && !recording) return fail(res, 404, 'S3 media was not found in this course.');
-    if (!course && !recording) return fail(res, 404, 'S3 media was not found in a course or recording.');
 
+  try {
+    let resolvedCourse = null;
+    let foundMedia = false;
+    let recordingDoc = null;
+    let demoVideoDoc = null;
+
+    // 1. If courseId is explicitly provided, verify media belongs to this course
+    if (courseId) {
+      resolvedCourse = mongoose.Types.ObjectId.isValid(courseId)
+        ? await Course.findById(courseId)
+        : await Course.findOne({ courseId });
+
+      if (resolvedCourse && courseContainsMediaKey(resolvedCourse, key)) {
+        foundMedia = true;
+      }
+
+      if (!foundMedia && resolvedCourse) {
+        // Check recordings linked to this course
+        const courseIdQuery = [];
+        if (mongoose.Types.ObjectId.isValid(resolvedCourse._id)) {
+          courseIdQuery.push({ courseId: resolvedCourse._id });
+        }
+        if (resolvedCourse.courseTitle) {
+          courseIdQuery.push({ courseName: resolvedCourse.courseTitle });
+        }
+        if (courseIdQuery.length > 0) {
+          recordingDoc = await Recording.findOne({
+            $and: [
+              { $or: courseIdQuery },
+              {
+                $or: [
+                  { s3Key: key },
+                  { recordedVideoUrl: { $regex: escapeRegex(key) } },
+                  { recordingFileUrl: { $regex: escapeRegex(key) } },
+                  { streamUrl: { $regex: escapeRegex(key) } },
+                  { liveClassUrl: { $regex: escapeRegex(key) } },
+                ],
+              },
+            ],
+          });
+          if (recordingDoc) foundMedia = true;
+        }
+      }
+
+      if (!foundMedia && resolvedCourse) {
+        // Check demo videos linked to this course
+        const demoCourseQuery = [];
+        if (resolvedCourse.courseId) {
+          demoCourseQuery.push({ courseId: resolvedCourse.courseId });
+        }
+        if (mongoose.Types.ObjectId.isValid(resolvedCourse._id)) {
+          demoCourseQuery.push({ courseRef: resolvedCourse._id });
+        }
+        if (demoCourseQuery.length > 0) {
+          demoVideoDoc = await DemoVideo.findOne({
+            $and: [
+              { $or: demoCourseQuery },
+              {
+                $or: [
+                  { s3Key: key },
+                  { videoUrl: { $regex: escapeRegex(key) } },
+                  { thumbnailUrl: { $regex: escapeRegex(key) } },
+                ],
+              },
+            ],
+          });
+          if (demoVideoDoc) foundMedia = true;
+        }
+      }
+
+      if (!foundMedia && resolvedCourse) {
+        // Check standalone lessons linked to this course
+        const standaloneLesson = await Lesson.findOne({
+          $and: [
+            { courseId: resolvedCourse.courseId },
+            {
+              $or: [
+                { s3Key: key },
+                { uploadFileOrLink: { $regex: escapeRegex(key) } },
+              ],
+            },
+          ],
+        });
+        if (standaloneLesson) foundMedia = true;
+      }
+
+      if (!foundMedia) {
+        return fail(res, 404, 'S3 media was not found in this course.');
+      }
+    } else {
+      // 2. No courseId specified: search across Course, Recording, DemoVideo, and Lesson
+      resolvedCourse = await Course.findOne({
+        $or: [
+          { 'thumbnailMedia.s3Key': key },
+          { 'thumbnailMedia.url': { $regex: escapeRegex(key) } },
+          { thumbnail: { $regex: escapeRegex(key) } },
+          { bannerUrl: { $regex: escapeRegex(key) } },
+          { courseBanner: { $regex: escapeRegex(key) } },
+          { 'modules.lessons.videoS3Key': key },
+          { 'modules.lessons.s3Key': key },
+          { 'modules.lessons.videoUrl': { $regex: escapeRegex(key) } },
+          { 'modules.lessons.fileUrl': { $regex: escapeRegex(key) } },
+          { 'modules.lessons.pdfUrl': { $regex: escapeRegex(key) } },
+          { 'modules.lessons.documentUrl': { $regex: escapeRegex(key) } },
+          { 'modules.lessons.url': { $regex: escapeRegex(key) } },
+          { 'modules.lessons.path': { $regex: escapeRegex(key) } },
+          { 'modules.lessons.videoParts.s3Key': key },
+          { 'modules.lessons.videoParts.url': { $regex: escapeRegex(key) } },
+          { 'modules.lessons.videoParts.secure_url': { $regex: escapeRegex(key) } },
+          { 'modules.lessons.videoParts.secureUrl': { $regex: escapeRegex(key) } },
+          { 'modules.lessons.pdfNotes.s3Key': key },
+          { 'modules.lessons.pdfNotes.url': { $regex: escapeRegex(key) } },
+          { 'modules.lessons.pdfNotes.secure_url': { $regex: escapeRegex(key) } },
+          { 'modules.lessons.assignments.s3Key': key },
+          { 'modules.lessons.assignments.url': { $regex: escapeRegex(key) } },
+          { 'modules.lessons.attachments.s3Key': key },
+          { 'modules.lessons.attachments.url': { $regex: escapeRegex(key) } },
+        ],
+      });
+
+      if (resolvedCourse && courseContainsMediaKey(resolvedCourse, key)) {
+        foundMedia = true;
+      }
+
+      if (!foundMedia) {
+        recordingDoc = await Recording.findOne({
+          $or: [
+            { s3Key: key },
+            { recordedVideoUrl: { $regex: escapeRegex(key) } },
+            { recordingFileUrl: { $regex: escapeRegex(key) } },
+            { streamUrl: { $regex: escapeRegex(key) } },
+            { liveClassUrl: { $regex: escapeRegex(key) } },
+          ],
+        });
+        if (recordingDoc) {
+          foundMedia = true;
+          if (recordingDoc.courseId) {
+            resolvedCourse = await Course.findById(recordingDoc.courseId);
+          } else if (recordingDoc.courseName) {
+            resolvedCourse = await Course.findOne({ courseTitle: recordingDoc.courseName });
+          }
+        }
+      }
+
+      if (!foundMedia) {
+        demoVideoDoc = await DemoVideo.findOne({
+          $or: [
+            { s3Key: key },
+            { videoUrl: { $regex: escapeRegex(key) } },
+            { thumbnailUrl: { $regex: escapeRegex(key) } },
+          ],
+        });
+        if (demoVideoDoc) {
+          foundMedia = true;
+          if (demoVideoDoc.courseRef) {
+            resolvedCourse = await Course.findById(demoVideoDoc.courseRef);
+          }
+          if (!resolvedCourse && demoVideoDoc.courseId) {
+            resolvedCourse = await Course.findOne({
+              $or: [
+                { courseId: demoVideoDoc.courseId },
+                ...(mongoose.Types.ObjectId.isValid(demoVideoDoc.courseId) ? [{ _id: demoVideoDoc.courseId }] : []),
+              ],
+            });
+          }
+        }
+      }
+
+      if (!foundMedia) {
+        const standaloneLesson = await Lesson.findOne({
+          $or: [
+            { s3Key: key },
+            { uploadFileOrLink: { $regex: escapeRegex(key) } },
+          ],
+        });
+        if (standaloneLesson) {
+          foundMedia = true;
+          if (standaloneLesson.courseId) {
+            resolvedCourse = await Course.findOne({
+              $or: [
+                { courseId: standaloneLesson.courseId },
+                ...(mongoose.Types.ObjectId.isValid(standaloneLesson.courseId) ? [{ _id: standaloneLesson.courseId }] : []),
+              ],
+            });
+          }
+        }
+      }
+
+      if (!foundMedia) {
+        return fail(res, 404, 'S3 media was not found in a course or recording.');
+      }
+    }
+
+    // 3. User Authorization
     const role = (req.user?.role || '').toLowerCase();
     const isStaff = ['admin', 'superadmin'].includes(role);
     if (!isStaff) {
-      if (!course && recording?.courseId) {
-        course = await Course.findById(recording.courseId);
+      if (!resolvedCourse) {
+        return fail(res, 403, 'Course access is required to access this media.');
       }
-      if (!course) return fail(res, 403, 'Course access is required to access this recording.');
       const student = await findStudentForMedia(req.user || {});
       if (!student) return fail(res, 403, 'Student profile is required to access course media.');
       const accountOk = ['Active', 'Trial'].includes(student.status) || student.isActive || student.isApproved;
       const subscriptionOk = ['Active', 'Trial'].includes(student.subscriptionStatus) || ['Active', 'VIP', 'Premium'].includes(student.subscription);
       if (!accountOk && !subscriptionOk) return fail(res, 403, 'An active or approved account is required to access course media.');
       if (student.subscriptionExpiresAt && new Date(student.subscriptionExpiresAt) < new Date()) return fail(res, 403, 'Course subscription has expired.');
-      if (!await verifyStudentCourseAccess(req.user, course.courseId || course._id.toString())) return fail(res, 403, 'You do not have access to this course.');
+      if (!await verifyStudentCourseAccess(req.user, resolvedCourse.courseId || resolvedCourse._id.toString())) {
+        return fail(res, 403, 'You do not have access to this course.');
+      }
     }
 
+    // 4. Generate SigV4 signed URL
     const contentType = prefix === 'videos/' ? undefined : (prefix === 'pdfs/' ? 'application/pdf' : undefined);
     const url = await getSignedUrl(s3Client, new GetObjectCommand({
       Bucket: bucket,
       Key: key,
       ...(contentType ? { ResponseContentType: contentType, ResponseContentDisposition: 'inline' } : {}),
     }), { expiresIn: MEDIA_URL_TTL_SECONDS });
-    const mediaOwnerId = course?.courseId || course?._id || recording?.courseId || recording?._id || 'recording';
+
+    const mediaOwnerId = resolvedCourse?.courseId || resolvedCourse?._id || recordingDoc?.courseId || recordingDoc?._id || demoVideoDoc?.courseId || 'authorized-media';
     console.info('[S3 media] access URL issued', { courseId: String(mediaOwnerId), key, userId: req.user?.id });
     return res.json({ success: true, url, key, s3Key: key, expiresIn: MEDIA_URL_TTL_SECONDS });
   } catch (error) {

@@ -4,9 +4,12 @@ const assert = require('node:assert/strict');
 const config = require('../config/s3');
 const controller = require('../controllers/s3UploadController');
 const courseController = require('../controllers/courseController');
+const mongoose = require('mongoose');
 const Course = require('../models/Course');
 const Recording = require('../models/Recording');
 const Student = require('../models/Student');
+const DemoVideo = require('../models/DemoVideo');
+const Lesson = require('../models/Lesson.model');
 const { getS3Url } = require('../services/s3Service');
 const defaultCredentialProvider = config.s3Client.config.credentials;
 // Synthetic, in-memory credentials are scoped to this test process only.
@@ -135,17 +138,26 @@ test('private media access requires the key to be referenced by an authorized co
   const originalFindById = Course.findById;
   const originalFindOne = Course.findOne;
   const originalStudentFindOne = Student.findOne;
+  const originalRecordingFindOne = Recording.findOne;
+  const originalDemoVideoFindOne = DemoVideo.findOne;
+  const originalLessonFindOne = Lesson.findOne;
   const originalSend = config.s3Client.send;
   Course.findById = async () => null;
   Course.findOne = async () => ({
     _id: 'course-db-id', courseId: 'CRS-123',
     modules: [{ lessons: [{ pdfNotes: [{ storageProvider: 's3', s3Key: 'pdfs/stored-notes.pdf' }] }] }],
   });
+  Recording.findOne = async () => null;
+  DemoVideo.findOne = async () => null;
+  Lesson.findOne = async () => null;
   config.s3Client.send = async () => ({});
   t.after(() => {
     Course.findById = originalFindById;
     Course.findOne = originalFindOne;
     Student.findOne = originalStudentFindOne;
+    Recording.findOne = originalRecordingFindOne;
+    DemoVideo.findOne = originalDemoVideoFindOne;
+    Lesson.findOne = originalLessonFindOne;
     config.s3Client.send = originalSend;
   });
 
@@ -422,4 +434,204 @@ test('Admin course list, detail, create, and update resolve S3 banners without r
   assert.equal(updateRes.body.course.thumbnailMedia.s3Key, 'images/updated-banner.png');
   assert.match(updateRes.body.course.thumbnail, /X-Amz-Signature=/);
   assert.equal(updateRes.body.course.thumbnail.includes('cloudinary.com'), false);
+});
+
+// ==========================================
+// REGRESSION TESTS 1 TO 10
+// ==========================================
+
+test('1. Course lesson S3 video access-url resolution', async (t) => {
+  const originalFindOne = Course.findOne;
+  const key = 'videos/regression-course-lesson.mp4';
+  Course.findOne = async () => ({
+    _id: new mongoose.Types.ObjectId(),
+    courseId: 'CRS-REG-1',
+    modules: [{
+      lessons: [{
+        videoParts: [{ storageProvider: 's3', s3Key: key }],
+      }],
+    }],
+  });
+  t.after(() => { Course.findOne = originalFindOne; });
+
+  const res = await call(controller.getMediaAccessUrl, {}, { role: 'admin' }, { s3Key: key });
+  assert.equal(res.statusCode, 200);
+  assert.equal(res.body.s3Key, key);
+  assert.match(res.body.url, /X-Amz-Signature=/);
+});
+
+test('2. Recording S3 video access-url resolution', async (t) => {
+  const originalCourseFindOne = Course.findOne;
+  const originalRecFindOne = Recording.findOne;
+  const key = 'videos/regression-recording.mp4';
+  Course.findOne = async () => null;
+  Recording.findOne = async () => ({
+    title: 'Live Recording',
+    s3Key: key,
+    recordedVideoUrl: getS3Url(key),
+  });
+  t.after(() => {
+    Course.findOne = originalCourseFindOne;
+    Recording.findOne = originalRecFindOne;
+  });
+
+  const res = await call(controller.getMediaAccessUrl, {}, { role: 'admin' }, { s3Key: key });
+  assert.equal(res.statusCode, 200);
+  assert.equal(res.body.s3Key, key);
+  assert.match(res.body.url, /X-Amz-Signature=/);
+});
+
+test('3. Legacy S3 videoUrl access-url resolution', async (t) => {
+  const originalFindOne = Course.findOne;
+  const key = 'videos/regression-legacy.mp4';
+  Course.findOne = async () => ({
+    _id: new mongoose.Types.ObjectId(),
+    courseId: 'CRS-REG-3',
+    modules: [{
+      lessons: [{
+        videoUrl: `https://${config.bucket}.s3.${config.region}.amazonaws.com/${key}`,
+      }],
+    }],
+  });
+  t.after(() => { Course.findOne = originalFindOne; });
+
+  const res = await call(controller.getMediaAccessUrl, {}, { role: 'admin' }, { s3Key: key });
+  assert.equal(res.statusCode, 200);
+  assert.equal(res.body.s3Key, key);
+  assert.match(res.body.url, /X-Amz-Signature=/);
+});
+
+test('4. Exact key-only S3 media access-url resolution', async (t) => {
+  const originalFindOne = Course.findOne;
+  const key = 'videos/regression-key-only.mp4';
+  Course.findOne = async () => ({
+    _id: new mongoose.Types.ObjectId(),
+    courseId: 'CRS-REG-4',
+    modules: [{
+      lessons: [{
+        videoS3Key: key,
+        storageProvider: 's3',
+      }],
+    }],
+  });
+  t.after(() => { Course.findOne = originalFindOne; });
+
+  const res = await call(controller.getMediaAccessUrl, {}, { role: 'admin' }, { s3Key: key });
+  assert.equal(res.statusCode, 200);
+  assert.equal(res.body.s3Key, key);
+  assert.match(res.body.url, /X-Amz-Signature=/);
+});
+
+test('5. Admin access-url request succeeds with valid Admin token', async (t) => {
+  const originalFindOne = Course.findOne;
+  const key = 'videos/regression-admin.mp4';
+  Course.findOne = async () => ({
+    _id: new mongoose.Types.ObjectId(),
+    courseId: 'CRS-REG-5',
+    modules: [{ lessons: [{ videoS3Key: key }] }],
+  });
+  t.after(() => { Course.findOne = originalFindOne; });
+
+  const res = await call(controller.getMediaAccessUrl, {}, { id: 'admin-id', role: 'admin' }, { s3Key: key });
+  assert.equal(res.statusCode, 200);
+  assert.equal(res.body.success, true);
+  assert.ok(res.body.url);
+});
+
+test('6. Student access-url request with valid course access succeeds', async (t) => {
+  const originalFindOne = Course.findOne;
+  const originalStudentFindOne = Student.findOne;
+  const key = 'videos/regression-student-valid.mp4';
+  const courseDoc = {
+    _id: new mongoose.Types.ObjectId(),
+    courseId: 'CRS-REG-6',
+    modules: [{ lessons: [{ videoS3Key: key }] }],
+  };
+  Course.findOne = async () => courseDoc;
+  Student.findOne = async () => ({
+    courseId: 'CRS-REG-6',
+    status: 'Active',
+    subscriptionStatus: 'Active',
+    email: 'student@example.test',
+  });
+  t.after(() => {
+    Course.findOne = originalFindOne;
+    Student.findOne = originalStudentFindOne;
+  });
+
+  const res = await call(controller.getMediaAccessUrl, {}, { id: 'student-id', email: 'student@example.test', role: 'student' }, { s3Key: key });
+  assert.equal(res.statusCode, 200);
+  assert.equal(res.body.s3Key, key);
+  assert.match(res.body.url, /X-Amz-Signature=/);
+});
+
+test('7. Student request without course access returns 403', async (t) => {
+  const originalFindOne = Course.findOne;
+  const originalStudentFindOne = Student.findOne;
+  const key = 'videos/regression-student-unauth.mp4';
+  Course.findOne = async () => ({
+    _id: new mongoose.Types.ObjectId(),
+    courseId: 'CRS-REG-7',
+    modules: [{ lessons: [{ videoS3Key: key }] }],
+  });
+  Student.findOne = async () => null; // No active enrollment
+  t.after(() => {
+    Course.findOne = originalFindOne;
+    Student.findOne = originalStudentFindOne;
+  });
+
+  const res = await call(controller.getMediaAccessUrl, {}, { id: 'student-unauth', email: 'unauth@example.test', role: 'student' }, { s3Key: key });
+  assert.equal(res.statusCode, 403);
+  assert.equal(res.body.success, false);
+});
+
+test('8. Unknown s3Key returns 404', async (t) => {
+  const originalCourseFindOne = Course.findOne;
+  const originalRecFindOne = Recording.findOne;
+  const originalDemoFindOne = DemoVideo.findOne;
+  const originalLessonFindOne = Lesson.findOne;
+  Course.findOne = async () => null;
+  Recording.findOne = async () => null;
+  DemoVideo.findOne = async () => null;
+  Lesson.findOne = async () => null;
+  t.after(() => {
+    Course.findOne = originalCourseFindOne;
+    Recording.findOne = originalRecFindOne;
+    DemoVideo.findOne = originalDemoFindOne;
+    Lesson.findOne = originalLessonFindOne;
+  });
+
+  const res = await call(controller.getMediaAccessUrl, {}, { role: 'admin' }, { s3Key: 'videos/unknown-nonexistent-key.mp4' });
+  assert.equal(res.statusCode, 404);
+  assert.equal(res.body.success, false);
+  assert.equal(res.body.message, 'S3 media was not found in a course or recording.');
+});
+
+test('9. Signed URL contains valid SigV4 parameters', async (t) => {
+  const originalFindOne = Course.findOne;
+  const key = 'videos/regression-sigv4.mp4';
+  Course.findOne = async () => ({
+    _id: new mongoose.Types.ObjectId(),
+    courseId: 'CRS-REG-9',
+    modules: [{ lessons: [{ videoS3Key: key }] }],
+  });
+  t.after(() => { Course.findOne = originalFindOne; });
+
+  const res = await call(controller.getMediaAccessUrl, {}, { role: 'admin' }, { s3Key: key });
+  assert.equal(res.statusCode, 200);
+  const parsed = new URL(res.body.url);
+  assert.equal(parsed.searchParams.get('X-Amz-Algorithm'), 'AWS4-HMAC-SHA256');
+  assert.ok(parsed.searchParams.get('X-Amz-Credential'));
+  assert.ok(parsed.searchParams.get('X-Amz-Date'));
+  assert.equal(parsed.searchParams.get('X-Amz-Expires'), '900');
+  assert.ok(parsed.searchParams.get('X-Amz-SignedHeaders'));
+  assert.match(parsed.searchParams.get('X-Amz-Signature'), /^[a-f0-9]+$/);
+});
+
+test('10. Legacy Cloudinary media remains unchanged', async (t) => {
+  const cloudinaryUrl = 'https://res.cloudinary.com/example/image/upload/sample.jpg';
+  const res = await call(controller.getMediaAccessUrl, {}, { role: 'admin' }, { s3Key: cloudinaryUrl });
+  assert.equal(res.statusCode, 200);
+  assert.equal(res.body.success, true);
+  assert.equal(res.body.url, cloudinaryUrl);
 });

@@ -78,6 +78,16 @@ const recordingSchema = new mongoose.Schema(
       trim: true,
       default: '',
     },
+    storageProvider: {
+      type: String,
+      trim: true,
+      default: '',
+    },
+    s3Key: {
+      type: String,
+      trim: true,
+      default: '',
+    },
     duration: {
       type: String,
       trim: true,

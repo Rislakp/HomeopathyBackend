@@ -14,6 +14,8 @@ const stripS3ReferenceUrls = (reference) => ({
   fileUrl: '',
   documentUrl: '',
   path: '',
+  videoUrl: '',
+  mediaUrl: '',
 });
 
 const normalizeS3Reference = (reference) => {
@@ -21,8 +23,26 @@ const normalizeS3Reference = (reference) => {
   if (!source || typeof source !== 'object') return null;
   if (source.storageProvider === 's3' && typeof source.s3Key === 'string' && source.s3Key) return source;
 
-  const rawUrl = source.url || source.secure_url || source.secureUrl || source.fileUrl || source.path;
-  if (typeof rawUrl !== 'string' || !/^https:\/\//i.test(rawUrl)) return null;
+  const rawUrl = source.url || source.secure_url || source.secureUrl || source.fileUrl || source.path || source.videoUrl || source.mediaUrl || source.s3Key;
+  if (typeof rawUrl !== 'string') return null;
+
+  if (SAFE_S3_KEY.test(rawUrl) && !rawUrl.includes('..') && !rawUrl.includes('//') && !/[\\\r\n]/.test(rawUrl)) {
+    return {
+      ...source,
+      storageProvider: 's3',
+      s3Key: rawUrl,
+      url: '',
+      secure_url: '',
+      secureUrl: '',
+      fileUrl: '',
+      documentUrl: '',
+      path: '',
+      videoUrl: '',
+      mediaUrl: '',
+    };
+  }
+
+  if (!/^https:\/\//i.test(rawUrl)) return null;
 
   try {
     const parsed = new URL(rawUrl);
@@ -34,9 +54,19 @@ const normalizeS3Reference = (reference) => {
     if (publicBaseUrl) {
       try { expectedHosts.add(new URL(publicBaseUrl).hostname); } catch (_) { /* Ignore invalid optional base URLs. */ }
     }
+    if (parsed.hostname.includes('amazonaws.com') && !expectedHosts.has(parsed.hostname)) {
+      expectedHosts.add(parsed.hostname);
+    }
     if (!expectedHosts.has(parsed.hostname)) return null;
 
-    keyPath = decodeURIComponent(parsed.pathname.replace(/^\/+/, ''));
+    let pathParts = decodeURIComponent(parsed.pathname.replace(/^\/+/, ''));
+    if (parsed.hostname.startsWith('s3.') || parsed.hostname.startsWith('s3-')) {
+      const segments = pathParts.split('/');
+      if (segments[0] === bucket) {
+        pathParts = segments.slice(1).join('/');
+      }
+    }
+    keyPath = pathParts;
     if (!SAFE_S3_KEY.test(keyPath) || keyPath.includes('..') || keyPath.includes('//') || /[\\\r\n]/.test(keyPath)) return null;
     return {
       ...source,
@@ -48,6 +78,8 @@ const normalizeS3Reference = (reference) => {
       fileUrl: '',
       documentUrl: '',
       path: '',
+      videoUrl: '',
+      mediaUrl: '',
     };
   } catch (_) {
     return null;
@@ -84,6 +116,8 @@ const signS3Reference = async (reference, responseContentType) => {
       fileUrl: url,
       documentUrl: url,
       path: url,
+      videoUrl: url,
+      mediaUrl: url,
       accessUrlExpiresIn: S3_MEDIA_URL_TTL_SECONDS,
     };
   } catch (err) {

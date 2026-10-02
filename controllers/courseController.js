@@ -7,6 +7,7 @@ const { deleteCloudinaryByUrl, getPublicIdFromUrl, parseCloudinaryUrl, uploadBuf
 const { extractCleanNameAndExt } = require('../middleware/upload');
 const memoryCache = require('../utils/cache');
 const { signS3Reference, stripS3ReferenceUrls, normalizeS3Reference } = require('../utils/s3MediaSigner');
+const { getS3KeyFromUrl } = require('../services/s3Service');
 
 
 const ALLOWED_VIDEO_FORMATS = ['mp4', 'mov', 'avi', 'mkv', 'webm', 'flv', 'wmv', 'm4v'];
@@ -73,6 +74,41 @@ const toResourceObj = (item) => {
   if (typeof item === 'string') {
     const trimmed = item.trim();
     if (!trimmed) return null;
+
+    let s3Key = '';
+    if (trimmed.startsWith('videos/') || trimmed.startsWith('images/') || trimmed.startsWith('pdfs/')) {
+      s3Key = trimmed;
+    } else if (trimmed.includes('.amazonaws.com/')) {
+      s3Key = getS3KeyFromUrl(trimmed) || '';
+    }
+
+    if (s3Key) {
+      let resourceType = 'image';
+      if (s3Key.startsWith('videos/')) resourceType = 'video';
+      else if (s3Key.startsWith('pdfs/')) resourceType = 'pdf';
+      const fileName = path.basename(s3Key);
+      return {
+        title: fileName || 'Resource',
+        url: '',
+        secure_url: '',
+        secureUrl: '',
+        fileUrl: '',
+        documentUrl: '',
+        path: '',
+        public_id: s3Key,
+        resource_type: resourceType === 'pdf' ? 'raw' : resourceType,
+        resourceType,
+        mimetype: resourceType === 'video' ? 'video/mp4' : (resourceType === 'pdf' ? 'application/pdf' : 'image/png'),
+        size: 0,
+        storageProvider: 's3',
+        s3Key,
+        fileName,
+        originalFileName: fileName,
+        contentType: resourceType === 'video' ? 'video/mp4' : (resourceType === 'pdf' ? 'application/pdf' : 'image/png'),
+        uploadStatus: 'uploaded',
+      };
+    }
+
     const url = normalizeFileUrl(trimmed);
     let title = trimmed;
     try {
@@ -107,7 +143,18 @@ const toResourceObj = (item) => {
     };
   }
   if (typeof item === 'object' && !Array.isArray(item)) {
-    const s3Key = String(item.s3Key || item.key || '').trim();
+    let s3Key = String(item.s3Key || item.key || '').trim();
+    if (!s3Key) {
+      const rawCandidate = item.url || item.secure_url || item.secureUrl || item.fileUrl || item.path || '';
+      if (typeof rawCandidate === 'string') {
+        const candidateTrim = rawCandidate.trim();
+        if (candidateTrim.startsWith('videos/') || candidateTrim.startsWith('images/') || candidateTrim.startsWith('pdfs/')) {
+          s3Key = candidateTrim;
+        } else if (candidateTrim.includes('.amazonaws.com/')) {
+          s3Key = getS3KeyFromUrl(candidateTrim) || '';
+        }
+      }
+    }
     const storageProvider = String(item.storageProvider || item.storage_provider || (s3Key ? 's3' : '')).trim().toLowerCase();
     const isS3Resource = storageProvider === 's3' && !!s3Key;
     const rawId = item._id || item.id;
@@ -465,6 +512,9 @@ const serializeLesson = async (lesson, req) => {
     pdfNotes: isolated.pdfNotes,
     assignments: isolated.assignments,
     attachments: isolated.attachments,
+    videoS3Key: lesson.videoS3Key || lesson.s3Key || '',
+    s3Key: lesson.s3Key || lesson.videoS3Key || '',
+    storageProvider: lesson.storageProvider || (lesson.videoS3Key || lesson.s3Key ? 's3' : ''),
     meetingUrl: lesson.meetingUrl || '',
     status: lesson.status || 'Published',
     createdAt: lesson.createdAt,
@@ -1460,8 +1510,10 @@ exports.addLesson = async (req, res) => {
         return m.startsWith('video/') || ALLOWED_VIDEO_FORMATS.includes(ext) || ((f.fieldname || '').toLowerCase().includes('video'));
       });
       const rawVideoProvided = (videoUrl || uploadFileOrLink || fileOrLink || lessonFile || '').trim();
-      const isFakeOrRawFilename = rawVideoProvided && (!rawVideoProvided.startsWith('http://') && !rawVideoProvided.startsWith('https://') && !rawVideoProvided.startsWith('/uploads/'));
-      if (isFakeOrRawFilename && !hasUploadedVideo) {
+      const isS3KeyOrUrl = rawVideoProvided.startsWith('videos/') || rawVideoProvided.includes('.amazonaws.com/') || Boolean(getS3KeyFromUrl(rawVideoProvided));
+      const hasS3Part = finalVideoParts.some((p) => p.storageProvider === 's3' && p.s3Key);
+      const isFakeOrRawFilename = rawVideoProvided && (!rawVideoProvided.startsWith('http://') && !rawVideoProvided.startsWith('https://') && !rawVideoProvided.startsWith('/uploads/') && !isS3KeyOrUrl);
+      if (isFakeOrRawFilename && !hasUploadedVideo && !hasS3Part) {
         return res.status(400).json({
           success: false,
           message: `Invalid video URL or file "${rawVideoProvided}". Please upload a video file or provide a valid streaming URL.`,
@@ -1501,6 +1553,9 @@ exports.addLesson = async (req, res) => {
     console.log('===========================================');
 
     const resolvedPublicId = videoPublicId || (finalVideoUrl ? (getPublicIdFromUrl(finalVideoUrl) || '') : '');
+    const s3Part = (finalVideoParts || []).find((p) => p.storageProvider === 's3' && p.s3Key);
+    const lessonS3Key = req.body.videoS3Key || req.body.s3Key || (s3Part ? s3Part.s3Key : '') || (getS3KeyFromUrl(finalVideoUrl) || '');
+    const lessonStorageProvider = (lessonS3Key || (s3Part && s3Part.storageProvider === 's3')) ? 's3' : (req.body.storageProvider || '');
 
     const newLesson = {
       lessonTitle: actualLessonTitle,
@@ -1509,6 +1564,9 @@ exports.addLesson = async (req, res) => {
       description: (description || '').trim(),
       meetingUrl: actualMeetingUrl,
       videoUrl: finalVideoUrl,
+      videoS3Key: lessonS3Key,
+      s3Key: lessonS3Key,
+      storageProvider: lessonStorageProvider,
       videoPublicId: resolvedPublicId,
       videoResourceType: videoResourceType || 'video',
       videoDuration: videoDuration,
@@ -1951,7 +2009,13 @@ exports.updateLesson = async (req, res) => {
     console.log(JSON.stringify(targetLesson.assignments, null, 2));
     console.log('ATTACHMENTS:');
     console.log(JSON.stringify(targetLesson.attachments, null, 2));
-    console.log('===========================================');
+    const s3UpdatePart = (targetLesson.videoParts || []).find((p) => p.storageProvider === 's3' && p.s3Key);
+    const updatedS3Key = req.body.videoS3Key || req.body.s3Key || (s3UpdatePart ? s3UpdatePart.s3Key : '') || (getS3KeyFromUrl(targetLesson.videoUrl) || '');
+    if (updatedS3Key) {
+      targetLesson.videoS3Key = updatedS3Key;
+      targetLesson.s3Key = updatedS3Key;
+      targetLesson.storageProvider = 's3';
+    }
 
     await course.save();
 

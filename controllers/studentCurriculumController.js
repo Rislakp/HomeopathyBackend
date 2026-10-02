@@ -5,7 +5,7 @@ const CourseProgress = require('../models/CourseProgress');
 const ContentItemProgress = require('../models/ContentItemProgress');
 const { verifyStudentCourseAccess } = require('../utils/courseAccessHelper');
 const { logActivity } = require('../utils/activityLogger');
-const { signS3Reference } = require('../utils/s3MediaSigner');
+const { signS3Reference, normalizeS3Reference } = require('../utils/s3MediaSigner');
 
 const addSignedS3MediaUrls = async (course) => {
   if (!course || typeof course !== 'object') return course;
@@ -28,7 +28,22 @@ const addSignedS3MediaUrls = async (course) => {
         }
       }
       const firstVideo = (lesson.videoParts || []).find((resource) => resource.storageProvider === 's3' && resource.s3Key);
-      if (firstVideo && !lesson.videoUrl) lesson.videoUrl = firstVideo.url;
+      if (firstVideo && !lesson.videoUrl) {
+        lesson.videoUrl = firstVideo.url;
+      } else if (!firstVideo && (lesson.videoS3Key || lesson.s3Key || lesson.storageProvider === 's3' || (lesson.videoUrl && (lesson.videoUrl.includes('.amazonaws.com/') || lesson.videoUrl.startsWith('videos/'))))) {
+        const candidateKey = lesson.videoS3Key || lesson.s3Key || (lesson.videoUrl && lesson.videoUrl.startsWith('videos/') ? lesson.videoUrl : undefined);
+        const s3Ref = normalizeS3Reference({
+          storageProvider: 's3',
+          s3Key: candidateKey,
+          videoUrl: lesson.videoUrl,
+        });
+        if (s3Ref && s3Ref.s3Key) {
+          const signed = await signS3Reference(s3Ref);
+          if (signed?.url) {
+            lesson.videoUrl = signed.url;
+          }
+        }
+      }
       const firstPdf = (lesson.pdfNotes || []).find((resource) => resource.storageProvider === 's3' && resource.s3Key);
       if (firstPdf && !lesson.pdfUrl) {
         lesson.pdfUrl = firstPdf.url;
