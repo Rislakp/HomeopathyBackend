@@ -24,8 +24,9 @@ const demoVideoController = require('../../controllers/demoVideoController');
 
 // Faculty routes for students are now handled by routes/studentFacultyRoutes.js
 
-// Protect remaining student routes strictly under /api/student with student role authentication
+// Protect remaining student routes strictly under /api/student & /api/v1/student with student role authentication
 router.use('/api/student', requireStudent);
+router.use('/api/v1/student', requireStudent);
 
 /**
  * @route   GET /api/student/profile
@@ -34,18 +35,22 @@ router.use('/api/student', requireStudent);
  */
 router.get('/api/student/profile', getStudentProfile);
 router.get('/api/student/me', getStudentProfile);
+router.get('/api/v1/student/profile', getStudentProfile);
+router.get('/api/v1/student/me', getStudentProfile);
 
 /**
  * @route   GET /api/student/demo-videos
  * @desc    Fetch available demo videos for the student portal
  */
 router.get('/api/student/demo-videos', demoVideoController.getDemoVideos);
+router.get('/api/v1/student/demo-videos', demoVideoController.getDemoVideos);
 
 /**
  * @route   GET /api/student/exams
  * @desc    Get all available mock tests with student's attempt status & previous score
  */
 router.get('/api/student/exams', getAvailableExams);
+router.get('/api/v1/student/exams', getAvailableExams);
 
 /**
  * @route   GET /api/student/exams/:id/start
@@ -54,17 +59,21 @@ router.get('/api/student/exams', getAvailableExams);
  */
 router.get('/api/student/exams/:id/start', startExam);
 router.post('/api/student/exams/:id/start', startExam);
+router.get('/api/v1/student/exams/:id/start', startExam);
+router.post('/api/v1/student/exams/:id/start', startExam);
 
 /**
  * @route   POST /api/student/exams/:id/submit
  * @desc    Submit student answers, evaluate score, and save TestResult
  */
 router.post('/api/student/exams/:id/submit', submitExam);
+router.post('/api/v1/student/exams/:id/submit', submitExam);
 
 /**
  * @route   GET /api/student/results
  * @desc    Get all test results and performance history for the authenticated student
  */
 router.get('/api/student/results', getStudentResults);
+router.get('/api/v1/student/results', getStudentResults);
 
 module.exports = router;

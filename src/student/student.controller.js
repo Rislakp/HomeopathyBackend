@@ -941,8 +941,20 @@ async function submitExam(req, res) {
 async function getStudentResults(req, res) {
   try {
     const candidateIds = await getStudentCandidateIds(req.user);
+    const role = (req.user?.role || '').toLowerCase().trim();
+    const maskedStudentId = req.user?.studentId || req.user?.id || req.user?.userId ? '<present>' : '<none>';
+    const isApproved = req.user?.isApproved !== undefined ? req.user.isApproved : true;
 
     if (!candidateIds || candidateIds.length === 0) {
+      console.warn('[STUDENT RESULTS DEBUG]', {
+        route: req.originalUrl || req.url,
+        authenticated: !!req.user,
+        role: role,
+        studentId: maskedStudentId,
+        approved: isApproved,
+        resultCount: 0,
+        '403Reason': 'Unauthorized: candidate student IDs could not be resolved',
+      });
       return res.status(401).json({
         success: false,
         message: 'Unauthorized: Student ID not found in session/token.'
@@ -1094,6 +1106,16 @@ async function getStudentResults(req, res) {
     });
 
     const pagination = buildPaginationResponse(totalResults, page, limit);
+
+    console.log('[STUDENT RESULTS DEBUG]', {
+      route: req.originalUrl || req.url,
+      authenticated: true,
+      role: role,
+      studentId: maskedStudentId,
+      approved: isApproved,
+      resultCount: formattedResults.length,
+      '403Reason': 'none (success)',
+    });
 
     return res.status(200).json({
       success: true,

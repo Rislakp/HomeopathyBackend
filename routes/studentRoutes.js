@@ -87,7 +87,23 @@ router.get('/:id/results', adminAuth, adminStudentController.getAdminStudentResu
 // ─────────────────────────────────────────────────────────────────────────────
 // 7. PARAMETERIZED /:id ROUTE (Admin management or Student own profile)
 // ─────────────────────────────────────────────────────────────────────────────
-const RESERVED_SUB_ROUTES = new Set(['courses', 'faculty', 'export', 'unani', 'exams']);
+const RESERVED_SUB_ROUTES = new Set([
+  'courses',
+  'faculty',
+  'export',
+  'unani',
+  'exams',
+  'results',
+  'demo-videos',
+  'subscriptions',
+  'materials',
+  'attendance',
+  'classes',
+  'live',
+  'profile',
+  'me',
+  'self',
+]);
 const isProfileIdParam = (id) => {
   if (!id) return false;
   if (RESERVED_SUB_ROUTES.has(id.toLowerCase())) return false;
