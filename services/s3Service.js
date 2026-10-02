@@ -119,15 +119,77 @@ const uploadBufferToS3 = async (buffer, options = {}) => {
   else if (mimetype.startsWith('audio/')) resourceType = 'audio';
   else if (mimetype === 'application/pdf') resourceType = 'pdf';
 
-  const command = new PutObjectCommand({
-    Bucket: bucket,
-    Key: key,
-    Body: buffer,
-    ContentType: mimetype,
-    CacheControl: 'public, max-age=31536000',
-  });
+  // For large files (> 10MB), use S3 multipart upload with 5MB parts
+  const MULTIPART_THRESHOLD = 10 * 1024 * 1024;
+  const PART_SIZE = 5 * 1024 * 1024;
 
-  await s3Client.send(command);
+  if (buffer.length > MULTIPART_THRESHOLD) {
+    const {
+      CreateMultipartUploadCommand,
+      UploadPartCommand,
+      CompleteMultipartUploadCommand,
+      AbortMultipartUploadCommand,
+    } = require('@aws-sdk/client-s3');
+    let uploadId;
+    try {
+      const createRes = await s3Client.send(new CreateMultipartUploadCommand({
+        Bucket: bucket,
+        Key: key,
+        ContentType: mimetype,
+        CacheControl: 'public, max-age=31536000',
+      }));
+      uploadId = createRes.UploadId;
+
+      const numParts = Math.ceil(buffer.length / PART_SIZE);
+      const parts = [];
+
+      for (let i = 0; i < numParts; i++) {
+        const start = i * PART_SIZE;
+        const end = Math.min(start + PART_SIZE, buffer.length);
+        const partBuffer = buffer.subarray(start, end);
+        const partNumber = i + 1;
+
+        const uploadPartRes = await s3Client.send(new UploadPartCommand({
+          Bucket: bucket,
+          Key: key,
+          UploadId: uploadId,
+          PartNumber: partNumber,
+          Body: partBuffer,
+        }));
+
+        parts.push({
+          PartNumber: partNumber,
+          ETag: uploadPartRes.ETag,
+        });
+      }
+
+      await s3Client.send(new CompleteMultipartUploadCommand({
+        Bucket: bucket,
+        Key: key,
+        UploadId: uploadId,
+        MultipartUpload: { Parts: parts },
+      }));
+    } catch (multipartErr) {
+      if (uploadId) {
+        await s3Client.send(new AbortMultipartUploadCommand({
+          Bucket: bucket,
+          Key: key,
+          UploadId: uploadId,
+        })).catch(() => {});
+      }
+      throw multipartErr;
+    }
+  } else {
+    const command = new PutObjectCommand({
+      Bucket: bucket,
+      Key: key,
+      Body: buffer,
+      ContentType: mimetype,
+      CacheControl: 'public, max-age=31536000',
+    });
+
+    await s3Client.send(command);
+  }
 
   const fileUrl = getS3Url(key);
 

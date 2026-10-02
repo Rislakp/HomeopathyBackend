@@ -177,11 +177,18 @@ app.use(express.urlencoded({ limit: '1mb', extended: true }));
 app.use(requestLogger);
 
 // â”€â”€ Request timeout middleware â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-// Uses 120s timeout for video uploads/recordings, 30s for general REST endpoints.
+// Upload routes (video/recording/demo-video) get 5 minutes to complete the
+// full cycle: receive body → S3 multipart upload → DB save → JSON response.
+// General REST endpoints are capped at 30 seconds.
 app.use((req, res, next) => {
   const url = (req.originalUrl || req.url || '').toLowerCase();
-  const isUploadRoute = url.includes('/upload') || url.includes('/recordings') || url.includes('/media');
-  const timeoutMs = isUploadRoute ? 60000 : 30000;
+  const isUploadRoute =
+    url.includes('/upload') ||
+    url.includes('/recording') ||
+    url.includes('/live-record') ||
+    url.includes('/demo-video') ||
+    url.includes('/media');
+  const timeoutMs = isUploadRoute ? 300000 : 30000;
 
   res.setTimeout(timeoutMs, () => {
     if (!res.headersSent) {
@@ -382,10 +389,11 @@ const startServer = async () => {
       console.log(`ðŸš€ Server running on port ${PORT}`);
     });
 
-    // Normal requests are capped by middleware at 30s; route-level response
-    // timeouts allow uploads/extraction up to 60s. Do not leave a 10-minute
-    // global socket timeout that masks stalled database work.
-    server.timeout = 35000;
+    // Disable the Node.js socket-level timeout so that the per-route
+    // res.setTimeout() middleware is the sole timeout mechanism.
+    // Render's reverse proxy enforces its own outer deadline (26 min),
+    // so we do not need a redundant socket cut that races with large uploads.
+    server.timeout = 0;
     server.keepAliveTimeout = 65000;
     server.headersTimeout = 66000;
 

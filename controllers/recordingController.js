@@ -424,7 +424,7 @@ exports.getRecordings = async (req, res) => {
     const [total, recordings] = await Promise.all([
       Recording.countDocuments(filter),
       Recording.find(filter)
-        .select('_id courseId moduleId lessonId courseName moduleName lessonTitle streamUrl recordedVideoUrl liveClassUrl recordingFileUrl duration status width height bytes format resolution qualityTag createdAt updatedAt')
+        .select('_id courseId moduleId lessonId courseName moduleName lessonTitle streamUrl recordedVideoUrl liveClassUrl recordingFileUrl duration status width height bytes format resolution qualityTag s3Key storageProvider createdAt updatedAt')
         .sort({ createdAt: -1 })
         .skip(skip)
         .limit(limit)

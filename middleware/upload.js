@@ -85,8 +85,11 @@ const extractCleanNameAndExt = (originalName, fallbackExt = '') => {
   return { cleanBaseName, ext, fullName };
 };
 
-// Max file upload limit: 200MB to support large video streams and live recordings
-const MAX_UPLOAD_SIZE = parseInt(process.env.MAX_UPLOAD_SIZE_BYTES || '', 10) || 200 * 1024 * 1024;
+// No application-level file size cap — Render's infrastructure is the constraint.
+// Set MAX_UPLOAD_SIZE_BYTES in .env only if you need an explicit hard limit.
+const MAX_UPLOAD_SIZE = process.env.MAX_UPLOAD_SIZE_BYTES
+  ? parseInt(process.env.MAX_UPLOAD_SIZE_BYTES, 10)
+  : Infinity;
 
 // File filter with informative error messages
 const fileFilter = (req, file, cb) => {
@@ -102,7 +105,7 @@ const fileFilter = (req, file, cb) => {
 const upload = multer({
   storage: multer.memoryStorage(),
   limits: {
-    fileSize: MAX_UPLOAD_SIZE,
+    fileSize: isFinite(MAX_UPLOAD_SIZE) ? MAX_UPLOAD_SIZE : undefined,
   },
   fileFilter,
 });
@@ -111,9 +114,10 @@ const handleUploadError = (err, req, res, next) => {
   if (!err) return next();
 
   if (err.code === 'LIMIT_FILE_SIZE') {
+    const limitMb = isFinite(MAX_UPLOAD_SIZE) ? `${Math.round(MAX_UPLOAD_SIZE / 1024 / 1024)}MB` : 'the configured';
     return res.status(413).json({
       success: false,
-      message: 'File size exceeds the allowed limit (200MB). Please select a smaller file.',
+      message: `File size exceeds the allowed limit (${limitMb}). Please select a smaller file.`,
       error: err.message,
     });
   }

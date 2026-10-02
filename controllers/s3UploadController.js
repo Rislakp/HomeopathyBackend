@@ -186,11 +186,38 @@ const completeMultipartUpload = async (req, res) => {
       return fail(res, 400, 'Uploaded video content type does not match contentType.');
     }
     log('completed', { key, partCount: normalized.length, userId: req.user?.id });
+    const s3Url = getS3Url(key);
+    let linkedRecording = null;
+    if (req.body?.recordingId && mongoose.Types.ObjectId.isValid(req.body.recordingId)) {
+      try {
+        const recording = await Recording.findById(req.body.recordingId);
+        if (recording) {
+          recording.s3Key = key;
+          recording.storageProvider = 's3';
+          recording.recordedVideoUrl = s3Url;
+          recording.recordingFileUrl = s3Url;
+          recording.status = 'stopped';
+          if (objectMetadata.ContentLength) {
+            recording.bytes = objectMetadata.ContentLength;
+          }
+          await recording.save();
+          linkedRecording = recording;
+        }
+      } catch (recErr) {
+        console.warn('[S3 multipart] Failed to link recording to completed upload:', recErr.message);
+      }
+    }
+
     return res.json({
       success: true,
       key,
+      s3Key: key,
+      storageProvider: 's3',
       location: result.Location,
+      secure_url: s3Url,
+      url: s3Url,
       etag: result.ETag,
+      recording: linkedRecording,
       media: makeReference({
         key,
         fileName: safeFileName(req.body?.fileName) || key.split('/').pop(),

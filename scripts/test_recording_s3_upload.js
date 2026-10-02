@@ -227,6 +227,7 @@ async function runTests() {
     console.log('  ✅ Both S3 recording and legacy Cloudinary recording displayed correctly in list');
 
     // -------------------------------------------------------------
+    // -------------------------------------------------------------
     // Test 5: S3 media access-url resolution for the recording
     // -------------------------------------------------------------
     console.log('\nTest 5: S3 media access-url resolution (/api/s3-upload/media/access-url)');
@@ -250,6 +251,58 @@ async function runTests() {
     assert.strictEqual(accessRes.body.s3Key, mockRecordingDoc.s3Key);
     assert.match(accessRes.body.url, /X-Amz-Signature=/);
     console.log('  ✅ Recording S3 key successfully resolves to signed SigV4 playback URL');
+
+    // -------------------------------------------------------------
+    // Test 6: Multipart S3 upload completion with recordingId link
+    // -------------------------------------------------------------
+    console.log('\nTest 6: S3 Multipart upload completion with recordingId link');
+    const originalSend = config.s3Client.send;
+    const multipartRecDoc = new Recording({
+      _id: new mongoose.Types.ObjectId(),
+      courseName: 'Organon Advanced',
+      lessonTitle: 'Large Live Class',
+      status: 'recording',
+    });
+    multipartRecDoc.save = async function() { return this; };
+    Recording.findById = async (id) => {
+      if (id.toString() === multipartRecDoc._id.toString()) return multipartRecDoc;
+      return null;
+    };
+
+    config.s3Client.send = async (command) => {
+      if (command.constructor.name === 'CompleteMultipartUploadCommand') {
+        return {
+          Location: 'https://whitecoat-media-prod.s3.us-east-1.amazonaws.com/videos/1790934552987-multipart-rec.mp4',
+          ETag: '"mock-multipart-etag"',
+        };
+      }
+      if (command.constructor.name === 'HeadObjectCommand') {
+        return { ContentLength: 50 * 1024 * 1024, ContentType: 'video/mp4' };
+      }
+      return originalSend.call(config.s3Client, command);
+    };
+
+    const multipartCompleteRes = makeResponse();
+    await s3UploadController.completeMultipartUpload({
+      body: {
+        uploadId: 'mock-upload-id-12345',
+        key: 'videos/1790934552987-multipart-rec.mp4',
+        parts: [{ partNumber: 1, etag: '0123456789abcdef0123456789abcdef' }],
+        recordingId: multipartRecDoc._id.toString(),
+      },
+      user: { id: 'admin-1', role: 'admin' },
+    }, multipartCompleteRes);
+
+    assert.strictEqual(multipartCompleteRes.statusCode, 200);
+    assert.strictEqual(multipartCompleteRes.body.success, true);
+    assert.strictEqual(multipartCompleteRes.body.storageProvider, 's3');
+    assert.strictEqual(multipartCompleteRes.body.s3Key, 'videos/1790934552987-multipart-rec.mp4');
+    assert.strictEqual(multipartRecDoc.s3Key, 'videos/1790934552987-multipart-rec.mp4');
+    assert.strictEqual(multipartRecDoc.storageProvider, 's3');
+    assert.strictEqual(multipartRecDoc.status, 'stopped');
+    assert.strictEqual(multipartRecDoc.bytes, 50 * 1024 * 1024);
+    config.s3Client.send = originalSend;
+    console.log('  ✅ Large recording linked via S3 multipart completion flow');
 
     // Cleanup
     Recording.findById = origFindById;
