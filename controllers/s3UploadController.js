@@ -364,7 +364,7 @@ const getMediaAccessUrl = async (req, res) => {
   }
 
   const key = getS3KeyFromUrl(trimmedRawKey) || trimmedRawKey;
-  const prefix = ['videos/', 'images/', 'pdfs/'].find((item) => typeof key === 'string' && key.startsWith(item));
+  const prefix = ['videos/', 'images/', 'pdfs/', 'live_records/'].find((item) => typeof key === 'string' && key.startsWith(item));
   if (!prefix || !validStoredKey(key, prefix.slice(0, -1))) return fail(res, 400, 'Invalid S3 media key.');
 
   try {
@@ -579,7 +579,7 @@ const getMediaAccessUrl = async (req, res) => {
     }
 
     // 4. Generate SigV4 signed URL
-    const contentType = prefix === 'videos/' ? undefined : (prefix === 'pdfs/' ? 'application/pdf' : undefined);
+    const contentType = (prefix === 'videos/' || prefix === 'live_records/') ? undefined : (prefix === 'pdfs/' ? 'application/pdf' : undefined);
     const url = await getSignedUrl(s3Client, new GetObjectCommand({
       Bucket: bucket,
       Key: key,
