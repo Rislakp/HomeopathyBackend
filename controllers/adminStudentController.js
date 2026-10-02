@@ -1471,12 +1471,10 @@ async function createAdminStudent(req, res) {
 
     let linkedUser = await User.findOne({ email: cleanEmail });
     if (!linkedUser && password) {
-      const bcrypt = require('bcryptjs');
-      const hashedPassword = await bcrypt.hash(password, 10);
       linkedUser = await User.create({
         name: String(name).trim(),
         email: cleanEmail,
-        password: hashedPassword,
+        password: password,
         role: 'student',
         phone: phone ? String(phone).trim() : '',
         contactNumber: phone ? String(phone).trim() : '',
