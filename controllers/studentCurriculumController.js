@@ -377,18 +377,31 @@ const getMyCourses = async (req, res) => {
     if (isStaff) {
       courses = await Course.find({ status: 'Published' }).sort({ createdAt: -1 });
     } else {
-      const courseRef = student?.courseRef || req.user?.courseRef;
-      const courseId = student?.courseId || req.user?.courseId || student?.registeredCourseId || req.user?.registeredCourseId;
+      // ── Multi-course: build OR query from all enrolled course IDs ────────────
+      const { getStudentEnrolledCourseIds } = require('../utils/courseAccessHelper');
+      const { rawIds, objectIds } = getStudentEnrolledCourseIds(student || {
+        courseId: req.user?.courseId,
+        courseRef: req.user?.courseRef,
+        courseIds: req.user?.courseIds || [],
+        course: req.user?.course,
+      });
+
+      // Also include course title string from student/user
       const courseTitle = student?.course || req.user?.course || req.user?.preferredCourse;
+
       const queryOr = [];
 
-      if (courseRef && require('mongoose').Types.ObjectId.isValid(courseRef)) {
-        queryOr.push({ _id: courseRef });
+      if (objectIds.length > 0) {
+        queryOr.push({ _id: { $in: objectIds } });
       }
-      if (courseId) {
-        queryOr.push({ courseId: courseId });
-        if (require('mongoose').Types.ObjectId.isValid(courseId)) {
-          queryOr.push({ _id: courseId });
+      if (rawIds.length > 0) {
+        queryOr.push({ courseId: { $in: rawIds } });
+        // Also try matching ObjectId _id for any valid ObjectIds in rawIds
+        const objIdMatches = rawIds
+          .filter(id => require('mongoose').Types.ObjectId.isValid(id))
+          .map(id => new (require('mongoose').Types.ObjectId)(id));
+        if (objIdMatches.length > 0) {
+          queryOr.push({ _id: { $in: objIdMatches } });
         }
       }
       if (courseTitle) {
@@ -498,6 +511,7 @@ const getMyCourses = async (req, res) => {
     });
   }
 };
+
 
 /**
  * GET /api/student/courses/:courseId/learn

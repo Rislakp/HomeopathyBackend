@@ -166,15 +166,24 @@ exports.getDemoVideos = async (req, res) => {
         ]
       };
     } else if (!isStaff && req.user) {
-      const studentCourseRef = req.user.courseRef;
-      const studentCourseId = req.user.courseId;
+      // ── Multi-course: use all enrolled course IDs ──────────────────────────
+      const { getStudentEnrolledCourseIds } = require('../utils/courseAccessHelper');
+      const enrolledSource = {
+        courseIds: Array.isArray(req.user.courseIds) ? req.user.courseIds : [],
+        courseId: req.user.courseId || '',
+        courseRef: req.user.courseRef || null,
+        course: req.user.course || '',
+      };
+      const { rawIds, objectIds } = getStudentEnrolledCourseIds(enrolledSource);
 
       const courseOrFilter = [];
-      if (studentCourseId) {
-        courseOrFilter.push({ courseId: studentCourseId });
-      }
-      if (studentCourseRef && mongoose.Types.ObjectId.isValid(studentCourseRef)) {
-        courseOrFilter.push({ courseRef: new mongoose.Types.ObjectId(studentCourseRef) });
+      if (objectIds.length > 0) courseOrFilter.push({ courseRef: { $in: objectIds } });
+      if (rawIds.length > 0) {
+        courseOrFilter.push({ courseId: { $in: rawIds } });
+        const moreObjIds = rawIds
+          .filter(id => mongoose.Types.ObjectId.isValid(id))
+          .map(id => new mongoose.Types.ObjectId(id));
+        if (moreObjIds.length > 0) courseOrFilter.push({ courseRef: { $in: moreObjIds } });
       }
 
       if (courseOrFilter.length > 0) {

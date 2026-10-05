@@ -381,11 +381,19 @@ exports.getRecordings = async (req, res) => {
     // Add student authorization filter
     const isStaff = ['admin', 'superadmin'].includes((req.user?.role || '').toLowerCase());
     if (req.user && !isStaff) {
-      const studentCourseRef = req.user.courseRef;
-      const studentCourseId = req.user.courseId;
+      // ── Multi-course: use all enrolled course IDs ─────────────────────────
+      const { getStudentEnrolledCourseIds } = require('../utils/courseAccessHelper');
+      // Build a temporary student-shaped object from JWT claims
+      const enrolledSource = {
+        courseIds: Array.isArray(req.user.courseIds) ? req.user.courseIds : [],
+        courseId: req.user.courseId || '',
+        courseRef: req.user.courseRef || null,
+        course: req.user.course || '',
+      };
+      const { rawIds, objectIds } = getStudentEnrolledCourseIds(enrolledSource);
       const studentCourseTitle = req.user.course;
 
-      if (!studentCourseRef && !studentCourseId && !studentCourseTitle) {
+      if (rawIds.length === 0 && objectIds.length === 0 && !studentCourseTitle) {
         return res.status(200).json({
           success: true,
           message: 'Registered course could not be loaded or is not assigned to student profile.',
@@ -397,15 +405,15 @@ exports.getRecordings = async (req, res) => {
       }
 
       const courseOrFilter = [];
-      if (studentCourseRef && mongoose.Types.ObjectId.isValid(studentCourseRef)) {
-        courseOrFilter.push({ courseId: new mongoose.Types.ObjectId(studentCourseRef) });
+      if (objectIds.length > 0) courseOrFilter.push({ courseId: { $in: objectIds } });
+      if (rawIds.length > 0) {
+        courseOrFilter.push({ courseId: { $in: rawIds } });
+        const moreObjIds = rawIds
+          .filter(id => mongoose.Types.ObjectId.isValid(id))
+          .map(id => new mongoose.Types.ObjectId(id));
+        if (moreObjIds.length > 0) courseOrFilter.push({ courseId: { $in: moreObjIds } });
       }
-      if (studentCourseId) {
-        courseOrFilter.push({ courseId: studentCourseId });
-      }
-      if (studentCourseTitle) {
-        courseOrFilter.push({ courseName: studentCourseTitle });
-      }
+      if (studentCourseTitle) courseOrFilter.push({ courseName: studentCourseTitle });
 
       if (courseOrFilter.length > 0) {
         filter.$and = filter.$or ? [{ $or: filter.$or }, { $or: courseOrFilter }] : courseOrFilter;

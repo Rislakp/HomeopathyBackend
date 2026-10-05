@@ -200,6 +200,27 @@ async function getStudentProfile(req, res) {
     const courseRef = (studentDoc && studentDoc.courseRef) || (userDoc && userDoc.courseRef) || req.user?.courseRef || null;
     const courseId = (studentDoc && studentDoc.courseId) || (userDoc && userDoc.courseId) || req.user?.courseId || (courseRef ? courseRef.toString() : '');
 
+    // ── Multi-course: collect all enrolled course IDs ────────────────────────
+    const seenIds = new Set();
+    const registeredCourseIds = [];
+    const addRCId = (id) => {
+      const s = String(id || '').trim();
+      if (!s || seenIds.has(s)) return;
+      seenIds.add(s);
+      registeredCourseIds.push(s);
+    };
+    if (studentDoc) {
+      if (Array.isArray(studentDoc.courseIds)) studentDoc.courseIds.forEach(addRCId);
+      if (studentDoc.courseId) addRCId(studentDoc.courseId);
+      if (studentDoc.courseRef) addRCId(String(studentDoc.courseRef));
+    }
+    if (userDoc) {
+      if (Array.isArray(userDoc.courseIds)) userDoc.courseIds.forEach(addRCId);
+      if (userDoc.courseId) addRCId(userDoc.courseId);
+    }
+    if (Array.isArray(req.user?.courseIds)) req.user.courseIds.forEach(addRCId);
+    if (courseId) addRCId(courseId);
+
     const resolvedSubscriptionStatus = (studentDoc && (studentDoc.subscriptionStatus || studentDoc.subscription)) ||
                                        (userDoc && (userDoc.subscriptionStatus || userDoc.subscription)) ||
                                        subscription || 'Active';
@@ -211,9 +232,13 @@ async function getStudentProfile(req, res) {
       email: studentEmail,
       phone: contactNumber,
       contactNumber,
+      // Legacy single-course fields (backward compatibility)
       registeredCourseId: courseId,
       courseId,
       courseRef: courseRef ? courseRef.toString() : null,
+      // Multi-course fields
+      courseIds: registeredCourseIds,
+      registeredCourseIds: registeredCourseIds,
       course,
       subscription,
       subscriptionStatus: resolvedSubscriptionStatus,
@@ -345,63 +370,85 @@ async function getAvailableExams(req, res) {
       }
       filter.$or = specificCourseOr;
     } else {
-      let courseDoc = null;
       if (!isStaff && studentDoc && !isExplicitGrandMock) {
-        const studentCourseRef = studentDoc.courseRef || req.user?.courseRef;
-        const studentCourseId = studentDoc.courseId || req.user?.courseId;
-        const studentCourseTitle = studentDoc.course || studentDoc.preferredCourse || req.user?.course;
+        // ── Multi-course: collect all enrolled course IDs ──────────────────────
+        const { getStudentEnrolledCourseIds } = require('../../utils/courseAccessHelper');
+        const { rawIds, objectIds } = getStudentEnrolledCourseIds(studentDoc);
 
+        // Also pull from req.user (JWT claims) for redundancy
+        if (Array.isArray(req.user?.courseIds)) {
+          req.user.courseIds.forEach(id => {
+            const s = String(id || '').trim();
+            if (s && !rawIds.includes(s)) rawIds.push(s);
+          });
+        }
+        if (req.user?.courseId && !rawIds.includes(req.user.courseId)) {
+          rawIds.push(req.user.courseId);
+        }
+
+        // Batch-resolve all enrolled courses from DB to get every identifier form
         const CourseModel = mongoose.models.Course || require('../../models/Course');
-        if (studentCourseRef && mongoose.Types.ObjectId.isValid(studentCourseRef)) {
-          courseDoc = await CourseModel.findById(studentCourseRef).lean();
+        const courseOrConditions = [];
+        if (objectIds.length > 0) {
+          courseOrConditions.push({ _id: { $in: objectIds } });
         }
-        if (!courseDoc && studentCourseId) {
-          courseDoc = await CourseModel.findOne({
-            $or: [
-              ...(mongoose.Types.ObjectId.isValid(studentCourseId) ? [{ _id: studentCourseId }] : []),
-              { courseId: studentCourseId }
-            ]
-          }).lean();
+        if (rawIds.length > 0) {
+          courseOrConditions.push({ courseId: { $in: rawIds } });
+          const moreObjIds = rawIds
+            .filter(id => mongoose.Types.ObjectId.isValid(id))
+            .map(id => new mongoose.Types.ObjectId(id));
+          if (moreObjIds.length > 0) {
+            courseOrConditions.push({ _id: { $in: moreObjIds } });
+          }
         }
-        if (!courseDoc && studentCourseTitle) {
-          courseDoc = await CourseModel.findOne({
-            $or: [{ courseTitle: studentCourseTitle }, { title: studentCourseTitle }]
-          }).lean();
+        // Also add course title
+        const studentCourseTitle = studentDoc.course || studentDoc.preferredCourse || req.user?.course;
+        if (studentCourseTitle) {
+          courseOrConditions.push({ courseTitle: studentCourseTitle });
+          courseOrConditions.push({ title: studentCourseTitle });
         }
 
         const courseOrFilter = [];
-        if (studentCourseRef) {
-          if (mongoose.Types.ObjectId.isValid(studentCourseRef)) {
-            courseOrFilter.push({ courseId: new mongoose.Types.ObjectId(studentCourseRef) });
-          }
-          courseOrFilter.push({ courseId: studentCourseRef.toString() });
-        }
-        if (courseDoc) {
-          if (courseDoc._id) {
-            courseOrFilter.push({ courseId: courseDoc._id });
-            courseOrFilter.push({ courseId: courseDoc._id.toString() });
-          }
-          if (courseDoc.courseId) {
-            courseOrFilter.push({ courseId: courseDoc.courseId });
-          }
-          if (courseDoc.courseTitle) {
-            courseOrFilter.push({ courseName: courseDoc.courseTitle });
+
+        if (courseOrConditions.length > 0) {
+          const enrolledCourseDocs = await CourseModel.find({ $or: courseOrConditions })
+            .select('_id courseId courseTitle')
+            .lean();
+
+          for (const cd of enrolledCourseDocs) {
+            if (cd._id) {
+              courseOrFilter.push({ courseId: cd._id });
+              courseOrFilter.push({ courseId: cd._id.toString() });
+            }
+            if (cd.courseId) courseOrFilter.push({ courseId: cd.courseId });
+            if (cd.courseTitle) courseOrFilter.push({ courseName: cd.courseTitle });
           }
         }
-        if (studentCourseId) {
-          courseOrFilter.push({ courseId: studentCourseId });
+
+        // Add raw string IDs directly (for exams that store courseId as custom string)
+        for (const rawId of rawIds) {
+          courseOrFilter.push({ courseId: rawId });
         }
         if (studentCourseTitle) {
           courseOrFilter.push({ courseName: studentCourseTitle });
         }
 
         if (courseOrFilter.length > 0) {
+          // Deduplicate
+          const seen = new Set();
+          const uniqueFilter = courseOrFilter.filter(f => {
+            const k = JSON.stringify(f);
+            if (seen.has(k)) return false;
+            seen.add(k);
+            return true;
+          });
+
           if (isExplicitCourseTest) {
-            filter.$or = courseOrFilter;
+            filter.$or = uniqueFilter;
           } else {
             // Allow enrolled course exams OR grand mocks
             filter.$or = [
-              ...courseOrFilter.map(c => ({ ...c, testType: 'course_test' })),
+              ...uniqueFilter.map(c => ({ ...c, testType: 'course_test' })),
               { testType: 'grand_mock' },
               { testType: { $regex: /^(grand[-_ ]?mock|mock)$/i } },
               { testType: { $exists: false } },

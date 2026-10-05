@@ -711,6 +711,7 @@ async function getAllGrandMocks(req, res) {
       // For explicit course tests, apply student course filtering if student
       if (req.user && req.user.role === 'student') {
         const Student = require('../models/Student');
+        const { getStudentEnrolledCourseIds } = require('../utils/courseAccessHelper');
         const studentId = req.user.studentId || req.user.id || req.user._id;
         let student = null;
         if (studentId && mongoose.Types.ObjectId.isValid(studentId)) {
@@ -726,14 +727,21 @@ async function getAllGrandMocks(req, res) {
         }
 
         if (student) {
+          // ── Multi-course: collect ALL enrolled course IDs ────────────────────
+          const { rawIds, objectIds } = getStudentEnrolledCourseIds(student);
+          // Also include from JWT claims (in case DB doc is stale)
+          if (Array.isArray(req.user.courseIds)) {
+            req.user.courseIds.forEach(id => { const s = String(id||'').trim(); if (s && !rawIds.includes(s)) rawIds.push(s); });
+          }
+
           const courseOrFilter = [];
-          if (student.courseRef) {
-            courseOrFilter.push({ courseId: student.courseRef });
-            courseOrFilter.push({ courseId: student.courseRef.toString() });
+          if (objectIds.length > 0) courseOrFilter.push({ courseId: { $in: objectIds } });
+          if (rawIds.length > 0) {
+            courseOrFilter.push({ courseId: { $in: rawIds } });
+            const moreObjIds = rawIds.filter(id => mongoose.Types.ObjectId.isValid(id)).map(id => new mongoose.Types.ObjectId(id));
+            if (moreObjIds.length > 0) courseOrFilter.push({ courseId: { $in: moreObjIds } });
           }
-          if (student.courseId) {
-            courseOrFilter.push({ courseId: student.courseId });
-          }
+
           if (courseOrFilter.length > 0) {
             if (!filter.courseId) {
               filter.$or = courseOrFilter;
@@ -754,6 +762,7 @@ async function getAllGrandMocks(req, res) {
       }
       if (req.user && req.user.role === 'student') {
         const Student = require('../models/Student');
+        const { getStudentEnrolledCourseIds } = require('../utils/courseAccessHelper');
         const studentId = req.user.studentId || req.user.id || req.user._id;
         let student = null;
         if (studentId && mongoose.Types.ObjectId.isValid(studentId)) {
@@ -768,14 +777,22 @@ async function getAllGrandMocks(req, res) {
           student = await Student.findOne({ email: req.user.email.toLowerCase() });
         }
 
+        // ── Multi-course: collect ALL enrolled course IDs ──────────────────────
+        const enrolledSource = student || {};
+        const { rawIds, objectIds } = getStudentEnrolledCourseIds(enrolledSource);
+        // Also include from JWT claims (in case DB doc is stale)
+        if (Array.isArray(req.user.courseIds)) {
+          req.user.courseIds.forEach(id => { const s = String(id||'').trim(); if (s && !rawIds.includes(s)) rawIds.push(s); });
+        }
+
         const courseOrFilter = [];
-        if (student?.courseRef) {
-          courseOrFilter.push({ courseId: student.courseRef });
-          courseOrFilter.push({ courseId: student.courseRef.toString() });
+        if (objectIds.length > 0) courseOrFilter.push({ courseId: { $in: objectIds } });
+        if (rawIds.length > 0) {
+          courseOrFilter.push({ courseId: { $in: rawIds } });
+          const moreObjIds = rawIds.filter(id => mongoose.Types.ObjectId.isValid(id)).map(id => new mongoose.Types.ObjectId(id));
+          if (moreObjIds.length > 0) courseOrFilter.push({ courseId: { $in: moreObjIds } });
         }
-        if (student?.courseId) {
-          courseOrFilter.push({ courseId: student.courseId });
-        }
+
         filter.$or = [
           ...courseOrFilter.map(c => ({ ...c, testType: 'course_test' })),
           { testType: 'grand_mock' },

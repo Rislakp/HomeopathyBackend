@@ -1,4 +1,4 @@
-﻿const mongoose = require('mongoose');
+const mongoose = require('mongoose');
 const jwt = require('jsonwebtoken');
 const User = require('../models/User');
 const Course = require('../models/Course');
@@ -31,6 +31,26 @@ const generateToken = (user, studentDoc = null) => {
 
   const studentId = studentDoc ? studentDoc._id.toString() : (user.studentId || null);
 
+  // ── Multi-course: collect all enrolled course IDs for JWT claim ──────────
+  const seenIds = new Set();
+  const courseIdsArray = [];
+  const addCId = (id) => {
+    const s = String(id || '').trim();
+    if (!s || seenIds.has(s)) return;
+    seenIds.add(s);
+    courseIdsArray.push(s);
+  };
+  // From studentDoc (authoritative source)
+  if (studentDoc) {
+    if (Array.isArray(studentDoc.courseIds)) studentDoc.courseIds.forEach(addCId);
+    if (studentDoc.courseId) addCId(studentDoc.courseId);
+    if (studentDoc.courseRef) addCId(String(studentDoc.courseRef));
+  }
+  // From user (fallback)
+  if (Array.isArray(user.courseIds)) user.courseIds.forEach(addCId);
+  if (user.courseId) addCId(user.courseId);
+  if (courseId) addCId(courseId);
+
   return jwt.sign(
     {
       id: user._id ? user._id.toString() : user.id,
@@ -38,8 +58,11 @@ const generateToken = (user, studentDoc = null) => {
       studentId: studentId,
       email: user.email,
       role: role,
+      // Legacy single-course claim (backward compatibility)
       courseId: courseId,
       courseRef: courseRef ? courseRef.toString() : null,
+      // Multi-course claim
+      courseIds: courseIdsArray,
     },
     secret,
     {
@@ -97,6 +120,29 @@ const buildUserResponse = async (user, studentDoc = null, options = {}) => {
     courseTitle = targetCourse.courseTitle || targetCourse.title || courseTitle;
   }
 
+  // ── Multi-course: collect all enrolled course IDs ────────────────────────
+  const seenRCIds = new Set();
+  const registeredCourseIds = [];
+  const addRCId = (id) => {
+    const s = String(id || '').trim();
+    if (!s || seenRCIds.has(s)) return;
+    seenRCIds.add(s);
+    registeredCourseIds.push(s);
+  };
+  if (studentDoc) {
+    if (Array.isArray(studentDoc.courseIds)) studentDoc.courseIds.forEach(addRCId);
+    if (studentDoc.courseId) addRCId(studentDoc.courseId);
+    if (studentDoc.courseRef) addRCId(String(studentDoc.courseRef));
+  }
+  if (Array.isArray(user.courseIds)) user.courseIds.forEach(addRCId);
+  if (user.courseId) addRCId(user.courseId);
+  if (courseId) addRCId(courseId);
+  // Ensure the resolved primary courseId is in registeredCourseIds after targetCourse resolution
+  if (targetCourse) {
+    const resolvedId = targetCourse.courseId || (targetCourse._id ? targetCourse._id.toString() : '');
+    if (resolvedId) addRCId(resolvedId);
+  }
+
   const response = {
     id: user._id ? user._id.toString() : user.id,
     name: user.name,
@@ -107,8 +153,13 @@ const buildUserResponse = async (user, studentDoc = null, options = {}) => {
     qualification: user.qualification || '',
     preferredCourse: preferredCourse,
     course: courseTitle,
+    // Legacy single-course fields (backward compatibility)
     courseId: courseId,
+    registeredCourseId: courseId,
     courseRef: courseRef ? courseRef.toString() : null,
+    // Multi-course fields
+    courseIds: registeredCourseIds,
+    registeredCourseIds: registeredCourseIds,
     dateOfBirth: user.dateOfBirth || '',
     courses: [],
   };
@@ -267,16 +318,36 @@ const registerStudent = async (req, res) => {
     const finalPhone = (contactNumber || phone || '').toString().trim();
     const finalQualification = (qualification || '').toString().trim();
     const finalName = (name || '').toString().trim();
-    const finalCourse = (course || selectedCourse || preferredCourse || '').toString().trim();
+
+    // ── Multi-course: resolve selected course IDs ─────────────────────────────
+    // Accept: registeredCourseIds[], selectedCourses[], courses[]
+    // Or legacy single-value: course, selectedCourse, preferredCourse
+    const rawInput = req.body.registeredCourseIds || req.body.selectedCourses || req.body.courses || null;
+    let selectedCourseIds = [];
+
+    if (rawInput !== null && rawInput !== undefined) {
+      if (Array.isArray(rawInput)) {
+        selectedCourseIds = rawInput.map(c => String(c).trim()).filter(Boolean);
+      } else if (typeof rawInput === 'string' && rawInput.trim()) {
+        selectedCourseIds = [rawInput.trim()];
+      }
+    }
+    // Fall back to legacy single-course fields
+    const singleLegacy = (course || selectedCourse || preferredCourse || '').toString().trim();
+    if (selectedCourseIds.length === 0 && singleLegacy) {
+      selectedCourseIds = [singleLegacy];
+    }
+    // De-duplicate
+    selectedCourseIds = [...new Set(selectedCourseIds)];
+    // Primary course (first selected) for legacy fields
+    const finalCourse = selectedCourseIds[0] || '';
 
     // -----------------------------
     // VALIDATION
     // -----------------------------
     const errors = [];
 
-    if (!finalName) {
-      errors.push('Name is required');
-    }
+    if (!finalName) errors.push('Name is required');
 
     if (!email || typeof email !== 'string' || !email.trim()) {
       errors.push('Email is required');
@@ -288,35 +359,28 @@ const registerStudent = async (req, res) => {
       errors.push('Password must be at least 6 characters');
     }
 
-    if (!finalDob) {
-      errors.push('Date of birth is required');
-    }
+    if (!finalDob) errors.push('Date of birth is required');
+    if (!finalPhone) errors.push('Contact number is required');
+    if (!finalQualification) errors.push('Qualification is required');
 
-    if (!finalPhone) {
-      errors.push('Contact number is required');
-    }
-
-    if (!finalQualification) {
-      errors.push('Qualification is required');
-    }
-
-    if ((course !== undefined || selectedCourse !== undefined || preferredCourse !== undefined) && !finalCourse) {
-      errors.push('Course cannot be empty');
+    // At least one course must be selected
+    if (selectedCourseIds.length === 0) {
+      errors.push('At least one course must be selected');
     }
 
     if (errors.length > 0) {
-      return res.status(400).json({
-        success: false,
-        message: 'Validation failed',
-        errors,
-      });
+      return res.status(400).json({ success: false, message: 'Validation failed', errors });
     }
 
     const cleanEmail = email.trim().toLowerCase();
 
-    let enrolledCourse = null;
-    if (finalCourse) {
-      const cleanCourse = finalCourse.trim();
+    // Resolve each selected course against the DB
+    const resolvedCourses = [];
+    const finalCourseIds = [];
+
+    for (const rawCourseVal of selectedCourseIds) {
+      const cleanCourse = rawCourseVal.trim();
+      if (!cleanCourse) continue;
       const escapedCourse = cleanCourse.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
       const courseQuery = [
         { courseId: new RegExp('^' + escapedCourse + '$', 'i') },
@@ -331,25 +395,45 @@ const registerStudent = async (req, res) => {
       if (/^unani$/i.test(cleanCourse)) {
         courseQuery.push({ category: /^unani$/i });
       }
-      enrolledCourse = await Course.findOne({ $or: courseQuery }).select('_id courseId courseTitle category');
+
+      let foundCourse = null;
+      try {
+        foundCourse = await Course.findOne({ $or: courseQuery }).select('_id courseId courseTitle category').lean();
+      } catch (e) { /* ignore */ }
+
+      if (foundCourse) {
+        const resolvedId = foundCourse.courseId || foundCourse._id.toString();
+        resolvedCourses.push({
+          courseRef: foundCourse._id,
+          courseId: resolvedId,
+          courseTitle: foundCourse.courseTitle || foundCourse.title || cleanCourse,
+        });
+        finalCourseIds.push(resolvedId);
+      } else {
+        // Course not in DB — store raw value (handles UNANI and future courses)
+        console.warn('[registerStudent] Course not found in DB for value="' + cleanCourse + '". Storing as raw string.');
+        finalCourseIds.push(cleanCourse);
+      }
     }
 
-    if (!enrolledCourse) {
-      // Course not found in DB - allow registration to proceed.
-      // preferredCourse is stored as a string; courseRef/courseId will be empty.
-      // This handles valid programs (e.g. UNANI) that may not yet have a
-      // corresponding Course document in the database.
-      console.warn('[registerStudent] Course not found for preferredCourse="' + finalCourse + '". Proceeding without courseRef.');
-    }
+    // Primary single-course values (backward-compatible legacy fields)
+    const primaryResolved = resolvedCourses[0] || null;
+    const resolvedCourseRef = primaryResolved ? primaryResolved.courseRef : null;
+    const resolvedCourseId = primaryResolved
+      ? primaryResolved.courseId
+      : (finalCourseIds[0] || finalCourse);
+    const resolvedCourseTitle = primaryResolved
+      ? primaryResolved.courseTitle
+      : (finalCourseIds[0] || finalCourse);
+
+    // Final de-duplicated courseIds list
+    const uniqueCourseIds = [...new Set(finalCourseIds)];
+
     // -----------------------------
     // CHECK DUPLICATE USER (EMAIL / PHONE)
     // -----------------------------
     const existingUser = await User.findOne({
-      $or: [
-        { email: cleanEmail },
-        { phone: finalPhone },
-        { contactNumber: finalPhone },
-      ],
+      $or: [{ email: cleanEmail }, { phone: finalPhone }, { contactNumber: finalPhone }],
     });
 
     if (existingUser) {
@@ -364,11 +448,7 @@ const registerStudent = async (req, res) => {
 
     if (Student) {
       const existingStudent = await Student.findOne({
-        $or: [
-          { email: cleanEmail },
-          { phone: finalPhone },
-          { contactNumber: finalPhone },
-        ],
+        $or: [{ email: cleanEmail }, { phone: finalPhone }, { contactNumber: finalPhone }],
       });
       if (existingStudent) {
         const isEmailDup = existingStudent.email === cleanEmail;
@@ -380,10 +460,6 @@ const registerStudent = async (req, res) => {
         });
       }
     }
-
-    const resolvedCourseRef = enrolledCourse ? enrolledCourse._id : null;
-    const resolvedCourseId = enrolledCourse ? (enrolledCourse.courseId || enrolledCourse._id.toString()) : '';
-    const resolvedCourseTitle = enrolledCourse ? (enrolledCourse.courseTitle || enrolledCourse.title || finalCourse) : finalCourse;
 
     let createdUser = null;
     let createdStudent = null;
@@ -405,6 +481,7 @@ const registerStudent = async (req, res) => {
         course: resolvedCourseTitle,
         courseId: resolvedCourseId,
         courseRef: resolvedCourseRef,
+        courseIds: uniqueCourseIds,
         status: 'Pending',
         accountStatus: 'Pending',
         isApproved: false,
@@ -427,41 +504,17 @@ const registerStudent = async (req, res) => {
             course: resolvedCourseTitle,
             courseId: resolvedCourseId,
             courseRef: resolvedCourseRef,
+            courseIds: uniqueCourseIds,
             status: 'Pending',
             accountStatus: 'Pending',
             isApproved: false,
             isActive: false,
           });
         } catch (studentErr) {
-          // Log but never block registration â€” Student doc is supplementary
+          // Log but never block registration — Student doc is supplementary
           console.warn('[registerStudent] Student sync warning:', studentErr.message);
         }
       }
-    // -----------------------------
-    // SYNC STUDENT MODEL IF AVAILABLE
-    // -----------------------------
-    let studentDoc = null;
-    if (Student) {
-      try {
-        studentDoc = await Student.create({
-          userId: user._id,
-          name: finalName,
-          email: cleanEmail,
-          dateOfBirth: finalDob,
-          contactNumber: finalPhone,
-          phone: finalPhone,
-          qualification: finalQualification,
-          preferredCourse: finalCourse,
-          course: resolvedCourseTitle,
-          courseId: resolvedCourseId,
-          courseRef: resolvedCourseRef,
-          // course & subscription now have safe defaults in the schema
-        });
-      } catch (studentErr) {
-        // Log but never block registration Ã¢â‚¬â€ Student doc is supplementary
-        console.warn('[registerStudent] Student sync warning:', studentErr.message);
-      }
-    }
 
       // -----------------------------
       // GENERATE TOKEN & RESPONSE
