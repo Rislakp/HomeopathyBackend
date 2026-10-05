@@ -26,6 +26,8 @@ const handleUpload = (req, res, next) => {
 // ==========================================
 
 router.get('/', courseController.getCourses);
+router.get('/enrollment-counts', courseController.getEnrollmentCounts);
+
 router.post('/', handleUpload, courseController.createCourse);
 router.get('/:id', courseController.getCourseById);
 router.put('/:id', handleUpload, courseController.updateCourse);

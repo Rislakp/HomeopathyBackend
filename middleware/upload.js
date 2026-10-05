@@ -295,6 +295,18 @@ const processUploads = async (req, res, next) => {
       }
 
       // ── Strategy C: Local disk fallback (dev only) ────────────────────────
+      // GUARD: If Cloudinary is configured but Strategy B was skipped (e.g. buffer
+      // missing or Cloudinary not reached), do NOT silently save to Render's ephemeral
+      // local disk — that produces broken /uploads URLs that persist in the database
+      // permanently but are unreachable after a server restart.
+      if (isCloudinaryConfigured()) {
+        throw new Error(
+          `File upload failed: Cloudinary is configured but the file "${file.originalname || 'unknown'}" ` +
+          `could not be uploaded (buffer missing or upload skipped). ` +
+          `Please retry the upload. Local disk storage is disabled when Cloudinary is active.`
+        );
+      }
+
       if (file.buffer) {
         const uniqueName = `${Date.now()}-${Math.round(Math.random() * 1e9)}-${sanitizeFilename(file.originalname)}`;
         const localPath = path.join(uploadsDir, uniqueName);

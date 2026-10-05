@@ -1,5 +1,6 @@
 const mimeTypes = require('mime-types');
 const Course = require('../models/Course');
+const Student = require('../models/Student');
 const mongoose = require('mongoose');
 const fs = require('fs');
 const path = require('path');
@@ -2179,3 +2180,108 @@ exports.processAttachments = processAttachments;
 const recordingController = require('./recordingController');
 exports.getLiveRecords = recordingController.getLiveRecords;
 exports.uploadRecording = recordingController.uploadRecording;
+
+// ==========================================
+// COURSE ENROLLMENT COUNTS (Admin Dashboard)
+// ==========================================
+exports.getEnrollmentCounts = async (req, res) => {
+  try {
+    // 1. Aggregate enrolled student counts across the legacy and multi-course fields
+    const countData = await Student.aggregate([
+      {
+        $match: {
+          accountStatus: 'Approved' // Only count approved students
+        }
+      },
+      {
+        $project: {
+          allCourseIds: {
+            $concatArrays: [
+              { $cond: [{ $isArray: '$courseIds' }, '$courseIds', []] },
+              { $cond: [{ $ifNull: ['$courseId', false] }, ['$courseId'], []] },
+              { $cond: [{ $ifNull: ['$courseRef', false] }, [{ $toString: '$courseRef' }], []] },
+              { $cond: [{ $ifNull: ['$course', false] }, ['$course'], []] }
+            ]
+          }
+        }
+      },
+      {
+        $unwind: '$allCourseIds'
+      },
+      {
+        $project: {
+          cleanCourseId: { $toLower: { $trim: { input: '$allCourseIds' } } }
+        }
+      },
+      {
+        $match: {
+          cleanCourseId: { $ne: '' }
+        }
+      },
+      {
+        $group: {
+          _id: '$cleanCourseId',
+          studentIds: { $addToSet: '$_id' }
+        }
+      }
+    ]);
+
+    // 2. Fetch all courses
+    const courses = await Course.find({}).select('_id courseId courseTitle status category price');
+
+    // 3. Create a map to accumulate counts per course, defaulting to 0
+    const enrollmentMap = new Map();
+    
+    courses.forEach(course => {
+      enrollmentMap.set(course._id.toString(), {
+        _id: course._id,
+        courseId: course.courseId || null,
+        courseName: course.courseTitle,
+        studentIdsSet: new Set()
+      });
+    });
+
+    // 4. Map the aggregated counts back to specific Course objects
+    countData.forEach(item => {
+      const idKey = item._id; // this is the lowercased, trimmed ID string
+      let matchedCourseId = null;
+
+      for (const course of courses) {
+        if (
+          (course._id.toString().toLowerCase() === idKey) ||
+          (course.courseId && course.courseId.toLowerCase() === idKey) ||
+          (course.courseTitle && course.courseTitle.toLowerCase() === idKey)
+        ) {
+          matchedCourseId = course._id.toString();
+          break;
+        }
+      }
+
+      if (matchedCourseId) {
+        const courseData = enrollmentMap.get(matchedCourseId);
+        // Add all student IDs from this group to the course's unique set
+        item.studentIds.forEach(studentId => {
+          courseData.studentIdsSet.add(studentId.toString());
+        });
+      }
+    });
+
+    // 5. Transform map to final array format
+    const finalData = Array.from(enrollmentMap.values()).map(courseData => {
+      return {
+        courseId: courseData.courseId,
+        courseName: courseData.courseName,
+        enrolledStudentCount: courseData.studentIdsSet.size
+      };
+    });
+
+    res.status(200).json({
+      success: true,
+      data: finalData
+    });
+
+  } catch (error) {
+    console.error("Error fetching enrollment counts:", error);
+    res.status(500).json({ success: false, message: 'Server error fetching enrollment counts', error: error.message });
+  }
+};
