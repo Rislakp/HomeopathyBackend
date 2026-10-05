@@ -1040,9 +1040,26 @@ async function getAdminStudentById(req, res) {
       });
     }
 
+    // The aggregation preserves the established primary enrolled_course field.
+    // Fetch the enrollment source once so the edit screen also receives every
+    // assigned course and the canonical stored courseIds array.
+    const enrollmentSource = await Student.findOne({
+      $or: [
+        { _id: studentObjectId },
+        { userId: studentObjectId },
+      ],
+    })
+      .select('course courseId courseIds courseRef')
+      .lean();
+    const studentDetails = result[0];
+    studentDetails.courseIds = Array.isArray(enrollmentSource?.courseIds)
+      ? enrollmentSource.courseIds.map((courseId) => String(courseId).trim()).filter(Boolean)
+      : [];
+    studentDetails.enrolled_courses = await getEnrolledCourseDetails(enrollmentSource);
+
     return res.status(200).json({
       success: true,
-      data: result[0]
+      data: studentDetails
     });
   } catch (error) {
     console.error('Error fetching student by ID:', error);
@@ -1301,6 +1318,130 @@ async function resolveCourseAssignment(courseId, course) {
     : { course: rawCourse };
 }
 
+/**
+ * Resolve a submitted multi-course assignment in one database query.
+ * The public courseId is persisted in Student.courseIds, while accepting the
+ * same identifier forms as the legacy single-course assignment.
+ */
+async function resolveCourseAssignments(courseIds) {
+  if (!Array.isArray(courseIds)) {
+    const error = new Error('courseIds must be an array');
+    error.statusCode = 400;
+    throw error;
+  }
+
+  const requestedIds = [];
+  const requestedIdSet = new Set();
+  courseIds.forEach((value) => {
+    const normalizedValue = String(value || '').trim();
+    if (!normalizedValue || requestedIdSet.has(normalizedValue)) return;
+    requestedIdSet.add(normalizedValue);
+    requestedIds.push(normalizedValue);
+  });
+
+  if (requestedIds.length === 0) return [];
+
+  const objectIds = requestedIds
+    .filter((value) => mongoose.Types.ObjectId.isValid(value))
+    .map((value) => new mongoose.Types.ObjectId(value));
+
+  const matchedCourses = await Course.find({
+    $or: [
+      { courseId: { $in: requestedIds } },
+      { courseTitle: { $in: requestedIds } },
+      ...(objectIds.length > 0 ? [{ _id: { $in: objectIds } }] : []),
+    ],
+  })
+    .select('_id courseId courseTitle category price')
+    .lean();
+
+  const courseMap = new Map();
+  matchedCourses.forEach((matchedCourse) => {
+    if (matchedCourse._id) courseMap.set(matchedCourse._id.toString(), matchedCourse);
+    if (matchedCourse.courseId) courseMap.set(String(matchedCourse.courseId).trim(), matchedCourse);
+    if (matchedCourse.courseTitle) {
+      courseMap.set(String(matchedCourse.courseTitle).trim(), matchedCourse);
+      courseMap.set(String(matchedCourse.courseTitle).trim().toLowerCase(), matchedCourse);
+    }
+  });
+
+  const resolvedCourses = requestedIds.map((requestedId) => {
+    const matchedCourse = courseMap.get(requestedId) || courseMap.get(requestedId.toLowerCase());
+    if (!matchedCourse) {
+      const error = new Error(`Assigned course not found in database: ${requestedId}`);
+      error.statusCode = 404;
+      throw error;
+    }
+    return matchedCourse;
+  });
+
+  return resolvedCourses;
+}
+
+/**
+ * Resolve every current student enrollment for the detail response without
+ * changing its established singular enrolled_course contract.
+ */
+async function getEnrolledCourseDetails(student) {
+  if (!student) return [];
+
+  const identifiers = [];
+  const seenIdentifiers = new Set();
+  const addIdentifier = (value) => {
+    const normalizedValue = String(value || '').trim();
+    if (!normalizedValue || seenIdentifiers.has(normalizedValue)) return;
+    seenIdentifiers.add(normalizedValue);
+    identifiers.push(normalizedValue);
+  };
+
+  if (Array.isArray(student.courseIds)) student.courseIds.forEach(addIdentifier);
+  addIdentifier(student.courseId);
+  addIdentifier(student.courseRef);
+  addIdentifier(student.course);
+
+  if (identifiers.length === 0) return [];
+
+  const objectIds = identifiers
+    .filter((value) => mongoose.Types.ObjectId.isValid(value))
+    .map((value) => new mongoose.Types.ObjectId(value));
+  const courses = await Course.find({
+    $or: [
+      { courseId: { $in: identifiers } },
+      { courseTitle: { $in: identifiers } },
+      ...(objectIds.length > 0 ? [{ _id: { $in: objectIds } }] : []),
+    ],
+  })
+    .select('_id courseId courseTitle category price')
+    .lean();
+
+  const courseMap = new Map();
+  courses.forEach((courseDoc) => {
+    if (courseDoc._id) courseMap.set(courseDoc._id.toString(), courseDoc);
+    if (courseDoc.courseId) courseMap.set(String(courseDoc.courseId).trim(), courseDoc);
+    if (courseDoc.courseTitle) {
+      courseMap.set(String(courseDoc.courseTitle).trim(), courseDoc);
+      courseMap.set(String(courseDoc.courseTitle).trim().toLowerCase(), courseDoc);
+    }
+  });
+
+  const resolvedCourseKeys = new Set();
+  return identifiers.reduce((enrolledCourses, identifier) => {
+    const courseDoc = courseMap.get(identifier) || courseMap.get(identifier.toLowerCase());
+    if (!courseDoc) return enrolledCourses;
+
+    const courseKey = courseDoc.courseId || courseDoc._id.toString();
+    if (resolvedCourseKeys.has(courseKey)) return enrolledCourses;
+    resolvedCourseKeys.add(courseKey);
+    enrolledCourses.push({
+      id: courseDoc.courseId || courseDoc._id.toString(),
+      title: courseDoc.courseTitle || '',
+      category: courseDoc.category || 'General',
+      price: courseDoc.price || 0,
+    });
+    return enrolledCourses;
+  }, []);
+}
+
 async function updateAdminStudent(req, res) {
   try {
     const { id } = req.params;
@@ -1342,7 +1483,24 @@ async function updateAdminStudent(req, res) {
       updateFields.qualification = String(req.body.qualification).trim();
     }
 
-    if (
+    const hasCourseIds = Object.prototype.hasOwnProperty.call(req.body, 'courseIds');
+    if (hasCourseIds) {
+      const resolvedCourses = await resolveCourseAssignments(req.body.courseIds);
+      updateFields.courseIds = resolvedCourses.map((courseDoc) => courseDoc.courseId || courseDoc._id.toString());
+
+      // The first selected course remains the legacy primary assignment for
+      // existing consumers that use course/courseId/courseRef.
+      if (resolvedCourses.length > 0) {
+        const primaryCourse = resolvedCourses[0];
+        updateFields.courseId = primaryCourse.courseId || primaryCourse._id.toString();
+        updateFields.course = primaryCourse.courseTitle || '';
+        updateFields.courseRef = primaryCourse._id;
+      } else {
+        updateFields.courseId = '';
+        updateFields.course = '';
+        updateFields.courseRef = null;
+      }
+    } else if (
       (req.body.courseId !== undefined && req.body.courseId !== null) ||
       (req.body.course !== undefined && req.body.course !== null)
     ) {
@@ -1437,6 +1595,12 @@ async function updateAdminStudent(req, res) {
       }
       if (updateFields.dateOfBirth) userUpdateFields.dateOfBirth = updateFields.dateOfBirth;
       if (updateFields.qualification) userUpdateFields.qualification = updateFields.qualification;
+      if (Object.prototype.hasOwnProperty.call(updateFields, 'courseIds')) {
+        // User.courseIds is already populated during registration and read by
+        // authentication/course-access code, so keep this existing duplicate
+        // enrollment representation in sync with Student.courseIds.
+        userUpdateFields.courseIds = updateFields.courseIds;
+      }
       if (updateFields.profileImage !== undefined) {
         userUpdateFields.profileImage = updateFields.profileImage;
         userUpdateFields.avatar = updateFields.profileImage;
