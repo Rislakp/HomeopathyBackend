@@ -278,6 +278,28 @@ function normalizeTestType(input) {
   return 'grand_mock';
 }
 
+function isPublishedForStudents(exam) {
+  const status = exam?.status === undefined || exam?.status === null || String(exam.status).trim() === ''
+    ? 'Published'
+    : String(exam.status).trim().toLowerCase();
+  return status === 'published';
+}
+
+function applyPublishedExamFilter(filter) {
+  filter.$and = [
+    ...(filter.$and || []),
+    {
+      $or: [
+        { status: 'Published' },
+        { status: 'published' },
+        { status: { $exists: false } },
+        { status: null },
+        { status: '' },
+      ],
+    },
+  ];
+}
+
 /**
  * GET /api/student/exams
  * Fetch all available exams for student, annotating each with attempt status and previous score.
@@ -466,6 +488,10 @@ async function getAvailableExams(req, res) {
       }
     }
 
+    // Student discovery is server-side restricted to Published exams. Legacy
+    // documents without status retain the former published behavior.
+    applyPublishedExamFilter(filter);
+
     // ── Pagination ──
     let page, limit, skip;
     try {
@@ -524,7 +550,7 @@ async function getAvailableExams(req, res) {
         negativeMark: exam.negativeMark !== undefined && exam.negativeMark !== null
           ? exam.negativeMark
           : (exam.negativeMarkPenalty ?? 0),
-        status: metrics.status,
+        status: exam.status || 'Published',
         attemptStatus: metrics.attemptStatus,
         hasAttempted: metrics.hasAttempted,
         isCompleted: metrics.isCompleted,
@@ -579,6 +605,10 @@ async function startExam(req, res) {
         success: false,
         message: 'Grand Mock Exam not found.'
       });
+    }
+
+    if (!isPublishedForStudents(exam)) {
+      return res.status(404).json({ success: false, message: 'Grand Mock Exam not found.' });
     }
 
     if (exam.courseId && normalizeTestType(exam.testType) === 'course_test') {
@@ -782,6 +812,10 @@ async function submitExam(req, res) {
         success: false,
         message: 'Exam not found.'
       });
+    }
+
+    if (!isPublishedForStudents(exam)) {
+      return res.status(404).json({ success: false, message: 'Exam not found.' });
     }
 
     if (exam.courseId && normalizeTestType(exam.testType) === 'course_test') {

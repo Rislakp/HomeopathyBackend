@@ -494,6 +494,33 @@ function normalizeTestType(input) {
   return 'grand_mock';
 }
 
+function normalizeExamStatus(input, defaultStatus = 'Published') {
+  if (input === undefined || input === null || String(input).trim() === '') return defaultStatus;
+  const normalized = String(input).trim().toLowerCase();
+  if (normalized === 'draft') return 'Draft';
+  if (normalized === 'published') return 'Published';
+  return null;
+}
+
+function isPublishedForStudents(exam) {
+  // Exams created before the status field was introduced retain the historical
+  // published behavior instead of disappearing from student access.
+  return normalizeExamStatus(exam?.status) === 'Published';
+}
+
+function applyStudentPublishedFilter(filter) {
+  const publishedFilter = {
+    $or: [
+      { status: 'Published' },
+      { status: 'published' },
+      { status: { $exists: false } },
+      { status: null },
+      { status: '' },
+    ],
+  };
+  filter.$and = [...(filter.$and || []), publishedFilter];
+}
+
 /**
  * POST /api/exams/grand-mock
  * Saves the final, verified exam to database.
@@ -514,6 +541,7 @@ async function createGrandMockExam(req, res) {
       durationMinutes,
       totalQuestions,
       questions,
+      status,
     } = req.body;
 
     const sanitizedCourseId = (courseId !== undefined && courseId !== null && String(courseId).trim() !== '')
@@ -527,6 +555,14 @@ async function createGrandMockExam(req, res) {
       finalTestType = 'course_test';
     } else {
       finalTestType = 'grand_mock';
+    }
+
+    const finalStatus = normalizeExamStatus(status);
+    if (!finalStatus) {
+      return res.status(400).json({
+        success: false,
+        message: 'status must be either Draft or Published.',
+      });
     }
 
     // Validate required fields
@@ -621,6 +657,7 @@ async function createGrandMockExam(req, res) {
     const newExam = await Exam.create({
       title: title.trim(),
       testType: finalTestType,
+      status: finalStatus,
       courseId: sanitizedCourseId,
       moduleId: sanitizedModuleId,
       courseName: sanitizedCourseName,
@@ -822,6 +859,10 @@ async function getAllGrandMocks(req, res) {
       }
     }
 
+    if (req.user && req.user.role === 'student') {
+      applyStudentPublishedFilter(filter);
+    }
+
     // ── Pagination ──
     let page, limit, skip;
     try {
@@ -922,7 +963,7 @@ async function getAllGrandMocks(req, res) {
         negativeMarkPenalty: exam.negativeMarkPenalty !== undefined && exam.negativeMarkPenalty !== null
           ? exam.negativeMarkPenalty
           : (exam.negativeMark ?? 0),
-        status: metrics.status,
+        status: normalizeExamStatus(exam.status),
         attemptStatus: metrics.attemptStatus,
         hasAttempted: metrics.hasAttempted,
         isCompleted: metrics.isCompleted,
@@ -983,6 +1024,10 @@ async function getGrandMockById(req, res) {
         success: false,
         message: 'Grand Mock Exam not found.'
       });
+    }
+
+    if (req.user && req.user.role === 'student' && !isPublishedForStudents(exam)) {
+      return res.status(404).json({ success: false, message: 'Grand Mock Exam not found.' });
     }
 
     const { courseName, moduleName } = await resolveCourseAndModuleNames(exam);
@@ -1077,7 +1122,7 @@ async function getGrandMockById(req, res) {
       negativeMarkPenalty: exam.negativeMarkPenalty !== undefined && exam.negativeMarkPenalty !== null
         ? exam.negativeMarkPenalty
         : (exam.negativeMark ?? 0),
-      status: metrics.status,
+      status: normalizeExamStatus(exam.status),
       attemptStatus: metrics.attemptStatus,
       hasAttempted: metrics.hasAttempted,
       isCompleted: metrics.isCompleted,
@@ -1138,6 +1183,13 @@ async function updateGrandMockExam(req, res) {
     if (req.body.title !== undefined) updates.title = req.body.title.trim();
     if (req.body.testType !== undefined && req.body.testType !== null && req.body.testType !== '') {
       updates.testType = normalizeTestType(req.body.testType);
+    }
+    if (req.body.status !== undefined) {
+      const normalizedStatus = normalizeExamStatus(req.body.status, null);
+      if (!normalizedStatus) {
+        return res.status(400).json({ success: false, message: 'status must be either Draft or Published.' });
+      }
+      updates.status = normalizedStatus;
     }
     if (req.body.courseId !== undefined) {
       updates.courseId = (req.body.courseId !== null && String(req.body.courseId).trim() !== '')
@@ -1440,4 +1492,3 @@ module.exports = {
   parseRawTextToMCQs,
   parseMCQText: parseRawTextToMCQs // Exported for test verification
 };
-
