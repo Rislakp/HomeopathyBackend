@@ -142,16 +142,32 @@ async function getAdminStudents(req, res) {
       });
       const uniqueCourseValues = [...new Set(courseValues)];
 
+      // A student can have a legacy primary course plus multiple enrolled
+      // course IDs. Match against every representation so an admin can filter
+      // by any assigned course without changing the legacy behavior.
+      const courseMatchConditions = [
+        { course: { $in: uniqueCourseValues } },
+        { courseId: { $in: uniqueCourseValues } },
+        { courseIds: { $in: uniqueCourseValues } },
+      ];
+
+      const matchingCourseObjectIds = matchingCourses
+        .map((matchedCourse) => matchedCourse._id)
+        .filter(Boolean);
+      if (matchingCourseObjectIds.length > 0) {
+        courseMatchConditions.push({ courseRef: { $in: matchingCourseObjectIds } });
+      }
+
       if (matchConditions.$or) {
         matchConditions.$and = [
           { $or: matchConditions.$or },
           {
-            $or: uniqueCourseValues.map((value) => ({ course: value }))
+            $or: courseMatchConditions,
           }
         ];
         delete matchConditions.$or;
       } else {
-        matchConditions.course = { $in: uniqueCourseValues };
+        matchConditions.$or = courseMatchConditions;
       }
     }
 
@@ -159,7 +175,7 @@ async function getAdminStudents(req, res) {
     const [total, rawStudents] = await Promise.all([
       Student.countDocuments(matchConditions),
       Student.find(matchConditions)
-        .select('_id userId name email phone contactNumber dateOfBirth qualification profileImage avatar course courseRef courseId status accountStatus isApproved subscription joinedDate createdAt updatedAt')
+        .select('_id userId name email phone contactNumber dateOfBirth qualification profileImage avatar course courseRef courseId courseIds status accountStatus isApproved subscription joinedDate createdAt updatedAt')
         .sort({ createdAt: -1 })
         .skip(skip)
         .limit(limit)
@@ -198,6 +214,16 @@ async function getAdminStudents(req, res) {
       }
       if (s.courseId) {
         courseIdsToFetch.add(s.courseId.toString().trim());
+      }
+      if (Array.isArray(s.courseIds)) {
+        s.courseIds.forEach((courseId) => {
+          const normalizedCourseId = String(courseId || '').trim();
+          if (!normalizedCourseId) return;
+          courseIdsToFetch.add(normalizedCourseId);
+          if (mongoose.Types.ObjectId.isValid(normalizedCourseId)) {
+            courseRefsToFetch.add(normalizedCourseId);
+          }
+        });
       }
       if (s.course) {
         courseTitlesToFetch.add(s.course.toString().trim());
@@ -294,6 +320,43 @@ async function getAdminStudents(req, res) {
       const cTitle = s.course ? s.course.toString().toLowerCase().trim() : '';
       const courseObj = courseMap.get(cRef) || courseMap.get(cId) || courseMap.get(cTitle) || null;
 
+      const formatCourse = (resolvedCourse) => ({
+        id: resolvedCourse.courseId || (resolvedCourse._id ? resolvedCourse._id.toString() : ''),
+        title: resolvedCourse.courseTitle || '',
+        category: resolvedCourse.category || 'General',
+        price: resolvedCourse.price || 0,
+      });
+
+      // `courseIds` is the canonical multi-course field. Append the legacy
+      // primary course values only when they are not already represented, so
+      // old single-course records still receive a one-item array.
+      const enrolledCourseIdentifiers = [];
+      const addCourseIdentifier = (value) => {
+        const normalizedValue = String(value || '').trim();
+        if (!normalizedValue || enrolledCourseIdentifiers.includes(normalizedValue)) return;
+        enrolledCourseIdentifiers.push(normalizedValue);
+      };
+
+      if (Array.isArray(s.courseIds)) s.courseIds.forEach(addCourseIdentifier);
+      addCourseIdentifier(s.courseId);
+      addCourseIdentifier(cRef);
+      addCourseIdentifier(s.course);
+
+      const enrolledCourseKeys = new Set();
+      const enrolledCourses = enrolledCourseIdentifiers.reduce((courses, identifier) => {
+        const resolvedCourse =
+          courseMap.get(identifier) ||
+          courseMap.get(identifier.toLowerCase()) ||
+          null;
+        if (!resolvedCourse) return courses; // Deleted/invalid course references are safe to ignore.
+
+        const courseKey = resolvedCourse.courseId || resolvedCourse._id.toString();
+        if (enrolledCourseKeys.has(courseKey)) return courses;
+        enrolledCourseKeys.add(courseKey);
+        courses.push(formatCourse(resolvedCourse));
+        return courses;
+      }, []);
+
       const statObj = statsMap.get(s._id.toString()) || null;
 
       const profileImage =
@@ -320,6 +383,7 @@ async function getAdminStudents(req, res) {
           category: courseObj?.category || 'General',
           price: courseObj?.price || 0,
         },
+        enrolled_courses: enrolledCourses,
         subscription: {
           status: s.status || 'Active',
           type: s.subscription || 'Free',
