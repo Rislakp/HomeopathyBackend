@@ -5,6 +5,7 @@ const {
   extractMCQs,
   createGrandMockExam,
   getAllGrandMocks,
+  getAdminExamResults,
   getGrandMockById,
   updateGrandMockExam,
   deleteGrandMockExam,
@@ -60,6 +61,10 @@ router.get('/api/admin/exams', requireAuthUser, getAllGrandMocks);
 router.get('/api/v1/exams/grand-mock', requireAuthUser, getAllGrandMocks);
 router.get('/api/v1/exams', requireAuthUser, getAllGrandMocks);
 router.get('/api/v1/admin/exams', requireAuthUser, getAllGrandMocks);
+
+// Admin exam-level results. Kept separate from student-by-ID result history.
+router.get('/api/admin/exams/:examId/results', requireAdmin, getAdminExamResults);
+router.get('/api/v1/admin/exams/:examId/results', requireAdmin, getAdminExamResults);
 
 // Endpoint to get single Grand Mock exam details
 router.get('/api/exams/grand-mock/:id', requireAuthUser, getGrandMockById);

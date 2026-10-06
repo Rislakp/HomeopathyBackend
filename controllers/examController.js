@@ -1001,6 +1001,140 @@ async function getAllGrandMocks(req, res) {
   }
 }
 
+/**
+ * GET /api/admin/exams/:examId/results
+ * Admin-only academic result list for one Exam document. This is intentionally
+ * read-only: it never creates an attempt/result when the Admin opens it.
+ */
+async function getAdminExamResults(req, res) {
+  try {
+    const { examId } = req.params;
+    if (!mongoose.Types.ObjectId.isValid(examId)) {
+      return res.status(400).json({ success: false, message: 'Invalid Exam ID format.' });
+    }
+
+    const exam = await Exam.findById(examId)
+      .select('_id title testType courseId courseName moduleId moduleName status marksPerQuestion durationMinutes totalQuestions')
+      .lean();
+    if (!exam || String(exam.courseId || '').trim().toLowerCase() === 'unani') {
+      return res.status(404).json({ success: false, message: 'Academic exam not found.' });
+    }
+
+    let page, limit, skip;
+    try {
+      ({ page, limit, skip } = parsePaginationParams(req.query, { defaultLimit: 20, maxLimit: 100 }));
+    } catch (paginationError) {
+      return res.status(paginationError.statusCode || 400).json({
+        success: false,
+        message: paginationError.message,
+      });
+    }
+
+    const TestResult = mongoose.models.TestResult || require('../src/common/models/testResult.model');
+    const Student = mongoose.models.Student || require('../models/Student');
+    const User = mongoose.models.User || require('../models/User');
+    const resultFilter = { examId: new mongoose.Types.ObjectId(examId) };
+    const search = typeof req.query.search === 'string' ? req.query.search.trim() : '';
+
+    // Search is resolved to linked Student/User IDs first, then applied to the
+    // indexed examId/studentId result query. This avoids per-result lookups.
+    if (search) {
+      const escapedSearch = search.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      const searchRegex = new RegExp(escapedSearch, 'i');
+      const [matchingStudents, matchingUsers] = await Promise.all([
+        Student.find({ $or: [{ name: searchRegex }, { email: searchRegex }] }).select('_id userId').lean(),
+        User.find({ $or: [{ name: searchRegex }, { email: searchRegex }] }).select('_id').lean(),
+      ]);
+      const matchingStudentIds = new Set();
+      matchingStudents.forEach((student) => {
+        if (student._id) matchingStudentIds.add(student._id.toString());
+        if (student.userId) matchingStudentIds.add(student.userId.toString());
+      });
+      matchingUsers.forEach((user) => {
+        if (user._id) matchingStudentIds.add(user._id.toString());
+      });
+      resultFilter.studentId = {
+        $in: [...matchingStudentIds].map((id) => new mongoose.Types.ObjectId(id)),
+      };
+    }
+
+    const [total, results] = await Promise.all([
+      TestResult.countDocuments(resultFilter),
+      TestResult.find(resultFilter)
+        .select('_id studentId examId score totalMarks totalAttempted totalCorrect totalWrong unansweredQuestions percentage status createdAt updatedAt')
+        .sort({ createdAt: -1 })
+        .skip(skip)
+        .limit(limit)
+        .lean(),
+    ]);
+
+    const studentIds = [...new Set(results.filter((result) => result.studentId).map((result) => result.studentId.toString()))];
+    const resultStudentObjectIds = studentIds.map((id) => new mongoose.Types.ObjectId(id));
+    const [students, users] = await Promise.all([
+      studentIds.length > 0
+        ? Student.find({ $or: [{ _id: { $in: resultStudentObjectIds } }, { userId: { $in: resultStudentObjectIds } }] })
+          .select('_id userId name email')
+          .lean()
+        : Promise.resolve([]),
+      studentIds.length > 0
+        ? User.find({ _id: { $in: resultStudentObjectIds } }).select('_id name email').lean()
+        : Promise.resolve([]),
+    ]);
+
+    const studentMap = new Map();
+    students.forEach((student) => {
+      if (student._id) studentMap.set(student._id.toString(), student);
+      if (student.userId) studentMap.set(student.userId.toString(), student);
+    });
+    const userMap = new Map(users.filter((user) => user._id).map((user) => [user._id.toString(), user]));
+
+    const data = results.map((result) => {
+      const resultStudentId = result.studentId ? result.studentId.toString() : null;
+      const student = resultStudentId ? studentMap.get(resultStudentId) : null;
+      const user = resultStudentId ? userMap.get(resultStudentId) : null;
+      return {
+        id: result._id.toString(),
+        resultId: result._id.toString(),
+        studentId: resultStudentId,
+        student: {
+          id: student?._id?.toString() || resultStudentId,
+          name: student?.name || user?.name || '',
+          email: student?.email || user?.email || '',
+        },
+        examId: exam._id.toString(),
+        examTitle: exam.title,
+        testType: normalizeTestType(exam.testType),
+        score: result.score ?? 0,
+        totalMarks: result.totalMarks ?? 0,
+        percentage: result.percentage ?? 0,
+        totalAttempted: result.totalAttempted ?? 0,
+        totalCorrect: result.totalCorrect ?? 0,
+        totalWrong: result.totalWrong ?? 0,
+        unansweredQuestions: result.unansweredQuestions ?? 0,
+        status: result.status || 'Completed',
+        submittedAt: result.createdAt,
+        updatedAt: result.updatedAt,
+      };
+    });
+
+    return res.status(200).json({
+      success: true,
+      exam: {
+        id: exam._id.toString(),
+        title: exam.title,
+        testType: normalizeTestType(exam.testType),
+        status: normalizeExamStatus(exam.status),
+      },
+      data,
+      count: data.length,
+      pagination: buildPaginationResponse(total, page, limit),
+    });
+  } catch (error) {
+    console.error('Error fetching academic exam results:', error);
+    return res.status(500).json({ success: false, message: 'Failed to fetch exam results.', error: error.message });
+  }
+}
+
 
 /**
  * GET /api/exams/grand-mock/:id
@@ -1478,6 +1612,7 @@ module.exports = {
   createExam,
   saveGrandMock,
   getAllGrandMocks,
+  getAdminExamResults,
   getGrandMockById,
   getExamById,
   updateGrandMockExam,
