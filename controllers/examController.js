@@ -1,4 +1,5 @@
 const mongoose = require('mongoose');
+const { resolveProfileImageUrl } = require('../utils/s3MediaSigner');
 const pdfParse = require('pdf-parse');
 const Tesseract = require('tesseract.js');
 const xlsx = require('xlsx');
@@ -1266,15 +1267,28 @@ async function getGrandMockById(req, res) {
       ? exam.totalQuestions
       : (Array.isArray(exam.questions) ? exam.questions.length : 0);
 
-    const formattedQuestions = (exam.questions || []).map(q => {
-      const cOpt = q.correctOption ? q.correctOption.toString().toUpperCase() : null;
-      return {
-        ...q,
-        correctAnswer: cOpt,
-        correctOptionText: q.options && cOpt ? q.options[cOpt] : null,
-        correctAnswerText: q.options && cOpt ? q.options[cOpt] : null
-      };
-    });
+    const formattedQuestions = await Promise.all(
+      (exam.questions || []).map(async q => {
+        const cOpt = q.correctOption
+          ? q.correctOption.toString().toUpperCase()
+          : null;
+        const formattedQuestion = {
+          ...q,
+          correctAnswer: cOpt,
+          correctOptionText: q.options && cOpt ? q.options[cOpt] : null,
+          correctAnswerText: q.options && cOpt ? q.options[cOpt] : null
+        };
+        if (
+          typeof formattedQuestion.imageUrl === 'string' &&
+          formattedQuestion.imageUrl.trim()
+        ) {
+          formattedQuestion.imageUrl = await resolveProfileImageUrl(
+            formattedQuestion.imageUrl.trim()
+          );
+        }
+        return formattedQuestion;
+      })
+    );
 
     const candidateIds = req.user ? await getStudentCandidateIds(req.user) : [];
     const attemptMap = candidateIds.length > 0
