@@ -502,6 +502,41 @@ function normalizeExamStatus(input, defaultStatus = 'Published') {
   return null;
 }
 
+/** Resolve and validate a Course Test module against its selected course(s). */
+async function resolveCourseTestModule(courseId, courseIds, moduleId) {
+  if (!moduleId) return { valid: true, course: null, module: null };
+
+  const selectedIds = Array.isArray(courseIds) && courseIds.length
+    ? courseIds
+    : (courseId ? [courseId] : []);
+  const uniqueIds = [...new Set(selectedIds.map((value) => String(value || '').trim()).filter(Boolean))];
+  if (!uniqueIds.length) return { valid: false, message: 'A course must be selected when a module is selected.' };
+
+  const CourseModel = mongoose.models.Course || require('../models/Course');
+  const selectedCourses = await Promise.all(uniqueIds.map((id) => {
+    const isObjectId = mongoose.Types.ObjectId.isValid(id);
+    return CourseModel.findOne({
+      $or: [
+        ...(isObjectId ? [{ _id: id }] : []),
+        { courseId: id },
+      ],
+    });
+  }));
+  const missing = uniqueIds.filter((_, index) => !selectedCourses[index]);
+  if (missing.length) {
+    return { valid: false, message: `Course not found for selected course ID(s): ${missing.join(', ')}.` };
+  }
+
+  const normalizedModuleId = String(moduleId).trim();
+  for (const course of selectedCourses) {
+    const module = (course.modules || []).find((item) =>
+      String(item._id) === normalizedModuleId || item.moduleName === normalizedModuleId
+    );
+    if (module) return { valid: true, course, module };
+  }
+  return { valid: false, message: 'The selected module does not belong to any of the selected courses.' };
+}
+
 function isPublishedForStudents(exam) {
   // Exams created before the status field was introduced retain the historical
   // published behavior instead of disappearing from student access.
@@ -531,6 +566,7 @@ async function createGrandMockExam(req, res) {
       title,
       testType,
       courseId,
+      courseIds,
       moduleId,
       courseName,
       moduleName,
@@ -551,7 +587,7 @@ async function createGrandMockExam(req, res) {
     let finalTestType;
     if (testType && typeof testType === 'string' && testType.trim()) {
       finalTestType = normalizeTestType(testType);
-    } else if (sanitizedCourseId) {
+    } else if (sanitizedCourseId || (Array.isArray(courseIds) && courseIds.length > 0)) {
       finalTestType = 'course_test';
     } else {
       finalTestType = 'grand_mock';
@@ -623,17 +659,26 @@ async function createGrandMockExam(req, res) {
       ? String(moduleId).trim()
       : null;
 
-    let sanitizedCourseName = courseName ? String(courseName).trim() : null;
+    let resolvedCourseId = sanitizedCourseId;
+    let resolvedCourseName = courseName ? String(courseName).trim() : null;
+    if (finalTestType === 'course_test' && sanitizedModuleId && String(sanitizedCourseId || '').toLowerCase() !== 'unani') {
+      const validation = await resolveCourseTestModule(sanitizedCourseId, courseIds, sanitizedModuleId);
+      if (!validation.valid) return res.status(400).json({ success: false, message: validation.message });
+      resolvedCourseId = validation.course.courseId || validation.course._id.toString();
+      if (!resolvedCourseName) resolvedCourseName = validation.course.courseTitle || null;
+    }
+
+    let sanitizedCourseName = resolvedCourseName;
     let sanitizedModuleName = moduleName ? String(moduleName).trim() : null;
 
-    if (sanitizedCourseId && (!sanitizedCourseName || !sanitizedModuleName)) {
+    if (resolvedCourseId && (!sanitizedCourseName || !sanitizedModuleName)) {
       try {
-        const isObjId = mongoose.Types.ObjectId.isValid(sanitizedCourseId);
+        const isObjId = mongoose.Types.ObjectId.isValid(resolvedCourseId);
         const CourseModel = mongoose.models.Course || require('../models/Course');
         const foundCourse = await CourseModel.findOne({
           $or: [
-            ...(isObjId ? [{ _id: sanitizedCourseId }] : []),
-            { courseId: sanitizedCourseId }
+            ...(isObjId ? [{ _id: resolvedCourseId }] : []),
+            { courseId: resolvedCourseId }
           ]
         }).lean();
 
@@ -658,7 +703,7 @@ async function createGrandMockExam(req, res) {
       title: title.trim(),
       testType: finalTestType,
       status: finalStatus,
-      courseId: sanitizedCourseId,
+      courseId: resolvedCourseId,
       moduleId: sanitizedModuleId,
       courseName: sanitizedCourseName,
       moduleName: sanitizedModuleName,
@@ -1394,6 +1439,16 @@ async function updateGrandMockExam(req, res) {
       if (!updates.totalQuestions && !req.body.totalQuestions) {
         updates.totalQuestions = questionValidation.questions.length;
       }
+    }
+
+    const effectiveTestType = updates.testType || exam.testType;
+    const effectiveCourseId = Object.prototype.hasOwnProperty.call(updates, 'courseId') ? updates.courseId : exam.courseId;
+    const effectiveModuleId = Object.prototype.hasOwnProperty.call(updates, 'moduleId') ? updates.moduleId : exam.moduleId;
+    if (normalizeTestType(effectiveTestType) === 'course_test' && effectiveModuleId && String(effectiveCourseId || '').toLowerCase() !== 'unani') {
+      const validation = await resolveCourseTestModule(effectiveCourseId, req.body.courseIds, effectiveModuleId);
+      if (!validation.valid) return res.status(400).json({ success: false, message: validation.message });
+      updates.courseId = validation.course.courseId || validation.course._id.toString();
+      if (!updates.courseName && validation.course.courseTitle) updates.courseName = validation.course.courseTitle;
     }
 
     if (Object.keys(updates).length === 0) {

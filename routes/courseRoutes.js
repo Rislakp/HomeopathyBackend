@@ -22,6 +22,8 @@ const handleUpload = (req, res, next) => {
 
 // GET /api/courses - Fetch all courses
 router.get('/', optionalAuth, courseController.getCourses);
+// Batch module retrieval for consumers that select more than one course.
+router.get('/modules', optionalAuth, courseController.getModules);
 
 // POST /api/courses - Create a new course (supports multipart banner image upload)
 router.post('/', requireAdmin, handleUpload, courseController.createCourse);

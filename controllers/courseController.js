@@ -1018,14 +1018,67 @@ exports.deleteCourse = async (req, res) => {
 
 exports.getModules = async (req, res) => {
   try {
-    const { courseId } = req.params;
-    const course = await findCourseByIdOrCustomId(courseId);
+    const rawCourseIds = req.query?.courseIds;
+    let courseIds = [];
 
-    if (!course) {
-      return res.status(404).json({ success: false, message: 'Course not found' });
+    if (rawCourseIds !== undefined) {
+      const values = Array.isArray(rawCourseIds) ? rawCourseIds : [rawCourseIds];
+      for (const value of values) {
+        if (typeof value !== 'string') {
+          return res.status(400).json({ success: false, message: 'courseIds must contain course identifiers.' });
+        }
+        const cleanValue = value.trim();
+        if (cleanValue.startsWith('[')) {
+          let parsed;
+          try { parsed = JSON.parse(cleanValue); } catch (_) {
+            return res.status(400).json({ success: false, message: 'courseIds must be a valid list of course identifiers.' });
+          }
+          if (!Array.isArray(parsed)) {
+            return res.status(400).json({ success: false, message: 'courseIds must be an array.' });
+          }
+          courseIds.push(...parsed);
+        } else {
+          courseIds.push(...cleanValue.split(','));
+        }
+      }
+      courseIds = [...new Set(courseIds.map((id) => String(id).trim()).filter(Boolean))];
+      if (courseIds.length === 0) return res.status(200).json({ success: true, data: [] });
+
+      const courses = await Promise.all(courseIds.map(findCourseByIdOrCustomId));
+      const missingCourseIds = courseIds.filter((_, index) => !courses[index]);
+      if (missingCourseIds.length > 0) {
+        return res.status(400).json({
+          success: false,
+          message: `Course not found for courseIds: ${missingCourseIds.join(', ')}`,
+          invalidCourseIds: missingCourseIds,
+        });
+      }
+
+      const modules = [];
+      const seenModuleIds = new Set();
+      for (const course of courses) {
+        const serialized = await Promise.all((course.modules || []).map((module) => serializeModule(module, req)));
+        serialized.forEach((module) => {
+          const moduleId = module?._id ? String(module._id) : null;
+          if (moduleId && seenModuleIds.has(moduleId)) return;
+          if (moduleId) seenModuleIds.add(moduleId);
+          modules.push({
+            ...module,
+            courseId: course.courseId || course._id.toString(),
+            courseName: course.courseTitle,
+          });
+        });
+      }
+      return res.status(200).json({ success: true, data: modules });
     }
 
-    const modules = await Promise.all(course.modules.map((m) => serializeModule(m, req)));
+    const courseId = req.params?.courseId || req.query?.courseId;
+    if (!courseId) return res.status(200).json({ success: true, data: [] });
+
+    const course = await findCourseByIdOrCustomId(courseId);
+    if (!course) return res.status(404).json({ success: false, message: 'Course not found' });
+
+    const modules = await Promise.all((course.modules || []).map((module) => serializeModule(module, req)));
     return res.status(200).json({ success: true, data: modules });
   } catch (error) {
     return res.status(500).json({ success: false, message: 'Failed to fetch modules', error: error.message });

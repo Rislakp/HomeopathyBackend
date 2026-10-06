@@ -27,6 +27,8 @@ const handleUpload = (req, res, next) => {
 
 router.get('/', courseController.getCourses);
 router.get('/enrollment-counts', courseController.getEnrollmentCounts);
+// Batch module retrieval for the Course Test builder: ?courseIds=A&courseIds=B
+router.get('/modules', courseController.getModules);
 
 router.post('/', handleUpload, courseController.createCourse);
 router.get('/:id', courseController.getCourseById);
