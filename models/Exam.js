@@ -91,6 +91,18 @@ const examSchema = new mongoose.Schema({
     required: false,
     default: null
   },
+  courseIds: {
+    type: [String],
+    trim: true,
+    default: undefined,
+  },
+  // Multiple modules for Academic Course Tests. moduleId remains the first
+  // selected module for compatibility with existing readers and documents.
+  moduleIds: {
+    type: [String],
+    trim: true,
+    default: undefined,
+  },
   courseName: {
     type: String,
     trim: true,

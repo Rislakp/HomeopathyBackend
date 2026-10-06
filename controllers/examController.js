@@ -537,6 +537,37 @@ async function resolveCourseTestModule(courseId, courseIds, moduleId) {
   return { valid: false, message: 'The selected module does not belong to any of the selected courses.' };
 }
 
+/** Validate every selected module against the complete selected course set. */
+async function resolveCourseTestModules(courseId, courseIds, moduleIds) {
+  const ids = [...new Set((Array.isArray(moduleIds) ? moduleIds : [])
+    .map((value) => String(value || '').trim()).filter(Boolean))];
+  if (!ids.length) return { valid: true, modules: [] };
+  const selectedIds = Array.isArray(courseIds) && courseIds.length
+    ? courseIds
+    : (courseId ? [courseId] : []);
+  const uniqueCourseIds = [...new Set(selectedIds.map((value) => String(value || '').trim()).filter(Boolean))];
+  if (!uniqueCourseIds.length) return { valid: false, message: 'A course must be selected when a module is selected.' };
+  const CourseModel = mongoose.models.Course || require('../models/Course');
+  const courses = await Promise.all(uniqueCourseIds.map((id) => {
+    const isObjectId = mongoose.Types.ObjectId.isValid(id);
+    return CourseModel.findOne({ $or: [...(isObjectId ? [{ _id: id }] : []), { courseId: id }] });
+  }));
+  if (courses.some((course) => !course)) {
+    return { valid: false, message: 'One or more selected courses could not be found.' };
+  }
+  const modules = [];
+  for (const id of ids) {
+    let found = null;
+    for (const course of courses) {
+      found = (course.modules || []).find((item) => String(item._id) === id || item.moduleName === id);
+      if (found) break;
+    }
+    if (!found) return { valid: false, message: `Selected module ${id} does not belong to any selected course.` };
+    modules.push(found);
+  }
+  return { valid: true, modules, courses };
+}
+
 function isPublishedForStudents(exam) {
   // Exams created before the status field was introduced retain the historical
   // published behavior instead of disappearing from student access.
@@ -568,6 +599,7 @@ async function createGrandMockExam(req, res) {
       courseId,
       courseIds,
       moduleId,
+      moduleIds,
       courseName,
       moduleName,
       marksPerQuestion,
@@ -583,6 +615,8 @@ async function createGrandMockExam(req, res) {
     const sanitizedCourseId = (courseId !== undefined && courseId !== null && String(courseId).trim() !== '')
       ? String(courseId).trim()
       : null;
+    const sanitizedCourseIds = [...new Set((Array.isArray(courseIds) ? courseIds : [sanitizedCourseId])
+      .map((value) => String(value || '').trim()).filter(Boolean))];
 
     let finalTestType;
     if (testType && typeof testType === 'string' && testType.trim()) {
@@ -655,17 +689,21 @@ async function createGrandMockExam(req, res) {
       });
     }
 
-    const sanitizedModuleId = (moduleId !== undefined && moduleId !== null && String(moduleId).trim() !== '')
-      ? String(moduleId).trim()
-      : null;
+    const sanitizedModuleIds = Array.isArray(moduleIds)
+      ? [...new Set(moduleIds.map((id) => String(id || '').trim()).filter(Boolean))]
+      : (moduleId !== undefined && moduleId !== null && String(moduleId).trim() !== ''
+          ? [String(moduleId).trim()] : []);
+    const sanitizedModuleId = sanitizedModuleIds[0] || null;
 
     let resolvedCourseId = sanitizedCourseId;
     let resolvedCourseName = courseName ? String(courseName).trim() : null;
-    if (finalTestType === 'course_test' && sanitizedModuleId && String(sanitizedCourseId || '').toLowerCase() !== 'unani') {
-      const validation = await resolveCourseTestModule(sanitizedCourseId, courseIds, sanitizedModuleId);
+    if (finalTestType === 'course_test' && sanitizedModuleIds.length && String(sanitizedCourseId || '').toLowerCase() !== 'unani') {
+      const validation = await resolveCourseTestModules(sanitizedCourseId, courseIds, sanitizedModuleIds);
       if (!validation.valid) return res.status(400).json({ success: false, message: validation.message });
-      resolvedCourseId = validation.course.courseId || validation.course._id.toString();
-      if (!resolvedCourseName) resolvedCourseName = validation.course.courseTitle || null;
+      const firstCourse = validation.courses.find((course) =>
+        (course.modules || []).some((item) => String(item._id) === sanitizedModuleId || item.moduleName === sanitizedModuleId));
+      resolvedCourseId = firstCourse.courseId || firstCourse._id.toString();
+      if (!resolvedCourseName) resolvedCourseName = firstCourse.courseTitle || null;
     }
 
     let sanitizedCourseName = resolvedCourseName;
@@ -704,7 +742,9 @@ async function createGrandMockExam(req, res) {
       testType: finalTestType,
       status: finalStatus,
       courseId: resolvedCourseId,
+      courseIds: sanitizedCourseIds,
       moduleId: sanitizedModuleId,
+      moduleIds: sanitizedModuleIds,
       courseName: sanitizedCourseName,
       moduleName: sanitizedModuleName,
       marksPerQuestion: parsedMarksPerQuestion,
@@ -1380,6 +1420,23 @@ async function updateGrandMockExam(req, res) {
         ? String(req.body.moduleId).trim()
         : null;
     }
+    if (req.body.courseIds !== undefined) {
+      if (!Array.isArray(req.body.courseIds)) {
+        return res.status(400).json({ success: false, message: 'courseIds must be an array.' });
+      }
+      updates.courseIds = [...new Set(req.body.courseIds
+        .map((value) => String(value || '').trim()).filter(Boolean))];
+    }
+    if (req.body.moduleIds !== undefined) {
+      if (!Array.isArray(req.body.moduleIds)) {
+        return res.status(400).json({ success: false, message: 'moduleIds must be an array.' });
+      }
+      updates.moduleIds = [...new Set(req.body.moduleIds
+        .map((value) => String(value || '').trim()).filter(Boolean))];
+      updates.moduleId = updates.moduleIds[0] || null;
+    } else if (req.body.moduleId !== undefined) {
+      updates.moduleIds = updates.moduleId ? [updates.moduleId] : [];
+    }
     if (req.body.courseName !== undefined) {
       updates.courseName = req.body.courseName ? String(req.body.courseName).trim() : null;
     }
@@ -1443,12 +1500,23 @@ async function updateGrandMockExam(req, res) {
 
     const effectiveTestType = updates.testType || exam.testType;
     const effectiveCourseId = Object.prototype.hasOwnProperty.call(updates, 'courseId') ? updates.courseId : exam.courseId;
-    const effectiveModuleId = Object.prototype.hasOwnProperty.call(updates, 'moduleId') ? updates.moduleId : exam.moduleId;
-    if (normalizeTestType(effectiveTestType) === 'course_test' && effectiveModuleId && String(effectiveCourseId || '').toLowerCase() !== 'unani') {
-      const validation = await resolveCourseTestModule(effectiveCourseId, req.body.courseIds, effectiveModuleId);
+    const effectiveModuleIds = Object.prototype.hasOwnProperty.call(updates, 'moduleIds')
+      ? updates.moduleIds
+      : (Array.isArray(exam.moduleIds) && exam.moduleIds.length ? exam.moduleIds : (exam.moduleId ? [exam.moduleId] : []));
+    const effectiveCourseIds = req.body.courseIds !== undefined
+      ? req.body.courseIds
+      : (exam.courseIds || (effectiveCourseId ? [effectiveCourseId] : []));
+    if (normalizeTestType(effectiveTestType) === 'course_test' && effectiveModuleIds.length && String(effectiveCourseId || '').toLowerCase() !== 'unani') {
+      const validation = await resolveCourseTestModules(effectiveCourseId, effectiveCourseIds, effectiveModuleIds);
       if (!validation.valid) return res.status(400).json({ success: false, message: validation.message });
-      updates.courseId = validation.course.courseId || validation.course._id.toString();
-      if (!updates.courseName && validation.course.courseTitle) updates.courseName = validation.course.courseTitle;
+      const firstModule = validation.modules[0];
+      const moduleCourse = validation.courses.find((course) =>
+        (course.modules || []).some((item) => String(item._id) === String(firstModule._id)));
+      if (moduleCourse) {
+        updates.courseId = moduleCourse.courseId || moduleCourse._id.toString();
+        if (!updates.courseName && moduleCourse.courseTitle) updates.courseName = moduleCourse.courseTitle;
+      }
+      if (!updates.moduleName) updates.moduleName = firstModule.moduleName || null;
     }
 
     if (Object.keys(updates).length === 0) {
