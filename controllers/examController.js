@@ -6,13 +6,19 @@ const xlsx = require('xlsx');
 const sharp = require('sharp');
 const { GoogleGenAI } = require('@google/genai');
 const Exam = require('../models/Exam');
-const { verifyStudentCourseAccess } = require('../utils/courseAccessHelper');
+const { verifyStudentCourseAccessAny } = require('../utils/courseAccessHelper');
 const {
   getStudentCandidateIds,
   getStudentExamAttemptMap,
   computeExamAttemptMetrics
 } = require('../utils/examAttemptHelper');
 const { parsePaginationParams, buildPaginationResponse } = require('../utils/pagination');
+const { sanitizeQuestionForStudent } = require('../src/student/normalExamRules');
+const {
+  normalizeExamCourseIds,
+  getExamAssignedCourseIds,
+  expandLegacyCourseFiltersForExamArrays,
+} = require('../utils/examCourseAssignment');
 try { require('../models/Course'); } catch (e) {}
 
 /**
@@ -584,11 +590,22 @@ async function createGrandMockExam(req, res) {
     const sanitizedCourseId = (courseId !== undefined && courseId !== null && String(courseId).trim() !== '')
       ? String(courseId).trim()
       : null;
+    if (courseIds !== undefined && !Array.isArray(courseIds)) {
+      return res.status(400).json({ success: false, message: 'courseIds must be an array of course identifiers.' });
+    }
+    const sanitizedCourseIds = Array.isArray(courseIds) && courseIds.length > 0
+      ? normalizeExamCourseIds(courseIds)
+      : normalizeExamCourseIds([], sanitizedCourseId);
+    const primaryCourseId = sanitizedCourseId && sanitizedCourseIds.some(
+      (id) => id.toLowerCase() === sanitizedCourseId.toLowerCase()
+    )
+      ? sanitizedCourseId
+      : (sanitizedCourseIds[0] || null);
 
     let finalTestType;
     if (testType && typeof testType === 'string' && testType.trim()) {
       finalTestType = normalizeTestType(testType);
-    } else if (sanitizedCourseId || (Array.isArray(courseIds) && courseIds.length > 0)) {
+    } else if (sanitizedCourseIds.length > 0) {
       finalTestType = 'course_test';
     } else {
       finalTestType = 'grand_mock';
@@ -607,6 +624,13 @@ async function createGrandMockExam(req, res) {
       return res.status(400).json({
         success: false,
         message: 'All fields (title, marksPerQuestion, durationMinutes, totalQuestions, questions) are required.'
+      });
+    }
+
+    if (finalTestType === 'course_test' && sanitizedCourseIds.length === 0) {
+      return res.status(400).json({
+        success: false,
+        message: 'At least one course must be selected for Course Tests.',
       });
     }
 
@@ -660,10 +684,10 @@ async function createGrandMockExam(req, res) {
       ? String(moduleId).trim()
       : null;
 
-    let resolvedCourseId = sanitizedCourseId;
+    let resolvedCourseId = primaryCourseId;
     let resolvedCourseName = courseName ? String(courseName).trim() : null;
-    if (finalTestType === 'course_test' && sanitizedModuleId && String(sanitizedCourseId || '').toLowerCase() !== 'unani') {
-      const validation = await resolveCourseTestModule(sanitizedCourseId, courseIds, sanitizedModuleId);
+    if (finalTestType === 'course_test' && sanitizedModuleId && String(primaryCourseId || '').toLowerCase() !== 'unani') {
+      const validation = await resolveCourseTestModule(primaryCourseId, sanitizedCourseIds, sanitizedModuleId);
       if (!validation.valid) return res.status(400).json({ success: false, message: validation.message });
       resolvedCourseId = validation.course.courseId || validation.course._id.toString();
       if (!resolvedCourseName) resolvedCourseName = validation.course.courseTitle || null;
@@ -705,6 +729,7 @@ async function createGrandMockExam(req, res) {
       testType: finalTestType,
       status: finalStatus,
       courseId: resolvedCourseId,
+      ...(finalTestType === 'course_test' ? { courseIds: sanitizedCourseIds } : {}),
       moduleId: sanitizedModuleId,
       courseName: sanitizedCourseName,
       moduleName: sanitizedModuleName,
@@ -1060,7 +1085,7 @@ async function getAdminExamResults(req, res) {
     }
 
     const exam = await Exam.findById(examId)
-      .select('_id title testType courseId courseName moduleId moduleName status marksPerQuestion durationMinutes totalQuestions')
+      .select('_id title testType courseId courseName moduleId moduleName status marksPerQuestion negativeMark negativeMarkPenalty durationMinutes totalQuestions questions')
       .lean();
     if (!exam || String(exam.courseId || '').trim().toLowerCase() === 'unani') {
       return res.status(404).json({ success: false, message: 'Academic exam not found.' });
@@ -1107,7 +1132,7 @@ async function getAdminExamResults(req, res) {
     const [total, results] = await Promise.all([
       TestResult.countDocuments(resultFilter),
       TestResult.find(resultFilter)
-        .select('_id studentId examId score totalMarks totalAttempted totalCorrect totalWrong unansweredQuestions percentage status createdAt updatedAt')
+        .select('_id studentId examId score totalMarks totalAttempted totalCorrect totalWrong unansweredQuestions positiveMarks negativeMarks maximumScore percentage status answers createdAt updatedAt')
         .sort({ createdAt: -1 })
         .skip(skip)
         .limit(limit)
@@ -1150,6 +1175,7 @@ async function getAdminExamResults(req, res) {
         examId: exam._id.toString(),
         examTitle: exam.title,
         testType: normalizeTestType(exam.testType),
+        totalQuestions: exam.totalQuestions ?? (exam.questions || []).length,
         score: result.score ?? 0,
         totalMarks: result.totalMarks ?? 0,
         percentage: result.percentage ?? 0,
@@ -1157,6 +1183,34 @@ async function getAdminExamResults(req, res) {
         totalCorrect: result.totalCorrect ?? 0,
         totalWrong: result.totalWrong ?? 0,
         unansweredQuestions: result.unansweredQuestions ?? 0,
+        marksPerQuestion: exam.marksPerQuestion ?? 1,
+        negativeMark: exam.negativeMark !== undefined && exam.negativeMark !== null
+          ? exam.negativeMark
+          : (exam.negativeMarkPenalty ?? 0),
+        positiveMarks: result.positiveMarks ?? ((result.totalCorrect ?? 0) * (exam.marksPerQuestion ?? 1)),
+        negativeMarks: result.negativeMarks ?? Math.max(0, ((result.totalCorrect ?? 0) * (exam.marksPerQuestion ?? 1)) - (result.score ?? 0)),
+        finalScore: result.score ?? 0,
+        maximumScore: result.maximumScore ?? result.totalMarks ?? 0,
+        answers: (exam.questions || []).map((question, index) => {
+          const answer = (result.answers || []).find((item) =>
+            (item.questionId && question._id && item.questionId.toString() === question._id.toString())
+          ) || (result.answers || [])[index] || {};
+          const correctOption = answer.correctOption || answer.correctAnswer || question?.correctOption || null;
+          const selectedOption = answer.selectedOption ?? null;
+          return {
+            questionId: question?._id || answer.questionId || null,
+            questionText: answer.questionText || question?.questionText || '',
+            options: answer.options || question?.options || {},
+            selectedOption,
+            selectedAnswer: answer.selectedAnswer ?? selectedOption,
+            selectedOptionText: answer.selectedOptionText || (selectedOption ? question?.options?.[selectedOption] : null) || null,
+            correctOption,
+            correctAnswer: answer.correctAnswer || correctOption,
+            correctOptionText: answer.correctOptionText || (correctOption ? question?.options?.[correctOption] : null) || null,
+            isCorrect: answer.isCorrect ?? (selectedOption !== null && selectedOption === correctOption),
+            status: answer.status || (selectedOption === null ? 'unanswered' : (selectedOption === correctOption ? 'correct' : 'wrong')),
+          };
+        }),
         status: result.status || 'Completed',
         submittedAt: result.createdAt,
         updatedAt: result.updatedAt,
@@ -1238,8 +1292,8 @@ async function getGrandMockById(req, res) {
       }
       
       // Only verify course access if this exam is explicitly a course test
-      if (exam.courseId && normalizeTestType(exam.testType) === 'course_test') {
-        const hasAccess = await verifyStudentCourseAccess(req.user, exam.courseId);
+      if (normalizeTestType(exam.testType) === 'course_test') {
+        const hasAccess = await verifyStudentCourseAccessAny(req.user, getExamAssignedCourseIds(exam));
         if (!hasAccess) {
           return res.status(403).json({ success: false, message: 'You are not authorized to access this exam.' });
         }
@@ -1259,6 +1313,25 @@ async function getGrandMockById(req, res) {
     }
     if (!normalizedType) {
       normalizedType = courseIdStr ? 'course_test' : 'grand_mock';
+    }
+
+    if ((req.user?.role || '').toLowerCase().trim() === 'student') {
+      const examStatus = exam.status === undefined || exam.status === null || String(exam.status).trim() === ''
+        ? 'published'
+        : String(exam.status).trim().toLowerCase();
+      if (examStatus !== 'published') {
+        return res.status(404).json({ success: false, message: 'Exam not found.' });
+      }
+      if (normalizedType === 'course_test') {
+        const assignedCourseIds = getExamAssignedCourseIds(exam);
+        if (assignedCourseIds.length === 0) {
+          return res.status(404).json({ success: false, message: 'Course Test not found.' });
+        }
+        const hasCourseAccess = await verifyStudentCourseAccessAny(req.user, assignedCourseIds);
+        if (!hasCourseAccess) {
+          return res.status(403).json({ success: false, message: 'You are not authorized to access this exam.' });
+        }
+      }
     }
 
     const finalCourseName = courseName || exam.courseName || null;
@@ -1286,7 +1359,9 @@ async function getGrandMockById(req, res) {
             formattedQuestion.imageUrl.trim()
           );
         }
-        return formattedQuestion;
+        return req.user?.role === 'student'
+          ? sanitizeQuestionForStudent(formattedQuestion)
+          : formattedQuestion;
       })
     );
 
@@ -1372,6 +1447,11 @@ async function updateGrandMockExam(req, res) {
     }
 
     const updates = {};
+    const hasCourseIdsUpdate = Object.prototype.hasOwnProperty.call(req.body, 'courseIds');
+    const isCourseTestUpdate = normalizeTestType(req.body.testType || exam.testType) === 'course_test';
+    if (hasCourseIdsUpdate && isCourseTestUpdate && !Array.isArray(req.body.courseIds)) {
+      return res.status(400).json({ success: false, message: 'courseIds must be an array of course identifiers.' });
+    }
 
     if (req.body.title !== undefined) updates.title = req.body.title.trim();
     if (req.body.testType !== undefined && req.body.testType !== null && req.body.testType !== '') {
@@ -1384,10 +1464,19 @@ async function updateGrandMockExam(req, res) {
       }
       updates.status = normalizedStatus;
     }
-    if (req.body.courseId !== undefined) {
+    if (hasCourseIdsUpdate && isCourseTestUpdate) {
+      updates.courseIds = normalizeExamCourseIds(req.body.courseIds);
+      const requestedPrimaryCourseId = req.body.courseId !== undefined && req.body.courseId !== null
+        ? String(req.body.courseId).trim()
+        : '';
+      updates.courseId = updates.courseIds.find((id) => id.toLowerCase() === requestedPrimaryCourseId.toLowerCase())
+        || updates.courseIds[0]
+        || null;
+    } else if (req.body.courseId !== undefined) {
       updates.courseId = (req.body.courseId !== null && String(req.body.courseId).trim() !== '')
         ? String(req.body.courseId).trim()
         : null;
+      if (isCourseTestUpdate) updates.courseIds = updates.courseId ? [updates.courseId] : [];
     }
     if (req.body.moduleId !== undefined) {
       updates.moduleId = (req.body.moduleId !== null && String(req.body.moduleId).trim() !== '')
@@ -1399,9 +1488,6 @@ async function updateGrandMockExam(req, res) {
     }
     if (req.body.moduleName !== undefined) {
       updates.moduleName = req.body.moduleName ? String(req.body.moduleName).trim() : null;
-    }
-    if (req.body.courseId !== undefined) {
-      updates.courseId = req.body.courseId || null;
     }
     if (req.body.marksPerQuestion !== undefined) {
       const parsedMarks = Number(req.body.marksPerQuestion);
@@ -1457,9 +1543,15 @@ async function updateGrandMockExam(req, res) {
 
     const effectiveTestType = updates.testType || exam.testType;
     const effectiveCourseId = Object.prototype.hasOwnProperty.call(updates, 'courseId') ? updates.courseId : exam.courseId;
+    const effectiveCourseIds = Object.prototype.hasOwnProperty.call(updates, 'courseIds')
+      ? updates.courseIds
+      : getExamAssignedCourseIds({ courseIds: exam.courseIds, courseId: effectiveCourseId });
     const effectiveModuleId = Object.prototype.hasOwnProperty.call(updates, 'moduleId') ? updates.moduleId : exam.moduleId;
+    if (normalizeTestType(effectiveTestType) === 'course_test' && effectiveCourseIds.length === 0) {
+      return res.status(400).json({ success: false, message: 'At least one course must be selected for Course Tests.' });
+    }
     if (normalizeTestType(effectiveTestType) === 'course_test' && effectiveModuleId && String(effectiveCourseId || '').toLowerCase() !== 'unani') {
-      const validation = await resolveCourseTestModule(effectiveCourseId, req.body.courseIds, effectiveModuleId);
+      const validation = await resolveCourseTestModule(effectiveCourseId, effectiveCourseIds, effectiveModuleId);
       if (!validation.valid) return res.status(400).json({ success: false, message: validation.message });
       updates.courseId = validation.course.courseId || validation.course._id.toString();
       if (!updates.courseName && validation.course.courseTitle) updates.courseName = validation.course.courseTitle;

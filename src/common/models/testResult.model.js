@@ -15,6 +15,13 @@ const answerSchema = new mongoose.Schema({
     enum: ['A', 'B', 'C', 'D', null, ''],
     default: null
   },
+  questionText: { type: String, default: '' },
+  options: { type: mongoose.Schema.Types.Mixed, default: {} },
+  selectedAnswer: { type: String, default: null },
+  selectedOptionText: { type: String, default: null },
+  correctAnswer: { type: String, default: null },
+  correctOptionText: { type: String, default: null },
+  status: { type: String, enum: ['correct', 'wrong', 'unanswered'], default: 'unanswered' },
   isCorrect: {
     type: Boolean,
     required: true,

@@ -169,6 +169,23 @@ async function verifyStudentCourseAccess(reqUser, requestedCourseId) {
   return false;
 }
 
+/** Grant access when the student is enrolled in at least one assigned course. */
+async function verifyStudentCourseAccessAny(reqUser, requestedCourseIds) {
+  const seen = new Set();
+  const ids = (Array.isArray(requestedCourseIds) ? requestedCourseIds : [requestedCourseIds])
+    .map((value) => String(value || '').trim())
+    .filter((id) => {
+      const key = id.toLowerCase();
+      if (!id || seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+  for (const courseId of ids) {
+    if (await verifyStudentCourseAccess(reqUser, courseId)) return true;
+  }
+  return false;
+}
+
 /**
  * Get the normalized list of enrolled course IDs for a student.
  * Used by controllers to build multi-course exam/content filters.
@@ -215,6 +232,7 @@ function getStudentEnrolledCourseIds(student) {
 
 module.exports = {
   verifyStudentCourseAccess,
+  verifyStudentCourseAccessAny,
   getStudentEnrolledCourseIds,
   collectEnrolledIds,
 };

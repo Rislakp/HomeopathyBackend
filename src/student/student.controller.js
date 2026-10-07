@@ -3,13 +3,19 @@ const Exam = require('../../models/Exam');
 const TestResult = require('../common/models/testResult.model');
 const Student = require('../../models/Student');
 const User = require('../../models/User');
-const { verifyStudentCourseAccess } = require('../../utils/courseAccessHelper');
+const { verifyStudentCourseAccess, verifyStudentCourseAccessAny } = require('../../utils/courseAccessHelper');
 const {
   getStudentCandidateIds,
   getStudentExamAttemptMap,
   computeExamAttemptMetrics
 } = require('../../utils/examAttemptHelper');
 const { parsePaginationParams, buildPaginationResponse } = require('../../utils/pagination');
+const { sanitizeQuestionForStudent, resolveNegativeMark, evaluateSubmittedAnswers } = require('./normalExamRules');
+const {
+  expandLegacyCourseFiltersForExamArrays,
+  getExamAssignedCourseIds,
+  buildStudentPublishedExamClause,
+} = require('../../utils/examCourseAssignment');
 try { require('../../models/Course'); } catch (e) {}
 
 /**
@@ -285,19 +291,40 @@ function isPublishedForStudents(exam) {
   return status === 'published';
 }
 
+async function verifyStudentExamEligibility(req, res) {
+  const role = (req.user?.role || '').toLowerCase().trim();
+  if (role !== 'student') return true;
+
+  const candidateIds = await getStudentCandidateIds(req.user);
+  let student = null;
+  if (req.user?.studentId && mongoose.Types.ObjectId.isValid(req.user.studentId)) {
+    student = await Student.findById(req.user.studentId).lean();
+  }
+  if (!student && candidateIds.length) {
+    student = await Student.findOne({ $or: [
+      { _id: { $in: candidateIds } },
+      { userId: { $in: candidateIds } },
+    ] }).lean();
+  }
+  if (!student && req.user?.email) {
+    student = await Student.findOne({ email: req.user.email.toLowerCase().trim() }).lean();
+  }
+  if (!student) {
+    res.status(403).json({ success: false, message: 'Student profile not found.' });
+    return false;
+  }
+  const activeStatuses = ['approved', 'active'];
+  const accountStatus = String(student.accountStatus || '').trim().toLowerCase();
+  const studentStatus = String(student.status || '').trim().toLowerCase();
+  if (!(activeStatuses.includes(accountStatus) || activeStatuses.includes(studentStatus) || student.isApproved === true)) {
+    res.status(403).json({ success: false, message: 'Account is not active or approved.' });
+    return false;
+  }
+  return true;
+}
+
 function applyPublishedExamFilter(filter) {
-  filter.$and = [
-    ...(filter.$and || []),
-    {
-      $or: [
-        { status: 'Published' },
-        { status: 'published' },
-        { status: { $exists: false } },
-        { status: null },
-        { status: '' },
-      ],
-    },
-  ];
+  filter.$and = [...(filter.$and || []), buildStudentPublishedExamClause()];
 }
 
 /**
@@ -390,7 +417,7 @@ async function getAvailableExams(req, res) {
           specificCourseOr.push({ courseId: targetCourseDoc.courseId });
         }
       }
-      filter.$or = specificCourseOr;
+      filter.$or = expandLegacyCourseFiltersForExamArrays(specificCourseOr);
     } else {
       if (!isStaff && studentDoc && !isExplicitGrandMock) {
         // ── Multi-course: collect all enrolled course IDs ──────────────────────
@@ -398,15 +425,8 @@ async function getAvailableExams(req, res) {
         const { rawIds, objectIds } = getStudentEnrolledCourseIds(studentDoc);
 
         // Also pull from req.user (JWT claims) for redundancy
-        if (Array.isArray(req.user?.courseIds)) {
-          req.user.courseIds.forEach(id => {
-            const s = String(id || '').trim();
-            if (s && !rawIds.includes(s)) rawIds.push(s);
-          });
-        }
-        if (req.user?.courseId && !rawIds.includes(req.user.courseId)) {
-          rawIds.push(req.user.courseId);
-        }
+        const jwtCourses = getStudentEnrolledCourseIds(req.user).rawIds;
+        jwtCourses.forEach((id) => { if (!rawIds.includes(id)) rawIds.push(id); });
 
         // Batch-resolve all enrolled courses from DB to get every identifier form
         const CourseModel = mongoose.models.Course || require('../../models/Course');
@@ -465,12 +485,13 @@ async function getAvailableExams(req, res) {
             return true;
           });
 
+          const expandedCourseFilters = expandLegacyCourseFiltersForExamArrays(uniqueFilter);
           if (isExplicitCourseTest) {
-            filter.$or = uniqueFilter;
+            filter.$or = expandedCourseFilters;
           } else {
             // Allow enrolled course exams OR grand mocks
             filter.$or = [
-              ...uniqueFilter.map(c => ({ ...c, testType: 'course_test' })),
+              ...expandedCourseFilters.map(c => ({ ...c, testType: 'course_test' })),
               { testType: 'grand_mock' },
               { testType: { $regex: /^(grand[-_ ]?mock|mock)$/i } },
               { testType: { $exists: false } },
@@ -591,6 +612,8 @@ async function startExam(req, res) {
   try {
     const { id } = req.params;
 
+    if (!(await verifyStudentExamEligibility(req, res))) return;
+
     if (!mongoose.Types.ObjectId.isValid(id)) {
       return res.status(400).json({
         success: false,
@@ -611,8 +634,12 @@ async function startExam(req, res) {
       return res.status(404).json({ success: false, message: 'Grand Mock Exam not found.' });
     }
 
-    if (exam.courseId && normalizeTestType(exam.testType) === 'course_test') {
-      const hasAccess = await verifyStudentCourseAccess(req.user, exam.courseId);
+    if (normalizeTestType(exam.testType) === 'course_test') {
+      const assignedCourseIds = getExamAssignedCourseIds(exam);
+      if (assignedCourseIds.length === 0) {
+        return res.status(404).json({ success: false, message: 'Course Test not found.' });
+      }
+      const hasAccess = await verifyStudentCourseAccessAny(req.user, assignedCourseIds);
       if (!hasAccess) {
         return res.status(403).json({
           success: false,
@@ -674,10 +701,7 @@ async function startExam(req, res) {
     const { courseName, moduleName, canonicalCourseId } = await resolveCourseAndModuleNames(exam);
 
     // Sanitize questions to prevent cheating - completely remove `correctOption`
-    const sanitizedQuestions = (exam.questions || []).map((q) => {
-      const { correctOption, explanation, ...questionWithoutAnswer } = q;
-      return questionWithoutAnswer;
-    });
+    const sanitizedQuestions = (exam.questions || []).map(sanitizeQuestionForStudent);
 
     return res.status(200).json({
       success: true,
@@ -686,9 +710,7 @@ async function startExam(req, res) {
         courseId: canonicalCourseId || exam.courseId,
         courseName,
         moduleName,
-        negativeMark: exam.negativeMark !== undefined && exam.negativeMark !== null
-          ? exam.negativeMark
-          : (exam.negativeMarkPenalty ?? 0),
+        negativeMark: resolveNegativeMark(exam),
         questions: sanitizedQuestions
       }
     });
@@ -790,6 +812,8 @@ async function submitExam(req, res) {
       });
     }
 
+    if (!(await verifyStudentExamEligibility(req, res))) return;
+
     if (!mongoose.Types.ObjectId.isValid(id)) {
       return res.status(400).json({
         success: false,
@@ -797,16 +821,10 @@ async function submitExam(req, res) {
       });
     }
 
-    const { answers } = req.body;
-    if (!answers || !Array.isArray(answers)) {
-      return res.status(400).json({
-        success: false,
-        message: 'Invalid answers format. Expected an array of answers: [{ questionId, selectedOption }]'
-      });
-    }
-
     // 1. Fetch original exam with answer keys from database
-    const exam = await Exam.findById(id);
+    // Lean keeps absent legacy negativeMark fields absent so penalty fallback
+    // to negativeMarkPenalty can distinguish them from an intentional zero.
+    const exam = await Exam.findById(id).lean();
     if (!exam) {
       return res.status(404).json({
         success: false,
@@ -818,8 +836,12 @@ async function submitExam(req, res) {
       return res.status(404).json({ success: false, message: 'Exam not found.' });
     }
 
-    if (exam.courseId && normalizeTestType(exam.testType) === 'course_test') {
-      const hasAccess = await verifyStudentCourseAccess(req.user, exam.courseId);
+    if (normalizeTestType(exam.testType) === 'course_test') {
+      const assignedCourseIds = getExamAssignedCourseIds(exam);
+      if (assignedCourseIds.length === 0) {
+        return res.status(404).json({ success: false, message: 'Course Test not found.' });
+      }
+      const hasAccess = await verifyStudentCourseAccessAny(req.user, assignedCourseIds);
       if (!hasAccess) {
         return res.status(403).json({
           success: false,
@@ -828,138 +850,82 @@ async function submitExam(req, res) {
       }
     }
 
-    // ── Scoring Rules — read from the exam document stored in MongoDB ──────
-    // marksPerQuestion: positive marks for each correct answer (default: 1)
-    // negativeMark    : penalty deducted for each wrong answer (default: 0)
-    // Unanswered questions always receive 0 marks with no penalty.
-    const MARKS_CORRECT = Number(exam.marksPerQuestion) || 1;
-
-    let rawPenalty = 0;
-    if (exam.negativeMark !== undefined && exam.negativeMark !== null) {
-      rawPenalty = Number(exam.negativeMark);
-    } else if (exam.negativeMarks !== undefined && exam.negativeMarks !== null) {
-      rawPenalty = Number(exam.negativeMarks);
-    } else if (exam.negativeMarkPenalty !== undefined && exam.negativeMarkPenalty !== null) {
-      rawPenalty = Number(exam.negativeMarkPenalty);
+    const candidateIds = await getStudentCandidateIds(req.user);
+    if (candidateIds.length === 0) {
+      return res.status(401).json({ success: false, message: 'Student identity could not be resolved.' });
     }
-    const MARKS_PENALTY = isNaN(rawPenalty) ? 0 : Math.abs(rawPenalty);
 
-    const totalQuestions = (exam.questions && exam.questions.length) || exam.totalQuestions || 0;
-    const maximumScore = totalQuestions * MARKS_CORRECT;
-    const totalMarks = maximumScore;
+    const previousAttempts = await TestResult.find({
+      studentId: { $in: candidateIds },
+      examId: exam._id,
+    }).sort({ createdAt: -1 });
+    if (previousAttempts.some((result) => ['Completed', 'Attempted'].includes(result.status))) {
+      return res.status(409).json({ success: false, message: 'This exam has already been submitted.' });
+    }
+    const existingInProgress = previousAttempts.find((result) => result.status === 'In Progress');
+    if (!existingInProgress) {
+      return res.status(409).json({ success: false, message: 'Start this exam before submitting answers.' });
+    }
 
-    // Create lookup map for exam questions by question _id string and index
-    const questionMap = new Map();
-    if (Array.isArray(exam.questions)) {
-      exam.questions.forEach((q, index) => {
-        if (q._id) {
-          questionMap.set(q._id.toString(), q);
-        }
-        // Support index-based lookup (0-indexed and 1-indexed)
-        questionMap.set(index.toString(), q);
-        questionMap.set((index + 1).toString(), q);
+    // Use exactly the stored exam rules. Unanswered entries remain zero marks.
+    const MARKS_CORRECT = Number(exam.marksPerQuestion) || 1;
+    const MARKS_PENALTY = resolveNegativeMark(exam);
+    let scoring;
+    try {
+      scoring = evaluateSubmittedAnswers(
+        exam.questions || [],
+        req.body?.answers,
+        MARKS_CORRECT,
+        MARKS_PENALTY,
+        normalizeOptionKey
+      );
+    } catch (validationError) {
+      return res.status(validationError.statusCode || 400).json({
+        success: false,
+        message: validationError.message,
       });
     }
+    const {
+      answers: processedAnswers,
+      totalQuestions,
+      totalAttempted,
+      totalCorrect,
+      totalWrong,
+      unansweredQuestions,
+      positiveMarks,
+      negativeMarks,
+      maximumScore,
+      totalMarks,
+      score: finalScore,
+      percentage,
+    } = scoring;
 
-    let totalAttempted = 0;
-    let totalCorrect = 0;
-    let totalWrong = 0;
-    let positiveMarks = 0;
-    let negativeMarks = 0;
-    const processedAnswers = [];
-
-    // 2. Evaluate each submitted answer with robust option matching
-    for (const ans of answers) {
-      const qId = ans.questionId !== undefined && ans.questionId !== null ? ans.questionId.toString().trim() : null;
-      const targetQuestion = qId ? questionMap.get(qId) : null;
-
-      if (targetQuestion) {
-        // Robust option normalization for both selectedOption and correctOption
-        const userOptionKey = normalizeOptionKey(ans.selectedOption, targetQuestion.options);
-        const correctOptionKey = getQuestionCorrectOption(targetQuestion);
-
-        const isAttempted = userOptionKey !== null;
-        const isCorrect = isAttempted && correctOptionKey !== null && userOptionKey === correctOptionKey;
-
-        if (isAttempted) {
-          totalAttempted++;
-          if (isCorrect) {
-            totalCorrect++;
-            positiveMarks += MARKS_CORRECT;
-          } else {
-            totalWrong++;
-            negativeMarks += MARKS_PENALTY;
-          }
-        }
-
-        const correctOptStr = correctOptionKey;
-
-        processedAnswers.push({
-          questionId: targetQuestion._id || (mongoose.Types.ObjectId.isValid(qId) ? qId : null),
-          selectedOption: userOptionKey, // Guaranteed 'A', 'B', 'C', 'D' or null
-          selectedAnswer: userOptionKey,
-          selectedOptionText: targetQuestion.options && userOptionKey ? targetQuestion.options[userOptionKey] : null,
-          correctOption: correctOptStr,
-          correctAnswer: correctOptStr,
-          correctOptionText: targetQuestion.options && correctOptStr ? targetQuestion.options[correctOptStr] : null,
-          isCorrect: isCorrect
-        });
-      }
-    }
-
-    // 3. Compute score using negative-marking formula (values from DB)
-    //    finalScore = (correctAnswers × marksPerQuestion) - (wrongAnswers × negativeMark)
-    const rawFinalScore = positiveMarks - negativeMarks;
-    const finalScore = Math.round(rawFinalScore * 100) / 100;
-    const unansweredQuestions = Math.max(0, totalQuestions - totalAttempted);
-    const percentage = maximumScore > 0
-      ? Math.round((finalScore / maximumScore) * 10000) / 100
-      : 0;
-
-    // 4. Save or update TestResult document in MongoDB
-    const candidateIds = await getStudentCandidateIds(req.user);
+    // Update the already-created in-progress attempt; never create a second
+    // completed attempt from the submission endpoint.
     const primaryStudentId = (req.user.id && mongoose.Types.ObjectId.isValid(req.user.id))
       ? new mongoose.Types.ObjectId(req.user.id)
       : candidateIds[0];
-
-    const existingInProgress = await TestResult.findOne({
-      studentId: { $in: candidateIds },
-      examId: exam._id,
-      status: 'In Progress'
-    });
-
-    let testResult;
-    if (existingInProgress) {
-      existingInProgress.score = finalScore;
-      existingInProgress.totalMarks = totalMarks;
-      existingInProgress.totalAttempted = totalAttempted;
-      existingInProgress.totalCorrect = totalCorrect;
-      existingInProgress.totalWrong = totalWrong;
-      existingInProgress.unansweredQuestions = unansweredQuestions;
-      existingInProgress.positiveMarks = Math.round(positiveMarks * 100) / 100;
-      existingInProgress.negativeMarks = Math.round(negativeMarks * 100) / 100;
-      existingInProgress.maximumScore = maximumScore;
-      existingInProgress.percentage = percentage;
-      existingInProgress.status = 'Completed';
-      existingInProgress.answers = processedAnswers;
-      testResult = await existingInProgress.save();
-    } else {
-      testResult = await TestResult.create({
-        studentId: primaryStudentId,
-        examId: exam._id,
+    const testResult = await TestResult.findOneAndUpdate(
+      { _id: existingInProgress._id, status: 'In Progress' },
+      { $set: {
+        studentId: existingInProgress.studentId || primaryStudentId,
         score: finalScore,
         totalMarks,
         totalAttempted,
         totalCorrect,
         totalWrong,
         unansweredQuestions,
-        positiveMarks: Math.round(positiveMarks * 100) / 100,
-        negativeMarks: Math.round(negativeMarks * 100) / 100,
+        positiveMarks,
+        negativeMarks,
         maximumScore,
         percentage,
         status: 'Completed',
-        answers: processedAnswers
-      });
+        answers: processedAnswers,
+      } },
+      { new: true, runValidators: true }
+    );
+    if (!testResult) {
+      return res.status(409).json({ success: false, message: 'This exam has already been submitted.' });
     }
 
     return res.status(201).json({
@@ -996,10 +962,9 @@ async function submitExam(req, res) {
         attemptStatus:        'completed',
         hasAttempted:         true,
         isCompleted:          true,
-        answers:              testResult.answers,
         answers:              processedAnswers,
         examInfo: {
-          ...exam.toObject(),
+          ...exam,
           questions: exam.questions.map(formatQuestionWithAnswerKey)
         },
         createdAt:            testResult.createdAt
@@ -1080,7 +1045,7 @@ async function getStudentResults(req, res) {
     const [totalResults, results] = await Promise.all([
       TestResult.countDocuments(resultFilter),
       TestResult.find(resultFilter)
-        .populate('examId', 'title testType courseId moduleId courseName moduleName marksPerQuestion negativeMark negativeMarkPenalty durationMinutes totalQuestions')
+        .populate('examId', 'title testType courseId moduleId courseName moduleName marksPerQuestion negativeMark negativeMarkPenalty durationMinutes totalQuestions questions')
         .sort({ createdAt: -1 })
         .skip(skip)
         .limit(limit)
@@ -1117,7 +1082,27 @@ async function getStudentResults(req, res) {
         });
       }
 
-      const formattedAnswers = (result.answers || []).map((ans) => {
+      const storedAnswers = result.answers || [];
+      const formattedAnswers = exam && Array.isArray(exam.questions)
+        ? exam.questions.map((question, index) => {
+          const ans = storedAnswers.find((item) => item.questionId && question._id && item.questionId.toString() === question._id.toString()) || storedAnswers[index] || {};
+          const correctOpt = ans.correctOption || ans.correctAnswer || getQuestionCorrectOption(question);
+          const selectedOption = ans.selectedOption !== undefined ? ans.selectedOption : null;
+          return {
+            questionId: question._id || ans.questionId || null,
+            questionText: ans.questionText || question.questionText || '',
+            options: ans.options || question.options || {},
+            selectedOption,
+            selectedAnswer: ans.selectedAnswer !== undefined ? ans.selectedAnswer : selectedOption,
+            selectedOptionText: ans.selectedOptionText || (selectedOption ? (ans.options || question.options)?.[selectedOption] : null) || null,
+            correctOption: correctOpt || null,
+            correctAnswer: ans.correctAnswer || correctOpt || null,
+            correctOptionText: ans.correctOptionText || (correctOpt ? (ans.options || question.options)?.[correctOpt] : null) || null,
+            isCorrect: ans.isCorrect ?? (selectedOption !== null && selectedOption === correctOpt),
+            status: ans.status || (selectedOption == null ? 'unanswered' : (selectedOption === correctOpt ? 'correct' : 'wrong'))
+          };
+        })
+        : storedAnswers.map((ans) => {
         let correctOpt = ans.correctOption || ans.correctAnswer || null;
         let targetQ = null;
         if (ans.questionId) {
@@ -1128,13 +1113,16 @@ async function getStudentResults(req, res) {
         }
         return {
           questionId: ans.questionId,
+          questionText: ans.questionText || targetQ?.questionText || '',
+          options: ans.options || targetQ?.options || {},
           selectedOption: ans.selectedOption !== undefined ? ans.selectedOption : null,
-          selectedAnswer: ans.selectedOption !== undefined ? ans.selectedOption : null,
-          selectedOptionText: targetQ && targetQ.options && ans.selectedOption ? targetQ.options[ans.selectedOption] : null,
+          selectedAnswer: ans.selectedAnswer !== undefined ? ans.selectedAnswer : (ans.selectedOption !== undefined ? ans.selectedOption : null),
+          selectedOptionText: ans.selectedOptionText || (ans.options && ans.selectedOption ? ans.options[ans.selectedOption] : null) || (targetQ && targetQ.options && ans.selectedOption ? targetQ.options[ans.selectedOption] : null),
           correctOption: correctOpt || null,
-          correctAnswer: correctOpt || null,
-          correctOptionText: targetQ && targetQ.options && correctOpt ? (targetQ.options[correctOpt] || null) : null,
-          isCorrect: ans.isCorrect
+          correctAnswer: ans.correctAnswer || correctOpt || null,
+          correctOptionText: ans.correctOptionText || (ans.options && correctOpt ? ans.options[correctOpt] : null) || (targetQ && targetQ.options && correctOpt ? (targetQ.options[correctOpt] || null) : null),
+          isCorrect: ans.isCorrect,
+          status: ans.status || (ans.selectedOption == null ? 'unanswered' : (ans.isCorrect ? 'correct' : 'wrong'))
         };
       });
 
