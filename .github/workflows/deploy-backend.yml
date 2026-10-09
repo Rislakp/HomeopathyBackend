@@ -51,7 +51,7 @@ jobs:
           git reset --hard origin/master
 
           echo "Installing production dependencies..."
-          npm ci --omit=dev
+          npm ci --omit=dev --legacy-peer-deps
 
           echo "Restarting backend..."
           pm2 restart ptblync-backend --update-env
