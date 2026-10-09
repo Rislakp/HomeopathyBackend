@@ -22,9 +22,7 @@ router.post('/auth/register', registerAdmin);
 router.post('/reset-password', resetPassword);
 router.put('/reset-password', resetPassword);
 router.patch('/reset-password', resetPassword);
-router.post('/update-password', resetPassword);
-router.put('/update-password', resetPassword);
-router.patch('/update-password', resetPassword);
+// Note: update-password omitted here since it requires auth; typically handled in authRoutes.
 
 // Protect all remaining routes in this router with Admin authentication middleware
 router.use(adminAuthMiddleware);

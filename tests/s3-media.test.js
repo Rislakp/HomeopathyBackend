@@ -163,12 +163,12 @@ test('private media access requires the key to be referenced by an authorized co
 
   const denied = await call(controller.getMediaAccessUrl, { courseId: 'CRS-123', key: 'pdfs/not-attached.pdf' });
   assert.equal(denied.statusCode, 404);
-  Student.findOne = async () => null;
+  Student.findOne = () => { const p = Promise.resolve(null); p.lean = async () => null; return p; };
   const unauthorized = await call(controller.getMediaAccessUrl, { courseId: 'CRS-123', key: 'pdfs/stored-notes.pdf' }, { id: 'student-test', email: 'learner@example.test', role: 'student' });
   assert.equal(unauthorized.statusCode, 403);
   const missingKey = await call(controller.getMediaAccessUrl, {}, { id: 'student-test', role: 'student' });
   assert.equal(missingKey.statusCode, 400);
-  Student.findOne = async () => ({ courseId: 'CRS-123', status: 'Active', subscriptionStatus: 'Active', email: 'learner@example.test' });
+  Student.findOne = () => { const p = Promise.resolve({ courseId: 'CRS-123', status: 'Active', subscriptionStatus: 'Active', email: 'learner@example.test' }); p.lean = async () => await p; return p; };
   const studentAccess = await call(controller.getMediaAccessUrl, {}, { id: 'student-test', email: 'learner@example.test', role: 'student' }, { s3Key: 'pdfs/stored-notes.pdf' });
   assert.equal(studentAccess.statusCode, 200);
   assert.equal(studentAccess.body.s3Key, 'pdfs/stored-notes.pdf');
@@ -548,12 +548,7 @@ test('6. Student access-url request with valid course access succeeds', async (t
     modules: [{ lessons: [{ videoS3Key: key }] }],
   };
   Course.findOne = async () => courseDoc;
-  Student.findOne = async () => ({
-    courseId: 'CRS-REG-6',
-    status: 'Active',
-    subscriptionStatus: 'Active',
-    email: 'student@example.test',
-  });
+  Student.findOne = () => { const p = Promise.resolve({ courseId: 'CRS-REG-6', status: 'Active', subscriptionStatus: 'Active', email: 'student@example.test' }); p.lean = async () => await p; return p; };
   t.after(() => {
     Course.findOne = originalFindOne;
     Student.findOne = originalStudentFindOne;
@@ -574,7 +569,7 @@ test('7. Student request without course access returns 403', async (t) => {
     courseId: 'CRS-REG-7',
     modules: [{ lessons: [{ videoS3Key: key }] }],
   });
-  Student.findOne = async () => null; // No active enrollment
+  Student.findOne = () => { const p = Promise.resolve(null); p.lean = async () => null; return p; }; // No active enrollment
   t.after(() => {
     Course.findOne = originalFindOne;
     Student.findOne = originalStudentFindOne;

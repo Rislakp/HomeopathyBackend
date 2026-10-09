@@ -30,6 +30,11 @@ if (!fs.existsSync(uploadsDir)) {
 
 const app = express();
 
+if (process.env.NODE_ENV === 'production' && !process.env.JWT_SECRET) {
+  console.error('FATAL ERROR: JWT_SECRET environment variable is missing in production environment.');
+  process.exit(1);
+}
+
 // CORS Allowlist
 const allowedOrigins = [
   'https://unani-landing-screen.onrender.com',

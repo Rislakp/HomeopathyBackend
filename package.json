@@ -33,7 +33,6 @@
     "mime-types": "^2.1.35",
     "mongoose": "^8.2.1",
     "multer": "^2.2.0",
-    "multer-storage-cloudinary": "^4.0.0",
     "pdf-parse": "^1.1.1",
     "pdfkit": "^0.20.1",
     "sharp": "^0.35.4",
