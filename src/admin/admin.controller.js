@@ -8,6 +8,7 @@ const {
   getStudentExamAttemptMap,
   computeExamAttemptMetrics
 } = require('../../utils/examAttemptHelper');
+const { resolveProfileImageUrl } = require('../../utils/s3MediaSigner');
 try { require('../../models/Course'); } catch (e) {}
 
 /**
@@ -651,8 +652,25 @@ async function getGrandMockById(req, res) {
     const resultsForExam = attemptMap.get(exam._id.toString()) || [];
     const metrics = computeExamAttemptMetrics(exam, resultsForExam);
 
+    const formattedQuestions = await Promise.all(
+      (exam.questions || []).map(async (q) => {
+        const rawImg = q.imageUrl || q.image || q.questionImage || q.imgUrl;
+        if (typeof rawImg === 'string' && rawImg.trim()) {
+          const signed = await resolveProfileImageUrl(rawImg.trim());
+          return {
+            ...q,
+            imageUrl: signed,
+            image: signed,
+            questionImage: signed,
+          };
+        }
+        return q;
+      })
+    );
+
     const formattedExam = {
       ...exam,
+      questions: formattedQuestions,
       courseId: courseIdStr,
       courseName: finalCourseName,
       moduleId: moduleIdStr,

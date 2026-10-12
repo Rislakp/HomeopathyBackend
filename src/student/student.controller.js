@@ -143,6 +143,7 @@ async function formatQuestionWithAnswerKey(question) {
     ...question,
     imageUrl: resolvedImageUrl,
     image: resolvedImageUrl,
+    questionImage: resolvedImageUrl,
     correctOption,
     correctAnswer: correctOption,
     correctOptionText,
@@ -717,6 +718,7 @@ async function startExam(req, res) {
         const signed = await resolveProfileImageUrl(rawImg.trim());
         sanitized.imageUrl = signed;
         sanitized.image = signed;
+        sanitized.questionImage = signed;
       }
       return sanitized;
     }));

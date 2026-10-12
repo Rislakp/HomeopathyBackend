@@ -3,7 +3,7 @@ const { getSignedUrl } = require('@aws-sdk/s3-request-presigner');
 const { s3Client, bucket, region, publicBaseUrl } = require('../config/s3');
 
 const S3_MEDIA_URL_TTL_SECONDS = 900;
-const SAFE_S3_KEY = /^(videos|images|pdfs|reviews|unani_ranks|grand_mock_questions|live_records|[a-zA-Z0-9_-]+)\/[a-zA-Z0-9][a-zA-Z0-9._/-]*$/;
+const SAFE_S3_KEY = /^(videos|images|pdfs|reviews|unani_ranks|grand_mock_questions|live_records)\/[a-zA-Z0-9][a-zA-Z0-9._/-]*$/;
 
 const stripS3ReferenceUrls = (reference) => ({
   ...reference,
@@ -134,7 +134,9 @@ const resolveProfileImageUrl = async (rawImage) => {
   if (!rawImage || typeof rawImage !== 'string') return rawImage;
   const s3Ref = normalizeS3Reference(rawImage);
   if (!s3Ref) return rawImage;
-  const signed = await signS3Reference(s3Ref);
+  const key = (s3Ref.s3Key || '').toLowerCase();
+  const contentType = key.endsWith('.png') ? 'image/png' : (key.endsWith('.webp') ? 'image/webp' : (key.endsWith('.gif') ? 'image/gif' : 'image/jpeg'));
+  const signed = await signS3Reference(s3Ref, contentType);
   return signed?.url || signed?.secure_url || rawImage;
 };
 

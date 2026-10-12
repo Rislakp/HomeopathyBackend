@@ -61,6 +61,8 @@ router.get('/api/student/exams/:id/start', startExam);
 router.post('/api/student/exams/:id/start', startExam);
 router.get('/api/v1/student/exams/:id/start', startExam);
 router.post('/api/v1/student/exams/:id/start', startExam);
+router.get('/api/student/exams/:id', startExam);
+router.get('/api/v1/student/exams/:id', startExam);
 
 /**
  * @route   POST /api/student/exams/:id/submit

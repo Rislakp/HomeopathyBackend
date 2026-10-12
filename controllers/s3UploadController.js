@@ -60,26 +60,35 @@ const safeFileName = (value) => {
   return fileName && fileName !== '.' && fileName !== '..' ? fileName : null;
 };
 const validSize = (value, maxBytes) => Number.isSafeInteger(value) && value > 0 && value <= maxBytes;
-const makeReference = ({ key, fileName, contentType, fileSize, uploadStatus = 'uploaded' }) => ({
-  title: fileName,
-  url: '',
-  secure_url: '',
-  secureUrl: '',
-  fileUrl: '',
-  documentUrl: '',
-  path: '',
-  storageProvider: 's3',
-  s3Key: key,
-  resourceType: contentType?.startsWith('video/') ? 'video' : (contentType === 'application/pdf' ? 'pdf' : 'image'),
-  resource_type: contentType?.startsWith('video/') ? 'video' : (contentType === 'application/pdf' ? 'raw' : 'image'),
-  fileName,
-  originalFileName: fileName,
-  contentType,
-  mimetype: contentType,
-  fileSize: fileSize || 0,
-  size: fileSize || 0,
-  uploadStatus,
-});
+const makeReference = ({ key, fileName, contentType, fileSize, duration, uploadStatus = 'uploaded' }) => {
+  const resolvedSize = Number(fileSize) || 0;
+  const numDuration = (duration !== undefined && duration !== null && !isNaN(duration) && Number(duration) > 0)
+    ? Number(duration)
+    : undefined;
+
+  return {
+    title: fileName,
+    url: '',
+    secure_url: '',
+    secureUrl: '',
+    fileUrl: '',
+    documentUrl: '',
+    path: '',
+    storageProvider: 's3',
+    s3Key: key,
+    resourceType: contentType?.startsWith('video/') ? 'video' : (contentType === 'application/pdf' ? 'pdf' : 'image'),
+    resource_type: contentType?.startsWith('video/') ? 'video' : (contentType === 'application/pdf' ? 'raw' : 'image'),
+    fileName,
+    originalFileName: fileName,
+    contentType,
+    mimetype: contentType,
+    fileSize: resolvedSize,
+    size: resolvedSize,
+    bytes: resolvedSize,
+    ...(numDuration !== undefined ? { duration: numDuration, videoDuration: numDuration } : {}),
+    uploadStatus,
+  };
+};
 const handleS3Error = (res, error, action) => {
   const status = Number(error.$metadata?.httpStatusCode) || 0;
   const code = error.name || error.Code || 'S3Error';
@@ -200,6 +209,11 @@ const completeMultipartUpload = async (req, res) => {
           if (objectMetadata.ContentLength) {
             recording.bytes = objectMetadata.ContentLength;
           }
+          if (req.body?.duration) {
+            recording.duration = String(req.body.duration).trim();
+          } else if (req.body?.videoDuration) {
+            recording.duration = `${Math.round(req.body.videoDuration)} sec`;
+          }
           await recording.save();
           linkedRecording = recording;
         }
@@ -207,6 +221,8 @@ const completeMultipartUpload = async (req, res) => {
         console.warn('[S3 multipart] Failed to link recording to completed upload:', recErr.message);
       }
     }
+
+    const durationVal = req.body?.duration !== undefined ? req.body.duration : req.body?.videoDuration;
 
     return res.json({
       success: true,
@@ -223,6 +239,7 @@ const completeMultipartUpload = async (req, res) => {
         fileName: safeFileName(req.body?.fileName) || key.split('/').pop(),
         contentType: objectMetadata.ContentType || req.body?.contentType || 'application/octet-stream',
         fileSize: objectMetadata.ContentLength || 0,
+        duration: durationVal,
       }),
     });
   } catch (error) { return handleS3Error(res, error, 'complete'); }
@@ -606,7 +623,12 @@ const getMediaAccessUrl = async (req, res) => {
     }
 
     // 4. Generate SigV4 signed URL
-    const contentType = (prefix === 'videos/' || prefix === 'live_records/') ? undefined : (prefix === 'pdfs/' ? 'application/pdf' : undefined);
+    let contentType = undefined;
+    if (prefix === 'videos/' || prefix === 'live_records/') {
+      contentType = key.endsWith('.webm') ? 'video/webm' : 'video/mp4';
+    } else if (prefix === 'pdfs/') {
+      contentType = 'application/pdf';
+    }
     const url = await getSignedUrl(s3Client, new GetObjectCommand({
       Bucket: bucket,
       Key: key,

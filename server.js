@@ -144,6 +144,7 @@ const corsOptionsDelegate = (req, callback) => {
     'Content-Type',
     'Accept',
     'Origin',
+    'Range',
     'X-Requested-With',
     'x-student-id',
     'x-user-id',
@@ -162,7 +163,7 @@ const corsOptionsDelegate = (req, callback) => {
     credentials: true,
     methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS', 'HEAD'],
     allowedHeaders: allowedHeaders,
-    exposedHeaders: ['Content-Range', 'X-Content-Range', 'ETag', 'Authorization'],
+    exposedHeaders: ['Content-Range', 'X-Content-Range', 'Accept-Ranges', 'Content-Length', 'Content-Type', 'ETag', 'Authorization'],
     optionsSuccessStatus: 204,
     maxAge: 86400,
   });

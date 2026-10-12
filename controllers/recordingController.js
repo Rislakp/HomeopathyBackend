@@ -11,6 +11,48 @@ const { verifyStudentCourseAccess } = require('../utils/courseAccessHelper');
 const { parsePaginationParams, buildPaginationResponse } = require('../utils/pagination');
 const { normalizeS3Reference, signS3Reference } = require('../utils/s3MediaSigner');
 
+const parseDurationInSeconds = (val) => {
+  if (val === null || val === undefined || val === '') return 0;
+  if (typeof val === 'number') return isFinite(val) && val > 0 ? val : 0;
+  const str = String(val).trim();
+  if (!str) return 0;
+
+  // Handle clock formats like "18:45" or "01:23:45"
+  if (str.includes(':')) {
+    const parts = str.split(':').map((p) => parseFloat(p.trim()));
+    if (parts.some((p) => isNaN(p) || p < 0)) return 0;
+    if (parts.length === 2) {
+      const [min, sec] = parts;
+      return (min * 60) + sec;
+    }
+    if (parts.length === 3) {
+      const [hr, min, sec] = parts;
+      return (hr * 3600) + (min * 60) + sec;
+    }
+  }
+
+  // Handle unit formats like "120 sec", "120s", "2.5 min", "1 hr"
+  const secMatch = str.match(/^([\d.]+)\s*(?:s|sec|secs|seconds?)$/i);
+  if (secMatch) {
+    const s = parseFloat(secMatch[1]);
+    return isFinite(s) && s > 0 ? s : 0;
+  }
+  const minMatch = str.match(/^([\d.]+)\s*(?:m|min|mins|minutes?)$/i);
+  if (minMatch) {
+    const m = parseFloat(minMatch[1]);
+    return isFinite(m) && m > 0 ? m * 60 : 0;
+  }
+  const hrMatch = str.match(/^([\d.]+)\s*(?:h|hr|hrs|hours?)$/i);
+  if (hrMatch) {
+    const h = parseFloat(hrMatch[1]);
+    return isFinite(h) && h > 0 ? h * 3600 : 0;
+  }
+
+  // Numeric fallback (only if valid non-negative)
+  const num = parseFloat(str);
+  return isFinite(num) && num > 0 ? num : 0;
+};
+
 const findCourseByIdOrCustomId = async (id) => {
   if (!id) return null;
   return await Course.findOne({
@@ -67,7 +109,7 @@ const calculateResolutionMetrics = (width, height, bytes, format) => {
     const i = Math.floor(Math.log(formattedBytes) / Math.log(k));
     formattedSize = parseFloat((formattedBytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
   } else {
-    formattedSize = '12.5 MB';
+    formattedSize = '';
   }
 
   return {
@@ -161,7 +203,7 @@ const formatRecordingDocument = async (rec) => {
     : storedVideoUrl;
   const s3VideoReference = normalizeS3Reference(s3RefCandidate);
   const signedResult = s3VideoReference
-    ? await signS3Reference(s3VideoReference, s3VideoReference.contentType)
+    ? await signS3Reference(s3VideoReference, s3VideoReference.contentType || 'video/mp4')
     : null;
   const recordedVideoUrl = signedResult?.url || storedVideoUrl;
 
@@ -196,9 +238,12 @@ const formatRecordingDocument = async (rec) => {
     storageProvider,
     status: rec.status || 'pending',
     duration: rec.duration || '',
+    videoDuration: parseDurationInSeconds(rec.duration),
     width: metrics.width,
     height: metrics.height,
     bytes: metrics.bytes,
+    videoBytes: metrics.bytes,
+    size: metrics.bytes,
     format: metrics.format,
     resolution: rec.resolution || metrics.resolution,
     qualityTag: rec.qualityTag || metrics.qualityTag,
@@ -651,7 +696,16 @@ exports.uploadRecordingVideo = async (req, res) => {
     // Extract image/video dimensions & specs if present
     const width = Number(uploaded.width || req.body.width) || 1920;
     const height = Number(uploaded.height || req.body.height) || 1080;
-    const bytes = Number(uploaded.bytes || (uploadedFile?.buffer ? uploadedFile.buffer.length : 0)) || 0;
+    const bytes = Number(
+      uploaded.bytes ||
+      uploaded.fileSize ||
+      uploaded.size ||
+      req.body.bytes ||
+      req.body.fileSize ||
+      req.body.size ||
+      (uploadedFile?.size) ||
+      (uploadedFile?.buffer ? uploadedFile.buffer.length : 0)
+    ) || 0;
     const format = (uploaded.format || req.body.format || 'mp4').toLowerCase();
 
     const metrics = calculateResolutionMetrics(width, height, bytes, format);
@@ -668,8 +722,9 @@ exports.uploadRecordingVideo = async (req, res) => {
     recording.resolution = metrics.resolution;
     recording.qualityTag = metrics.qualityTag;
 
-    if (req.body.duration) {
-      recording.duration = req.body.duration.trim();
+    const durationInput = req.body.duration !== undefined ? req.body.duration : req.body.videoDuration;
+    if (durationInput) {
+      recording.duration = String(durationInput).trim();
     }
 
     await recording.save();
@@ -685,19 +740,45 @@ exports.uploadRecordingVideo = async (req, res) => {
             if (lessonItem) {
               if (!lessonItem.videoUrl) lessonItem.videoUrl = secureUrl;
               const s3Reference = normalizeS3Reference(uploaded);
+              const partBytes = metrics.bytes || 0;
+              const partDur = parseDurationInSeconds(recording.duration);
               const videoPart = s3Reference || {
                 title: `${lessonItem.lessonTitle} - Recorded Video`,
                 url: secureUrl,
                 secure_url: secureUrl,
               };
-              const hasPart = lessonItem.videoParts.some((part) => (
+              const existingPart = lessonItem.videoParts.find((part) => (
                 (s3Reference && part.s3Key === s3Reference.s3Key) || part.url === secureUrl
               ));
-              if (!hasPart) {
+              if (!existingPart) {
                 lessonItem.videoParts.push({
                   ...videoPart,
                   title: videoPart.title || `${lessonItem.lessonTitle} - Recorded Video`,
+                  bytes: partBytes,
+                  fileSize: partBytes,
+                  size: partBytes,
+                  duration: partDur,
+                  videoDuration: partDur,
                 });
+              } else {
+                if (partBytes > 0) {
+                  existingPart.bytes = partBytes;
+                  existingPart.fileSize = partBytes;
+                  existingPart.size = partBytes;
+                }
+                if (partDur > 0) {
+                  existingPart.duration = partDur;
+                  existingPart.videoDuration = partDur;
+                }
+              }
+              if (!lessonItem.videoBytes && partBytes > 0) {
+                lessonItem.videoBytes = partBytes;
+              }
+              if (!lessonItem.videoDuration && partDur > 0) {
+                lessonItem.videoDuration = partDur;
+              }
+              if ((!lessonItem.durationOrPages || lessonItem.durationOrPages === '0 sec') && partDur > 0) {
+                lessonItem.durationOrPages = `${Math.round(partDur)} sec`;
               }
               await course.save();
             }
@@ -800,6 +881,9 @@ exports.deleteRecording = async (req, res) => {
 exports.getLiveRecords = exports.getRecordings;
 exports.uploadRecording = exports.createRecording;
 exports.getLiveRecordById = exports.getRecordingById;
+exports.formatRecordingDocument = formatRecordingDocument;
+exports.calculateResolutionMetrics = calculateResolutionMetrics;
+exports.parseDurationInSeconds = parseDurationInSeconds;
 
 module.exports = {
   createRecording: exports.createRecording,
@@ -811,5 +895,8 @@ module.exports = {
   getLiveRecords: exports.getRecordings,
   uploadRecording: exports.createRecording,
   getLiveRecordById: exports.getRecordingById,
+  formatRecordingDocument,
+  calculateResolutionMetrics,
+  parseDurationInSeconds,
   ...exports,
 };

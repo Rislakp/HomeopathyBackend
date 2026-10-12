@@ -226,19 +226,40 @@ const toResourceObj = (item) => {
       public_id: publicId,
       resource_type: (resType || '').trim(),
       mimetype: (item.mimetype || (/\.pdf([?#]|$)/i.test(lowerUrl) ? 'application/pdf' : '')).trim(),
-      size: typeof item.size === 'number' ? item.size : (Number(item.size) || 0),
-      duration: typeof item.duration === 'number' ? item.duration : (Number(item.duration) || 0),
+      size: typeof item.bytes === 'number' && item.bytes > 0
+        ? item.bytes
+        : (typeof item.fileSize === 'number' && item.fileSize > 0
+          ? item.fileSize
+          : (typeof item.size === 'number' && item.size > 0 ? item.size : (Number(item.bytes || item.fileSize || item.size) || 0))),
+      duration: typeof item.duration === 'number' && item.duration > 0
+        ? item.duration
+        : (typeof item.videoDuration === 'number' && item.videoDuration > 0
+          ? item.videoDuration
+          : (Number(item.duration || item.videoDuration) || 0)),
+      videoDuration: typeof item.duration === 'number' && item.duration > 0
+        ? item.duration
+        : (typeof item.videoDuration === 'number' && item.videoDuration > 0
+          ? item.videoDuration
+          : (Number(item.duration || item.videoDuration) || 0)),
       width: typeof item.width === 'number' ? item.width : (item.width ? Number(item.width) : null),
       height: typeof item.height === 'number' ? item.height : (item.height ? Number(item.height) : null),
       format: (item.format || '').trim(),
-      bytes: typeof item.bytes === 'number' ? item.bytes : (Number(item.bytes || item.size) || 0),
+      bytes: typeof item.bytes === 'number' && item.bytes > 0
+        ? item.bytes
+        : (typeof item.fileSize === 'number' && item.fileSize > 0
+          ? item.fileSize
+          : (typeof item.size === 'number' && item.size > 0 ? item.size : (Number(item.bytes || item.fileSize || item.size) || 0))),
       storageProvider,
       s3Key: isS3Resource ? s3Key : '',
       resourceType: String(item.resourceType || resType || '').trim(),
       fileName: String(item.fileName || item.originalFileName || item.originalname || item.filename || title || '').trim(),
       originalFileName: String(item.originalFileName || item.originalname || item.fileName || item.filename || title || '').trim(),
       contentType: String(item.contentType || item.mimetype || '').trim(),
-      fileSize: typeof item.fileSize === 'number' ? item.fileSize : (Number(item.fileSize || item.size) || 0),
+      fileSize: typeof item.fileSize === 'number' && item.fileSize > 0
+        ? item.fileSize
+        : (typeof item.bytes === 'number' && item.bytes > 0
+          ? item.bytes
+          : (typeof item.size === 'number' && item.size > 0 ? item.size : (Number(item.fileSize || item.bytes || item.size) || 0))),
       uploadStatus: String(item.uploadStatus || '').trim(),
     };
   }
@@ -461,8 +482,31 @@ const serializeLesson = async (lesson, req) => {
       if (typeof media === 'string') {
         return { title: 'Resource', url: absUrl, secure_url: absUrl, fileUrl: absUrl, documentUrl: absUrl, path: absUrl };
       }
+      const rawBytes = typeof resource.bytes === 'number' && resource.bytes > 0
+        ? resource.bytes
+        : (typeof resource.fileSize === 'number' && resource.fileSize > 0
+          ? resource.fileSize
+          : (typeof resource.size === 'number' && resource.size > 0
+            ? resource.size
+            : (Number(resource.bytes || resource.fileSize || resource.size) || 0)));
+      const partBytes = rawBytes > 0 ? rawBytes : (Number(lesson.videoBytes) > 0 ? Number(lesson.videoBytes) : 0);
+
+      const rawDuration = typeof resource.duration === 'number' && resource.duration > 0
+        ? resource.duration
+        : (typeof resource.videoDuration === 'number' && resource.videoDuration > 0
+          ? resource.videoDuration
+          : (Number(resource.duration || resource.videoDuration) || 0));
+      const partDuration = rawDuration > 0 ? rawDuration : (Number(lesson.videoDuration) > 0 ? Number(lesson.videoDuration) : 0);
+
       return {
         ...media,
+        bytes: partBytes,
+        fileSize: partBytes,
+        size: partBytes,
+        duration: partDuration,
+        videoDuration: partDuration,
+        fileName: media.fileName || media.originalFileName || media.title || resource.fileName || resource.originalFileName || resource.title || '',
+        originalFileName: media.originalFileName || media.fileName || resource.originalFileName || resource.fileName || '',
         url: absUrl,
         secure_url: absUrl,
         fileUrl: absUrl,
@@ -500,21 +544,35 @@ const serializeLesson = async (lesson, req) => {
       : toAbsoluteUrl(lesson.videoUrl || firstVideoUrl, req);
   const primaryLessonUrl = primaryDocUrl || primaryVideoUrl || '';
 
+  const resolvedLessonBytes = (lesson.videoBytes && Number(lesson.videoBytes) > 0)
+    ? Number(lesson.videoBytes)
+    : (firstVideo ? Number(firstVideo.bytes || firstVideo.fileSize || firstVideo.size) || 0 : 0);
+
+  const resolvedLessonDuration = (lesson.videoDuration && Number(lesson.videoDuration) > 0)
+    ? Number(lesson.videoDuration)
+    : (firstVideo ? Number(firstVideo.duration || firstVideo.videoDuration) || 0 : 0);
+
+  const resolvedDurationOrPages = (lesson.durationOrPages || '').trim() || (resolvedLessonDuration > 0 ? `${Math.round(resolvedLessonDuration)} sec` : '');
+
   return {
     _id: lesson._id,
     id: lesson._id ? lesson._id.toString() : undefined,
     lessonTitle: lesson.lessonTitle || '',
     lessonType: lesson.lessonType || 'Recorded Video',
-    durationOrPages: lesson.durationOrPages || '',
+    durationOrPages: resolvedDurationOrPages,
     description: lesson.description || '',
     videoUrl: primaryVideoUrl,
     videoPublicId: lesson.videoPublicId || (primaryVideoUrl ? (getPublicIdFromUrl(primaryVideoUrl) || '') : ''),
     videoResourceType: lesson.videoResourceType || 'video',
-    videoDuration: lesson.videoDuration || 0,
+    videoDuration: resolvedLessonDuration,
+    duration: resolvedLessonDuration,
     videoWidth: lesson.videoWidth || null,
     videoHeight: lesson.videoHeight || null,
     videoFormat: lesson.videoFormat || '',
-    videoBytes: lesson.videoBytes || 0,
+    videoBytes: resolvedLessonBytes,
+    bytes: resolvedLessonBytes,
+    fileSize: resolvedLessonBytes,
+    size: resolvedLessonBytes,
     fileUrl: primaryDocUrl || primaryLessonUrl,
     documentUrl: primaryDocUrl || primaryLessonUrl,
     pdfUrl: primaryDocUrl,
@@ -1627,10 +1685,38 @@ exports.addLesson = async (req, res) => {
     const lessonS3Key = req.body.videoS3Key || req.body.s3Key || (s3Part ? s3Part.s3Key : '') || (getS3KeyFromUrl(finalVideoUrl) || '');
     const lessonStorageProvider = (lessonS3Key || (s3Part && s3Part.storageProvider === 's3')) ? 's3' : (req.body.storageProvider || '');
 
+    let resolvedVideoBytes = videoBytes;
+    let resolvedVideoDuration = videoDuration;
+
+    if (!resolvedVideoBytes && finalVideoParts.length > 0) {
+      const firstPart = finalVideoParts[0];
+      resolvedVideoBytes = Number(firstPart.bytes || firstPart.fileSize || firstPart.size) || 0;
+    }
+    if (!resolvedVideoDuration && finalVideoParts.length > 0) {
+      const firstPart = finalVideoParts[0];
+      resolvedVideoDuration = Number(firstPart.duration || firstPart.videoDuration) || 0;
+    }
+
+    if (finalVideoParts.length > 0) {
+      finalVideoParts.forEach((part) => {
+        const partBytes = Number(part.bytes || part.fileSize || part.size) || 0;
+        const partDur = Number(part.duration || part.videoDuration) || 0;
+        const finalPartBytes = partBytes > 0 ? partBytes : (resolvedVideoBytes > 0 ? resolvedVideoBytes : 0);
+        const finalPartDur = partDur > 0 ? partDur : (resolvedVideoDuration > 0 ? resolvedVideoDuration : 0);
+        part.bytes = finalPartBytes;
+        part.fileSize = finalPartBytes;
+        part.size = finalPartBytes;
+        part.duration = finalPartDur;
+        part.videoDuration = finalPartDur;
+      });
+    }
+
+    const resolvedDurationOrPages = (durationOrPages || duration || pages || (resolvedVideoDuration ? `${Math.round(resolvedVideoDuration)} sec` : '') || '').trim();
+
     const newLesson = {
       lessonTitle: actualLessonTitle,
       lessonType: actualLessonType,
-      durationOrPages: (durationOrPages || duration || pages || (videoDuration ? `${Math.round(videoDuration)} sec` : '') || '').trim(),
+      durationOrPages: resolvedDurationOrPages,
       description: (description || '').trim(),
       meetingUrl: actualMeetingUrl,
       videoUrl: finalVideoUrl,
@@ -1639,11 +1725,11 @@ exports.addLesson = async (req, res) => {
       storageProvider: lessonStorageProvider,
       videoPublicId: resolvedPublicId,
       videoResourceType: videoResourceType || 'video',
-      videoDuration: videoDuration,
+      videoDuration: resolvedVideoDuration,
       videoWidth: videoWidth,
       videoHeight: videoHeight,
       videoFormat: videoFormat,
-      videoBytes: videoBytes,
+      videoBytes: resolvedVideoBytes,
       videoParts: finalVideoParts,
       pdfNotes: finalPdfNotes,
       assignments: finalAssignments,
@@ -2094,6 +2180,31 @@ exports.updateLesson = async (req, res) => {
       targetLesson.storageProvider = 's3';
     }
 
+    if (!targetLesson.videoBytes && targetLesson.videoParts && targetLesson.videoParts.length > 0) {
+      const firstPart = targetLesson.videoParts[0];
+      targetLesson.videoBytes = Number(firstPart.bytes || firstPart.fileSize || firstPart.size) || 0;
+    }
+    if (!targetLesson.videoDuration && targetLesson.videoParts && targetLesson.videoParts.length > 0) {
+      const firstPart = targetLesson.videoParts[0];
+      targetLesson.videoDuration = Number(firstPart.duration || firstPart.videoDuration) || 0;
+    }
+    if (targetLesson.videoParts && targetLesson.videoParts.length > 0) {
+      targetLesson.videoParts.forEach((part) => {
+        const partBytes = Number(part.bytes || part.fileSize || part.size) || 0;
+        const partDur = Number(part.duration || part.videoDuration) || 0;
+        const finalPartBytes = partBytes > 0 ? partBytes : (Number(targetLesson.videoBytes) > 0 ? Number(targetLesson.videoBytes) : 0);
+        const finalPartDur = partDur > 0 ? partDur : (Number(targetLesson.videoDuration) > 0 ? Number(targetLesson.videoDuration) : 0);
+        part.bytes = finalPartBytes;
+        part.fileSize = finalPartBytes;
+        part.size = finalPartBytes;
+        part.duration = finalPartDur;
+        part.videoDuration = finalPartDur;
+      });
+    }
+    if ((!targetLesson.durationOrPages || targetLesson.durationOrPages === '0 sec') && Number(targetLesson.videoDuration) > 0) {
+      targetLesson.durationOrPages = `${Math.round(targetLesson.videoDuration)} sec`;
+    }
+
     await course.save();
 
     const serializedLesson = await serializeLesson(targetLesson, req);
@@ -2338,3 +2449,8 @@ exports.getEnrollmentCounts = async (req, res) => {
     res.status(500).json({ success: false, message: 'Server error fetching enrollment counts', error: error.message });
   }
 };
+
+exports.serializeLesson = serializeLesson;
+exports.serializeCourse = serializeCourse;
+exports.serializeModule = serializeModule;
+

@@ -1764,8 +1764,82 @@ async function createAdminStudent(req, res) {
  */
 async function exportStudentsScores(req, res) {
   try {
-    const students = await Student.find()
-      .select('_id userId name email phone contactNumber course subscription status joinedDate createdAt')
+    // 1. Build search and filter match conditions
+    const matchConditions = {};
+
+    // Search Filter (name, email, phone)
+    if (req.query.search && typeof req.query.search === 'string' && req.query.search.trim()) {
+      const searchStr = req.query.search.trim();
+      const escapedSearch = searchStr.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      const searchRegex = new RegExp(escapedSearch, 'i');
+
+      matchConditions.$or = [
+        { name: searchRegex },
+        { email: searchRegex },
+        { phone: searchRegex },
+        { contactNumber: searchRegex }
+      ];
+    }
+
+    // Status Filter (Active, Trial, Expired, Inactive)
+    if (req.query.status && typeof req.query.status === 'string' && req.query.status.trim()) {
+      const statusStr = req.query.status.trim();
+      if (statusStr !== 'All' && statusStr !== 'All Status') {
+        matchConditions.status = new RegExp('^' + statusStr + '$', 'i');
+      }
+    }
+
+    // Course Filter (course_id or course)
+    const courseFilter = req.query.course_id || req.query.course;
+    if (courseFilter && typeof courseFilter === 'string' && courseFilter.trim() &&
+        courseFilter !== 'All' && courseFilter !== 'All Courses') {
+      const cleanCourse = courseFilter.trim();
+      const escapedCourse = cleanCourse.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      const courseRegex = new RegExp(escapedCourse, 'i');
+
+      const matchingCourses = await Course.find({
+        $or: [
+          { courseId: courseRegex },
+          { courseTitle: courseRegex },
+          ...(mongoose.Types.ObjectId.isValid(cleanCourse) ? [{ _id: cleanCourse }] : [])
+        ]
+      }).select('_id courseId courseTitle').lean();
+
+      const courseValues = [cleanCourse];
+      matchingCourses.forEach((matchedCourse) => {
+        if (matchedCourse.courseId) courseValues.push(matchedCourse.courseId);
+        if (matchedCourse.courseTitle) courseValues.push(matchedCourse.courseTitle);
+      });
+      const uniqueCourseValues = [...new Set(courseValues)];
+
+      const courseMatchConditions = [
+        { course: { $in: uniqueCourseValues } },
+        { courseId: { $in: uniqueCourseValues } },
+        { courseIds: { $in: uniqueCourseValues } },
+      ];
+
+      const matchingCourseObjectIds = matchingCourses
+        .map((matchedCourse) => matchedCourse._id)
+        .filter(Boolean);
+      if (matchingCourseObjectIds.length > 0) {
+        courseMatchConditions.push({ courseRef: { $in: matchingCourseObjectIds } });
+      }
+
+      if (matchConditions.$or) {
+        matchConditions.$and = [
+          { $or: matchConditions.$or },
+          { $or: courseMatchConditions }
+        ];
+        delete matchConditions.$or;
+      } else {
+        matchConditions.$or = courseMatchConditions;
+      }
+    }
+
+    // 2. Fetch filtered students with all course fields
+    const students = await Student.find(matchConditions)
+      .select('_id userId name email phone contactNumber course courseId courseIds courseRef subscription status joinedDate createdAt')
+      .sort({ createdAt: -1 })
       .lean();
     
     const acceptHeader = req.headers.accept || '';
@@ -1785,6 +1859,60 @@ async function exportStudentsScores(req, res) {
       }
     });
 
+    // 3. Batch resolve supplementary Course data
+    const courseRefsToFetch = new Set();
+    const courseIdsToFetch = new Set();
+    const courseTitlesToFetch = new Set();
+
+    students.forEach((s) => {
+      if (s.courseRef && mongoose.Types.ObjectId.isValid(s.courseRef)) {
+        courseRefsToFetch.add(s.courseRef.toString());
+      }
+      if (s.courseId) {
+        courseIdsToFetch.add(s.courseId.toString().trim());
+      }
+      if (Array.isArray(s.courseIds)) {
+        s.courseIds.forEach((courseId) => {
+          const normalized = String(courseId || '').trim();
+          if (!normalized) return;
+          courseIdsToFetch.add(normalized);
+          if (mongoose.Types.ObjectId.isValid(normalized)) {
+            courseRefsToFetch.add(normalized);
+          }
+        });
+      }
+      if (s.course) {
+        courseTitlesToFetch.add(s.course.toString().trim());
+      }
+    });
+
+    const courseQueryConditions = [];
+    if (courseRefsToFetch.size > 0) {
+      courseQueryConditions.push({
+        _id: { $in: [...courseRefsToFetch].map((id) => new mongoose.Types.ObjectId(id)) },
+      });
+    }
+    if (courseIdsToFetch.size > 0) {
+      courseQueryConditions.push({ courseId: { $in: [...courseIdsToFetch] } });
+    }
+    if (courseTitlesToFetch.size > 0) {
+      courseQueryConditions.push({ courseTitle: { $in: [...courseTitlesToFetch] } });
+    }
+
+    const matchedCourses = courseQueryConditions.length > 0
+      ? await Course.find({ $or: courseQueryConditions })
+          .select('_id courseId courseTitle category price')
+          .lean()
+      : [];
+
+    const courseMap = new Map();
+    matchedCourses.forEach((c) => {
+      if (c._id) courseMap.set(c._id.toString(), c);
+      if (c.courseId) courseMap.set(c.courseId.toString().trim(), c);
+      if (c.courseTitle) courseMap.set(c.courseTitle.toString().toLowerCase().trim(), c);
+    });
+
+    // 4. Construct export data with multi-course resolution
     const exportData = students.map(st => {
       const sId = st._id.toString();
       const uId = st.userId ? st.userId.toString() : null;
@@ -1794,12 +1922,65 @@ async function exportStudentsScores(req, res) {
       const totalScore = studentResults.reduce((acc, r) => acc + (r.score || 0), 0);
       const avgScore = totalExams > 0 ? (totalScore / totalExams).toFixed(2) : 0;
 
+      const enrolledIdentifiers = [];
+      const addIdentifier = (val) => {
+        const norm = String(val || '').trim();
+        if (!norm || enrolledIdentifiers.includes(norm)) return;
+        enrolledIdentifiers.push(norm);
+      };
+
+      if (Array.isArray(st.courseIds)) st.courseIds.forEach(addIdentifier);
+      addIdentifier(st.courseId);
+      addIdentifier(st.courseRef);
+      addIdentifier(st.course);
+
+      const resolvedCourseTitles = [];
+      const seenTitles = new Set();
+      const enrolledCourses = [];
+
+      enrolledIdentifiers.forEach(identifier => {
+        const resolved = courseMap.get(identifier) || courseMap.get(identifier.toLowerCase());
+        if (resolved && resolved.courseTitle) {
+          const title = resolved.courseTitle.trim();
+          if (title && !seenTitles.has(title.toLowerCase())) {
+            seenTitles.add(title.toLowerCase());
+            resolvedCourseTitles.push(title);
+            enrolledCourses.push({
+              id: resolved.courseId || resolved._id.toString(),
+              title: title,
+              category: resolved.category || 'General',
+              price: resolved.price || 0,
+            });
+          }
+        } else if (!mongoose.Types.ObjectId.isValid(identifier)) {
+          const title = identifier.trim();
+          if (title && !seenTitles.has(title.toLowerCase()) && title.toLowerCase() !== 'null' && title.toLowerCase() !== 'none') {
+            seenTitles.add(title.toLowerCase());
+            resolvedCourseTitles.push(title);
+            enrolledCourses.push({
+              id: title,
+              title: title,
+              category: 'General',
+              price: 0,
+            });
+          }
+        }
+      });
+
+      const multiCourseString = resolvedCourseTitles.length > 0
+        ? resolvedCourseTitles.join(', ')
+        : (st.course && st.course.trim() ? st.course.trim() : 'None');
+
       return {
         id: sId,
+        student_id: sId,
         name: st.name || '',
         email: st.email || '',
         phone: st.phone || st.contactNumber || '',
-        course: st.course || 'General',
+        course: multiCourseString,
+        courseIds: Array.isArray(st.courseIds) ? st.courseIds : [],
+        enrolled_courses: enrolledCourses,
+        enrolled_course: enrolledCourses[0] || { title: multiCourseString },
         subscription: st.subscription || 'Free',
         status: st.status || 'Active',
         totalExamsAttended: totalExams,

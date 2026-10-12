@@ -1397,15 +1397,15 @@ async function getAllGrandMocks(req, res) {
             correctOptionText: q.options && cOpt ? q.options[cOpt] : null,
             correctAnswerText: q.options && cOpt ? q.options[cOpt] : null
           };
-          if (
-            typeof formattedQuestion.imageUrl === 'string' &&
-            formattedQuestion.imageUrl.trim()
-          ) {
-            formattedQuestion.imageUrl = await resolveProfileImageUrl(
-              formattedQuestion.imageUrl.trim()
-            );
+          const rawImg = formattedQuestion.imageUrl || formattedQuestion.image || formattedQuestion.questionImage || formattedQuestion.imgUrl;
+          if (typeof rawImg === 'string' && rawImg.trim()) {
+            const signed = await resolveProfileImageUrl(rawImg.trim());
+            formattedQuestion.imageUrl = signed;
+            formattedQuestion.image = signed;
+            formattedQuestion.questionImage = signed;
           }
-          return req.user?.role === 'student'
+          const isStudent = (req.user?.role || '').toLowerCase().trim() === 'student';
+          return isStudent
             ? sanitizeQuestionForStudent(formattedQuestion)
             : formattedQuestion;
         })
