@@ -277,23 +277,33 @@ app.use('/api/v1/courses', require('./routes/courseRoutes'));
 app.use('/api/admin/courses', require('./routes/adminCourseRoutes'));
 app.use('/api/v1/demo-videos', require('./routes/demoVideoRoutes'));
 app.use('/api/demo-videos', require('./routes/demoVideoRoutes'));
-app.use('/api/subscriptions', require('./routes/subscriptionPlanRoutes'));
-app.use('/api/v1/subscriptions', require('./routes/subscriptionPlanRoutes'));
+// Subscriptions and Plans
+const subscriptionPlanRoutes = require('./routes/subscriptionPlanRoutes');
+const subscriptionPlanController = require('./controllers/subscriptionPlanController');
+app.use('/api/subscriptions', subscriptionPlanRoutes);
+app.use('/api/v1/subscriptions', subscriptionPlanRoutes);
+app.use('/subscriptions', subscriptionPlanRoutes);
+app.get('/api/plans', subscriptionPlanController.getActiveSubscriptionPlans);
+app.get('/api/v1/plans', subscriptionPlanController.getActiveSubscriptionPlans);
+app.get('/plans', subscriptionPlanController.getActiveSubscriptionPlans);
+
 app.use('/api', require('./routes/recordingRoutes'));
 app.use('/api/v1', require('./routes/recordingRoutes'));
-
-
 
 const unaniSubscriptionRoutes = require('./src/unani/subscriptions/routes/unaniSubscription.routes');
 app.use(unaniSubscriptionRoutes);
 
+// Student Faculty routes (public/student access)
 const studentFacultyRoutes = require('./routes/studentFacultyRoutes');
 app.use('/api/student/faculty', studentFacultyRoutes);
 app.use('/api/v1/student/faculty', studentFacultyRoutes);
+app.use('/student/faculty', studentFacultyRoutes);
 
 // Student curriculum and progress routes
-app.use('/api/student', require('./routes/studentCurriculumRoutes'));
-app.use('/api/v1/student', require('./routes/studentCurriculumRoutes'));
+const studentCurriculumRoutes = require('./routes/studentCurriculumRoutes');
+app.use('/api/student', studentCurriculumRoutes);
+app.use('/api/v1/student', studentCurriculumRoutes);
+app.use('/student', studentCurriculumRoutes);
 
 // Student self-service profile and management routes
 const studentProfileRoutes = require('./routes/studentRoutes');
@@ -301,8 +311,10 @@ app.use('/api/students', studentProfileRoutes);
 app.use('/api/v1/students', studentProfileRoutes);
 app.use('/api/student', studentProfileRoutes);
 app.use('/api/v1/student', studentProfileRoutes);
+app.use('/student', studentProfileRoutes);
 app.use('/api/admin/students', require('./routes/adminStudentRoutes'));
 app.use('/api/v1/admin/students', require('./routes/adminStudentRoutes'));
+
 
 const rankImageRoutes = require('./routes/academicExamRankImage.routes');
 app.use('/api/exams', rankImageRoutes);
