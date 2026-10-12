@@ -372,13 +372,17 @@ const serializeLesson = (lesson, req) => {
     const list = Array.isArray(items) ? items : (items ? [items] : []);
     return list.map((item) => {
       if (!item) return null;
-      const canonicalUrl = typeof item === 'string' ? item : (item.secure_url || item.url || item.fileUrl || item.documentUrl || item.path || '');
-      const absUrl = toAbsoluteUrl(canonicalUrl, req);
-      if (typeof item === 'string') {
+      const plain = (item && typeof item.toObject === 'function')
+        ? item.toObject({ virtuals: true })
+        : (item && item._doc ? { ...item._doc } : (typeof item === 'object' ? { ...item } : item));
+      if (typeof plain === 'string') {
+        const absUrl = toAbsoluteUrl(plain, req);
         return { title: 'Resource', url: absUrl, secure_url: absUrl, fileUrl: absUrl, documentUrl: absUrl, path: absUrl };
       }
+      const canonicalUrl = plain.secure_url || plain.url || plain.fileUrl || plain.documentUrl || plain.path || '';
+      const absUrl = canonicalUrl ? toAbsoluteUrl(canonicalUrl, req) : '';
       return {
-        ...item,
+        ...plain,
         url: absUrl,
         secure_url: absUrl,
         fileUrl: absUrl,
@@ -407,21 +411,25 @@ const serializeLesson = (lesson, req) => {
   const primaryVideoUrl = toAbsoluteUrl(lesson.videoUrl || firstVideoUrl, req);
   const primaryLessonUrl = primaryDocUrl || primaryVideoUrl || '';
 
+  const lessonObj = (lesson && typeof lesson.toObject === 'function')
+    ? lesson.toObject({ virtuals: true })
+    : (lesson && lesson._doc ? { ...lesson._doc } : (typeof lesson === 'object' ? { ...lesson } : {}));
+
   return {
-    _id: lesson._id,
-    id: lesson._id ? lesson._id.toString() : undefined,
-    lessonTitle: lesson.lessonTitle || '',
-    lessonType: lesson.lessonType || 'Recorded Video',
-    durationOrPages: lesson.durationOrPages || '',
-    description: lesson.description || '',
+    _id: lessonObj._id || lesson._id,
+    id: (lessonObj._id || lesson._id) ? (lessonObj._id || lesson._id).toString() : undefined,
+    lessonTitle: lessonObj.lessonTitle || lesson.lessonTitle || '',
+    lessonType: lessonObj.lessonType || lesson.lessonType || 'Recorded Video',
+    durationOrPages: lessonObj.durationOrPages || lesson.durationOrPages || '',
+    description: lessonObj.description || lesson.description || '',
     videoUrl: primaryVideoUrl,
-    videoPublicId: lesson.videoPublicId || (primaryVideoUrl ? (getPublicIdFromUrl(primaryVideoUrl) || '') : ''),
-    videoResourceType: lesson.videoResourceType || 'video',
-    videoDuration: lesson.videoDuration || 0,
-    videoWidth: lesson.videoWidth || null,
-    videoHeight: lesson.videoHeight || null,
-    videoFormat: lesson.videoFormat || '',
-    videoBytes: lesson.videoBytes || 0,
+    videoPublicId: lessonObj.videoPublicId || lesson.videoPublicId || (primaryVideoUrl ? (getPublicIdFromUrl(primaryVideoUrl) || '') : ''),
+    videoResourceType: lessonObj.videoResourceType || lesson.videoResourceType || 'video',
+    videoDuration: lessonObj.videoDuration || lesson.videoDuration || 0,
+    videoWidth: lessonObj.videoWidth !== undefined ? lessonObj.videoWidth : (lesson.videoWidth ?? null),
+    videoHeight: lessonObj.videoHeight !== undefined ? lessonObj.videoHeight : (lesson.videoHeight ?? null),
+    videoFormat: lessonObj.videoFormat || lesson.videoFormat || '',
+    videoBytes: lessonObj.videoBytes || lesson.videoBytes || 0,
     fileUrl: primaryDocUrl || primaryLessonUrl,
     documentUrl: primaryDocUrl || primaryLessonUrl,
     pdfUrl: primaryDocUrl,
@@ -431,10 +439,13 @@ const serializeLesson = (lesson, req) => {
     pdfNotes: isolated.pdfNotes,
     assignments: isolated.assignments,
     attachments: isolated.attachments,
-    meetingUrl: lesson.meetingUrl || '',
-    status: lesson.status || 'Published',
-    createdAt: lesson.createdAt,
-    updatedAt: lesson.updatedAt,
+    meetingUrl: lessonObj.meetingUrl || lesson.meetingUrl || '',
+    status: lessonObj.status || lesson.status || 'Published',
+    storageProvider: lessonObj.storageProvider || lesson.storageProvider || firstVideo?.storageProvider || '',
+    s3Key: lessonObj.s3Key || lesson.s3Key || lessonObj.videoS3Key || lesson.videoS3Key || firstVideo?.s3Key || '',
+    videoS3Key: lessonObj.videoS3Key || lesson.videoS3Key || lessonObj.s3Key || lesson.s3Key || firstVideo?.s3Key || '',
+    createdAt: lessonObj.createdAt || lesson.createdAt,
+    updatedAt: lessonObj.updatedAt || lesson.updatedAt,
   };
 };
 
@@ -2032,3 +2043,5 @@ exports.processAttachments = processAttachments;
 const recordingController = require('./recordingController');
 exports.getLiveRecords = recordingController.getLiveRecords;
 exports.uploadRecording = recordingController.uploadRecording;
+
+exports.serializeLesson = serializeLesson;

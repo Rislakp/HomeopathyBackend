@@ -273,3 +273,47 @@ test('Admin course list, detail, create, and update resolve S3 banners without r
   assert.match(updateRes.body.course.thumbnail, /X-Amz-Signature=/);
   assert.equal(updateRes.body.course.thumbnail.includes('cloudinary.com'), false);
 });
+
+test('serializeLesson correctly serializes S3 videoParts and lesson S3 references without _doc nesting', async (t) => {
+  const courseDoc = new Course({
+    courseTitle: 'Lesson serialization test',
+    instructor: 'Instructor',
+    price: 100,
+    modules: [{
+      moduleName: 'Module 1',
+      lessons: [{
+        lessonTitle: 'S3 Video Lesson',
+        lessonType: 'Recorded Video',
+        videoParts: [{
+          title: 'video1.mp4',
+          fileName: 'video1.mp4',
+          storageProvider: 's3',
+          s3Key: 'videos/1791788204839-video1.mp4',
+          resourceType: 'video',
+          contentType: 'video/mp4',
+          size: 7734893,
+          uploadStatus: 'uploaded',
+        }],
+      }],
+    }],
+  });
+
+  const lessonSubdoc = courseDoc.modules[0].lessons[0];
+  const serialized = courseController.serializeLesson(lessonSubdoc, { protocol: 'https', get: () => 'api.whitecoat.academy' });
+
+  assert.ok(serialized, 'serialized lesson must exist');
+  assert.equal(serialized.lessonTitle, 'S3 Video Lesson');
+  assert.equal(serialized.s3Key, 'videos/1791788204839-video1.mp4');
+  assert.equal(serialized.storageProvider, 's3');
+  assert.equal(Array.isArray(serialized.videoParts), true);
+  assert.equal(serialized.videoParts.length, 1);
+
+  const vp = serialized.videoParts[0];
+  assert.equal(vp.title, 'video1.mp4');
+  assert.equal(vp.s3Key, 'videos/1791788204839-video1.mp4');
+  assert.equal(vp.storageProvider, 's3');
+  assert.equal(vp.fileName, 'video1.mp4');
+  assert.equal(vp.contentType, 'video/mp4');
+  assert.equal(vp.size, 7734893);
+  assert.equal(vp._doc, undefined, '_doc must not be exposed on serialized video parts');
+});
