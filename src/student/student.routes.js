@@ -24,9 +24,10 @@ const demoVideoController = require('../../controllers/demoVideoController');
 
 // Faculty routes for students are now handled by routes/studentFacultyRoutes.js
 
-// Protect remaining student routes strictly under /api/student & /api/v1/student with student role authentication
+// Protect remaining student routes strictly under /api/student, /api/v1/student & /student with student role authentication
 router.use('/api/student', requireStudent);
 router.use('/api/v1/student', requireStudent);
+router.use('/student', requireStudent);
 
 /**
  * @route   GET /api/student/profile
@@ -37,6 +38,8 @@ router.get('/api/student/profile', getStudentProfile);
 router.get('/api/student/me', getStudentProfile);
 router.get('/api/v1/student/profile', getStudentProfile);
 router.get('/api/v1/student/me', getStudentProfile);
+router.get('/student/profile', getStudentProfile);
+router.get('/student/me', getStudentProfile);
 
 /**
  * @route   GET /api/student/demo-videos
@@ -44,6 +47,7 @@ router.get('/api/v1/student/me', getStudentProfile);
  */
 router.get('/api/student/demo-videos', demoVideoController.getDemoVideos);
 router.get('/api/v1/student/demo-videos', demoVideoController.getDemoVideos);
+router.get('/student/demo-videos', demoVideoController.getDemoVideos);
 
 /**
  * @route   GET /api/student/exams
@@ -51,6 +55,7 @@ router.get('/api/v1/student/demo-videos', demoVideoController.getDemoVideos);
  */
 router.get('/api/student/exams', getAvailableExams);
 router.get('/api/v1/student/exams', getAvailableExams);
+router.get('/student/exams', getAvailableExams);
 
 /**
  * @route   GET /api/student/exams/:id/start
@@ -63,6 +68,9 @@ router.get('/api/v1/student/exams/:id/start', startExam);
 router.post('/api/v1/student/exams/:id/start', startExam);
 router.get('/api/student/exams/:id', startExam);
 router.get('/api/v1/student/exams/:id', startExam);
+router.get('/student/exams/:id/start', startExam);
+router.post('/student/exams/:id/start', startExam);
+router.get('/student/exams/:id', startExam);
 
 /**
  * @route   POST /api/student/exams/:id/submit
@@ -70,6 +78,7 @@ router.get('/api/v1/student/exams/:id', startExam);
  */
 router.post('/api/student/exams/:id/submit', submitExam);
 router.post('/api/v1/student/exams/:id/submit', submitExam);
+router.post('/student/exams/:id/submit', submitExam);
 
 /**
  * @route   GET /api/student/results
@@ -77,5 +86,7 @@ router.post('/api/v1/student/exams/:id/submit', submitExam);
  */
 router.get('/api/student/results', getStudentResults);
 router.get('/api/v1/student/results', getStudentResults);
+router.get('/student/results', getStudentResults);
+
 
 module.exports = router;
