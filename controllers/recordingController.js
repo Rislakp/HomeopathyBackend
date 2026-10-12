@@ -596,6 +596,16 @@ exports.uploadRecordingVideo = async (req, res) => {
       });
     }
 
+    if (uploadedFile) {
+      const fileSize = Number(uploadedFile.size || (uploadedFile.buffer ? uploadedFile.buffer.length : 0)) || 0;
+      if (fileSize <= 0) {
+        return res.status(400).json({
+          success: false,
+          message: 'The uploaded video file is empty (0 bytes). Upload aborted to prevent corrupt records.',
+        });
+      }
+    }
+
     let secureUrl = '';
     let uploaded = {};
 

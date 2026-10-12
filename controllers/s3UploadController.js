@@ -391,7 +391,7 @@ const getMediaAccessUrl = async (req, res) => {
   }
 
   const key = getS3KeyFromUrl(trimmedRawKey) || trimmedRawKey;
-  const prefix = ['videos/', 'images/', 'pdfs/', 'live_records/'].find((item) => typeof key === 'string' && key.startsWith(item));
+  const prefix = ['videos/', 'images/', 'pdfs/', 'live_records/', 'grand_mock_questions/', 'reviews/', 'unani_ranks/'].find((item) => typeof key === 'string' && key.startsWith(item));
   if (!prefix || !validStoredKey(key, prefix.slice(0, -1))) return fail(res, 400, 'Invalid S3 media key.');
 
   try {

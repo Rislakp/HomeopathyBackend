@@ -102,6 +102,9 @@ const uploadBufferToS3 = async (buffer, options = {}) => {
   if (!buffer || !Buffer.isBuffer(buffer)) {
     throw new Error('Valid file buffer is required for S3 upload.');
   }
+  if (buffer.length === 0) {
+    throw new Error('Cannot upload an empty (0 bytes) file buffer to S3.');
+  }
 
   const originalname = options.originalname || options.filename || 'file';
   const mimetype = options.mimetype || options.contentType || 'application/octet-stream';

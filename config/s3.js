@@ -69,9 +69,6 @@ console.info('[S3 Config]', {
   publicBaseUrl: publicBaseUrl || '(none)',
 });
 
-/**
- * Helper to check whether AWS S3 is active and properly configured
- */
 const isS3Configured = () => {
   if (process.env.STORAGE_PROVIDER === 'cloudinary') return false;
   if (!bucket) return false;
@@ -82,7 +79,8 @@ const isS3Configured = () => {
     process.env.AWS_WEB_IDENTITY_TOKEN_FILE
   );
   if (hasExplicitCredentials) return true;
-  if (s3Client && s3Client.config && typeof s3Client.config.credentials === 'function' && s3Client.config.credentials !== defaultCredentialProvider) {
+  // If S3Client initialized with credentials provider function (including default provider chain on EC2/ECS)
+  if (s3Client && s3Client.config && typeof s3Client.config.credentials === 'function') {
     return true;
   }
   return false;

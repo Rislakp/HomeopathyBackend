@@ -16,6 +16,7 @@ const {
   getExamAssignedCourseIds,
   buildStudentPublishedExamClause,
 } = require('../../utils/examCourseAssignment');
+const { resolveProfileImageUrl } = require('../../utils/s3MediaSigner');
 try { require('../../models/Course'); } catch (e) {}
 
 /**
@@ -126,14 +127,22 @@ function getQuestionCorrectOption(question) {
   return normalizeOptionKey(rawCorrectAnswer, question.options) || rawCorrectAnswer.toString().toUpperCase();
 }
 
-function formatQuestionWithAnswerKey(question) {
+async function formatQuestionWithAnswerKey(question) {
   const correctOption = getQuestionCorrectOption(question);
   const correctOptionText = question && question.options && correctOption
     ? (question.options[correctOption] || null)
     : null;
 
+  const rawImg = question?.imageUrl || question?.image || question?.questionImage || question?.imgUrl;
+  let resolvedImageUrl = rawImg || null;
+  if (typeof rawImg === 'string' && rawImg.trim()) {
+    resolvedImageUrl = await resolveProfileImageUrl(rawImg.trim());
+  }
+
   return {
     ...question,
+    imageUrl: resolvedImageUrl,
+    image: resolvedImageUrl,
     correctOption,
     correctAnswer: correctOption,
     correctOptionText,
@@ -700,8 +709,17 @@ async function startExam(req, res) {
 
     const { courseName, moduleName, canonicalCourseId } = await resolveCourseAndModuleNames(exam);
 
-    // Sanitize questions to prevent cheating - completely remove `correctOption`
-    const sanitizedQuestions = (exam.questions || []).map(sanitizeQuestionForStudent);
+    // Sanitize questions to prevent cheating - completely remove `correctOption` and resolve image presigned URLs
+    const sanitizedQuestions = await Promise.all((exam.questions || []).map(async (q) => {
+      const sanitized = sanitizeQuestionForStudent(q);
+      const rawImg = sanitized.imageUrl || sanitized.image || sanitized.questionImage || sanitized.imgUrl;
+      if (typeof rawImg === 'string' && rawImg.trim()) {
+        const signed = await resolveProfileImageUrl(rawImg.trim());
+        sanitized.imageUrl = signed;
+        sanitized.image = signed;
+      }
+      return sanitized;
+    }));
 
     return res.status(200).json({
       success: true,
@@ -965,7 +983,7 @@ async function submitExam(req, res) {
         answers:              processedAnswers,
         examInfo: {
           ...exam,
-          questions: exam.questions.map(formatQuestionWithAnswerKey)
+          questions: await Promise.all(exam.questions.map(formatQuestionWithAnswerKey))
         },
         createdAt:            testResult.createdAt
       }
@@ -1069,7 +1087,7 @@ async function getStudentResults(req, res) {
     const examsForBatch = validResults.map(r => r.examId).filter(Boolean);
     const courseMap = await batchResolveCourseNames(examsForBatch);
 
-    const formattedResults = validResults.map((result) => {
+    const formattedResults = await Promise.all(validResults.map(async (result) => {
       const exam = result.examId;
       const questionMap = new Map();
       if (exam && Array.isArray(exam.questions)) {
@@ -1157,7 +1175,7 @@ async function getStudentResults(req, res) {
             moduleName: resolvedModuleName
           };
         }
-        const formattedQuestions = (exam.questions || []).map(formatQuestionWithAnswerKey);
+        const formattedQuestions = await Promise.all((exam.questions || []).map(formatQuestionWithAnswerKey));
 
         examMetadata = {
           ...exam,
@@ -1172,7 +1190,7 @@ async function getStudentResults(req, res) {
         examId: examMetadata,
         answers: formattedAnswers
       };
-    });
+    }));
 
     const pagination = buildPaginationResponse(totalResults, page, limit);
 
