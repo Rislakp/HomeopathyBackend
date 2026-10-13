@@ -107,8 +107,8 @@ const signS3Reference = async (reference, responseContentType) => {
       ...(responseContentType ? { ResponseContentType: responseContentType, ResponseContentDisposition: 'inline' } : {}),
     }), { expiresIn: S3_MEDIA_URL_TTL_SECONDS });
 
-    // Encode the signed URL to ensure '+' characters are preserved when transmitted.
-    const encodedUrl = encodeURI(url).replace(/\+/g, '%2B');
+    // Preserve literal '+' characters in the signed URL by percent-encoding them.
+    const encodedUrl = url.replace(/\+/g, '%2B');
     return {
       ...reference,
       fileName: reference.fileName || reference.originalFileName || '',
@@ -142,5 +142,5 @@ const resolveProfileImageUrl = async (rawImage) => {
   return signed?.url || signed?.secure_url || rawImage;
 };
 
-module.exports = { signS3Reference, stripS3ReferenceUrls, normalizeS3Reference, resolveProfileImageUrl, S3_MEDIA_URL_TTL_SECONDS };
+module.exports = { signS3Reference, stripS3ReferenceUrls, normalizeS3Reference, resolveProfileImageUrl, S3_MEDIA_URL_TTL_SECONDS, encodeSignedUrl };
 
