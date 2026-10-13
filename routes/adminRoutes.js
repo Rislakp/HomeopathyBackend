@@ -10,6 +10,7 @@ const {
   rejectStudent,
 } = require('../controllers/adminStudentController');
 const { getDashboardStats, getRecentActivities } = require('../controllers/adminDashboardController');
+const { getAdminExamResults } = require('../controllers/examController');
 const { updateUserRole, resetPassword } = require('../controllers/authController');
 const { adminLogin, registerAdmin } = require('../controllers/adminAuthController');
 const adminAuthMiddleware = require('../middleware/adminAuthMiddleware');
@@ -37,6 +38,16 @@ router.get('/activities', getRecentActivities);
 router.get('/students', getAdminStudents);
 router.get('/students/:id', getAdminStudentById);
 router.get('/students/:id/results', getAdminStudentResults);
+
+// ── Exam Results ────────────────────────────────────────────────────────────
+/**
+ * @route   GET /api/v1/admin/exams/:examId/results
+ * @route   GET /api/admin/exams/:examId/results
+ * @desc    Fetch paginated student results for a specific exam
+ * @access  Private / Admin
+ */
+router.get('/exams/:examId/results', getAdminExamResults);
+router.get('/exams/:id/results', getAdminExamResults);
 
 // ── Approval / Status update (MUST be before the general /:id PUT) ──────────
 /**

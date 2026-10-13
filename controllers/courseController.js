@@ -415,6 +415,57 @@ const serializeLesson = (lesson, req) => {
     ? lesson.toObject({ virtuals: true })
     : (lesson && lesson._doc ? { ...lesson._doc } : (typeof lesson === 'object' ? { ...lesson } : {}));
 
+  const lessonS3Key = (lessonObj.videoS3Key || lesson.videoS3Key || lessonObj.s3Key || lesson.s3Key || firstVideo?.s3Key || '').trim();
+
+  // If videoParts array is empty, but lesson has top-level videoS3Key or s3Key, synthesize a video part
+  if (isolated.videoParts.length === 0 && lessonS3Key) {
+    const rawFileName = lessonS3Key.split('/').pop() || 'Video';
+    const cleanFileName = rawFileName.replace(/^\d+-([0-9a-fA-F-]+-)?/, '');
+    isolated.videoParts.push({
+      title: lessonObj.lessonTitle || lesson.lessonTitle || cleanFileName || 'Video Part 1',
+      fileName: cleanFileName || rawFileName,
+      storageProvider: 's3',
+      s3Key: lessonS3Key,
+      resourceType: 'video',
+      contentType: 'video/mp4',
+      size: lessonObj.videoBytes || lesson.videoBytes || 0,
+      bytes: lessonObj.videoBytes || lesson.videoBytes || 0,
+      duration: lessonObj.videoDuration || lesson.videoDuration || 0,
+      uploadStatus: 'uploaded',
+      url: '',
+      secure_url: '',
+    });
+  }
+
+  // Ensure all video parts have clean metadata and top-level s3Key/storageProvider if applicable
+  isolated.videoParts = isolated.videoParts.map((vp) => {
+    if (!vp) return null;
+    const vpObj = (vp && typeof vp.toObject === 'function')
+      ? vp.toObject({ virtuals: true })
+      : (vp && vp._doc ? { ...vp._doc } : (typeof vp === 'object' ? { ...vp } : vp));
+    const s3Key = String(vpObj.s3Key || vpObj.key || '').trim();
+    const storageProvider = (s3Key ? 's3' : (vpObj.storageProvider || '')).trim();
+    const rawFileName = String(vpObj.fileName || vpObj.originalFileName || (s3Key ? s3Key.split('/').pop() : '') || '').trim();
+    const cleanFileName = rawFileName.replace(/^\d+-([0-9a-fA-F-]+-)?/, '');
+    const cleanObj = {
+      ...vpObj,
+      title: String(vpObj.title || cleanFileName || 'Video Part').trim(),
+      ...(s3Key ? {
+        s3Key,
+        storageProvider: storageProvider || 's3',
+        fileName: cleanFileName || rawFileName || 'video.mp4',
+        contentType: String(vpObj.contentType || vpObj.mimetype || 'video/mp4').trim(),
+        uploadStatus: String(vpObj.uploadStatus || 'uploaded').trim(),
+      } : {}),
+    };
+    delete cleanObj._doc;
+    return cleanObj;
+  }).filter(Boolean);
+
+  const effectiveFirstVideo = (isolated.videoParts && isolated.videoParts.length > 0) ? isolated.videoParts[0] : null;
+  const effectiveS3Key = lessonS3Key || effectiveFirstVideo?.s3Key || '';
+  const effectiveStorage = lessonObj.storageProvider || lesson.storageProvider || (effectiveS3Key ? 's3' : (effectiveFirstVideo?.storageProvider || ''));
+
   return {
     _id: lessonObj._id || lesson._id,
     id: (lessonObj._id || lesson._id) ? (lessonObj._id || lesson._id).toString() : undefined,
@@ -441,9 +492,9 @@ const serializeLesson = (lesson, req) => {
     attachments: isolated.attachments,
     meetingUrl: lessonObj.meetingUrl || lesson.meetingUrl || '',
     status: lessonObj.status || lesson.status || 'Published',
-    storageProvider: lessonObj.storageProvider || lesson.storageProvider || firstVideo?.storageProvider || '',
-    s3Key: lessonObj.s3Key || lesson.s3Key || lessonObj.videoS3Key || lesson.videoS3Key || firstVideo?.s3Key || '',
-    videoS3Key: lessonObj.videoS3Key || lesson.videoS3Key || lessonObj.s3Key || lesson.s3Key || firstVideo?.s3Key || '',
+    storageProvider: effectiveStorage,
+    s3Key: effectiveS3Key,
+    videoS3Key: effectiveS3Key,
     createdAt: lessonObj.createdAt || lesson.createdAt,
     updatedAt: lessonObj.updatedAt || lesson.updatedAt,
   };
@@ -1401,8 +1452,10 @@ exports.addLesson = async (req, res) => {
 
     // Filter out fake / placeholder Cloudinary URLs (such as hardcoded wrong cloud names like doxb5l5vf)
     finalVideoParts = finalVideoParts.filter((p) => {
-      if (!p || !p.url) return false;
-      if (p.url.includes('doxb5l5vf')) {
+      if (!p) return false;
+      const isS3 = p.storageProvider === 's3' || Boolean(p.s3Key);
+      if (!isS3 && !p.url) return false;
+      if (p.url && p.url.includes('doxb5l5vf')) {
         console.warn(`[addLesson] Rejecting fake placeholder video URL with invalid cloud name doxb5l5vf: "${p.url}"`);
         return false;
       }
@@ -1421,9 +1474,10 @@ exports.addLesson = async (req, res) => {
         const ext = path.extname(f.originalname || f.filename || '').toLowerCase().replace('.', '');
         return m.startsWith('video/') || ALLOWED_VIDEO_FORMATS.includes(ext) || ((f.fieldname || '').toLowerCase().includes('video'));
       });
+      const hasS3Video = finalVideoParts.some((p) => p.storageProvider === 's3' || Boolean(p.s3Key)) || Boolean(req.body.videoS3Key || req.body.s3Key);
       const rawVideoProvided = (videoUrl || uploadFileOrLink || fileOrLink || lessonFile || '').trim();
       const isFakeOrRawFilename = rawVideoProvided && (!rawVideoProvided.startsWith('http://') && !rawVideoProvided.startsWith('https://') && !rawVideoProvided.startsWith('/uploads/'));
-      if (isFakeOrRawFilename && !hasUploadedVideo) {
+      if (isFakeOrRawFilename && !hasUploadedVideo && !hasS3Video) {
         return res.status(400).json({
           success: false,
           message: `Invalid video URL or file "${rawVideoProvided}". Please upload a video file or provide a valid streaming URL.`,
@@ -1434,8 +1488,30 @@ exports.addLesson = async (req, res) => {
     // Auto-sync videoUrl with videoParts if single video was provided
     if (finalVideoUrl && finalVideoParts.length === 0) {
       finalVideoParts.push({ title: actualLessonTitle || 'Video Part 1', url: finalVideoUrl, secure_url: finalVideoUrl, resource_type: 'video' });
-    } else if (!finalVideoUrl && finalVideoParts.length > 0) {
+    } else if (!finalVideoUrl && finalVideoParts.length > 0 && finalVideoParts[0].url) {
       finalVideoUrl = finalVideoParts[0].url;
+    }
+
+    const incomingS3Key = (req.body.videoS3Key || req.body.s3Key || (finalVideoParts[0] && finalVideoParts[0].s3Key) || '').trim();
+    const incomingStorage = (req.body.storageProvider || (incomingS3Key ? 's3' : '')).trim();
+
+    if (incomingS3Key && finalVideoParts.length === 0) {
+      const rawFileName = incomingS3Key.split('/').pop() || 'Video';
+      const cleanFileName = rawFileName.replace(/^\d+-([0-9a-fA-F-]+-)?/, '');
+      finalVideoParts.push({
+        title: actualLessonTitle || cleanFileName || 'Video Part 1',
+        fileName: cleanFileName || rawFileName,
+        storageProvider: 's3',
+        s3Key: incomingS3Key,
+        resourceType: 'video',
+        contentType: 'video/mp4',
+        size: videoBytes || 0,
+        bytes: videoBytes || 0,
+        duration: videoDuration || 0,
+        uploadStatus: 'uploaded',
+        url: '',
+        secure_url: '',
+      });
     }
 
     const isolated = sanitizeAndIsolateResourceArrays({
@@ -1482,6 +1558,9 @@ exports.addLesson = async (req, res) => {
       pdfNotes: finalPdfNotes,
       assignments: finalAssignments,
       attachments: finalAttachments,
+      storageProvider: incomingStorage,
+      s3Key: incomingS3Key,
+      videoS3Key: incomingS3Key,
       status: (status || 'Published').trim(),
     };
 
@@ -1863,8 +1942,10 @@ exports.updateLesson = async (req, res) => {
     // Filter out fake / placeholder Cloudinary URLs (such as hardcoded wrong cloud names like doxb5l5vf)
     if (targetLesson.videoParts && targetLesson.videoParts.length > 0) {
       targetLesson.videoParts = targetLesson.videoParts.filter((p) => {
-        if (!p || !p.url) return false;
-        if (p.url.includes('doxb5l5vf')) {
+        if (!p) return false;
+        const isS3 = p.storageProvider === 's3' || Boolean(p.s3Key);
+        if (!isS3 && !p.url) return false;
+        if (p.url && p.url.includes('doxb5l5vf')) {
           console.warn(`[updateLesson] Rejecting fake placeholder video URL with invalid cloud name doxb5l5vf: "${p.url}"`);
           return false;
         }
@@ -1879,6 +1960,32 @@ exports.updateLesson = async (req, res) => {
 
     if (targetLesson.videoUrl && targetLesson.videoParts.length === 0) {
       targetLesson.videoParts.push({ title: targetLesson.lessonTitle || 'Video Part 1', url: targetLesson.videoUrl, secure_url: targetLesson.videoUrl, resource_type: 'video' });
+    }
+
+    // Preserve and synchronize S3 video references on the lesson subdocument
+    const incomingS3Key = (req.body.videoS3Key || req.body.s3Key || (targetLesson.videoParts?.[0] && targetLesson.videoParts[0].s3Key) || '').trim();
+    const incomingStorage = (req.body.storageProvider || (incomingS3Key ? 's3' : '')).trim();
+    if (incomingS3Key) {
+      targetLesson.videoS3Key = incomingS3Key;
+      targetLesson.s3Key = incomingS3Key;
+      targetLesson.storageProvider = incomingStorage || 's3';
+    }
+
+    const savedS3Key = targetLesson.videoS3Key || targetLesson.s3Key;
+    if (savedS3Key && (!targetLesson.videoParts || targetLesson.videoParts.length === 0)) {
+      const rawFileName = savedS3Key.split('/').pop() || 'Video';
+      const cleanFileName = rawFileName.replace(/^\d+-([0-9a-fA-F-]+-)?/, '');
+      targetLesson.videoParts = [{
+        title: targetLesson.lessonTitle || cleanFileName || 'Video Part 1',
+        fileName: cleanFileName || rawFileName,
+        storageProvider: 's3',
+        s3Key: savedS3Key,
+        resourceType: 'video',
+        contentType: 'video/mp4',
+        uploadStatus: 'uploaded',
+        url: '',
+        secure_url: '',
+      }];
     }
 
     const isolated = sanitizeAndIsolateResourceArrays({

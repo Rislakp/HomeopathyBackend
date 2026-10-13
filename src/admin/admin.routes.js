@@ -12,6 +12,7 @@ const {
   addQuestionToExam,
   updateQuestionInExam,
   deleteQuestionFromExam,
+  getAdminExamResults,
 } = require('./admin.controller');
 const { requireAdmin } = require('../../middleware/rbac');
 
@@ -59,6 +60,14 @@ router.get('/api/v1/admin/exams', getAllGrandMocks);
 // Admin Route: Get Single Grand Mock Exam with Questions
 router.get('/api/exams/grand-mock/:id', getGrandMockById);
 router.get('/api/exams/:id', getGrandMockById);
+
+// Admin Route: Get exam student results
+router.get('/api/v1/admin/exams/:examId/results', requireAdmin, getAdminExamResults);
+router.get('/api/admin/exams/:examId/results', requireAdmin, getAdminExamResults);
+router.get('/api/exams/:examId/results', requireAdmin, getAdminExamResults);
+router.get('/api/v1/admin/exams/:id/results', requireAdmin, getAdminExamResults);
+router.get('/api/admin/exams/:id/results', requireAdmin, getAdminExamResults);
+router.get('/api/exams/:id/results', requireAdmin, getAdminExamResults);
 
 // Admin Route: Update Grand Mock Exam
 router.put('/api/exams/grand-mock/:id', updateGrandMockExam);

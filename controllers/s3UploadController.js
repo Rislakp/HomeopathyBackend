@@ -247,12 +247,37 @@ const findStudentForMedia = async (user) => {
 };
 
 const courseContainsS3Key = (course, key) => {
-  if (course.thumbnailMedia?.s3Key === key) return true;
+  if (!course || !key) return false;
+  const targetKey = String(key).trim();
+  const getProp = (obj, prop) => {
+    if (!obj) return undefined;
+    if (typeof obj.get === 'function') {
+      const val = obj.get(prop);
+      if (val !== undefined) return val;
+    }
+    if (obj._doc && obj._doc[prop] !== undefined) return obj._doc[prop];
+    return obj[prop];
+  };
+
+  const thumbKey = getProp(course.thumbnailMedia, 's3Key') || getProp(course.thumbnailMedia, 'key');
+  if (thumbKey === targetKey) return true;
+
   for (const moduleItem of course.modules || []) {
     for (const lesson of moduleItem.lessons || []) {
-      if (lesson.videoS3Key === key) return true;
+      const lessonVideoS3 = getProp(lesson, 'videoS3Key');
+      const lessonS3 = getProp(lesson, 's3Key');
+      const lessonVideoUrl = getProp(lesson, 'videoUrl');
+      if (lessonVideoS3 === targetKey || lessonS3 === targetKey) return true;
+      if (typeof lessonVideoUrl === 'string' && lessonVideoUrl.includes(targetKey)) return true;
+
       for (const collection of ['videoParts', 'pdfNotes', 'assignments', 'attachments']) {
-        if ((lesson[collection] || []).some((item) => item.s3Key === key)) return true;
+        const list = getProp(lesson, collection) || lesson[collection] || [];
+        for (const item of list) {
+          const itemKey = getProp(item, 's3Key') || getProp(item, 'key');
+          if (itemKey === targetKey) return true;
+          const itemUrl = getProp(item, 'url') || getProp(item, 'secure_url');
+          if (typeof itemUrl === 'string' && itemUrl.includes(targetKey)) return true;
+        }
       }
     }
   }
@@ -266,19 +291,36 @@ const getMediaAccessUrl = async (req, res) => {
   const prefix = ['videos/', 'images/', 'pdfs/'].find((item) => typeof key === 'string' && key.startsWith(item));
   if (!prefix || !validStoredKey(key, prefix.slice(0, -1))) return fail(res, 400, 'Invalid S3 media key.');
   try {
-    const course = courseId
-      ? (mongoose.Types.ObjectId.isValid(courseId)
-        ? await Course.findById(courseId)
-        : await Course.findOne({ courseId }))
-      : await Course.findOne({ $or: [
-        { 'thumbnailMedia.s3Key': key },
-        { 'modules.lessons.videoS3Key': key },
-        { 'modules.lessons.videoParts.s3Key': key },
-        { 'modules.lessons.pdfNotes.s3Key': key },
-        { 'modules.lessons.assignments.s3Key': key },
-        { 'modules.lessons.attachments.s3Key': key },
+    const targetKey = String(key).trim();
+    const findCourseLean = async (query) => {
+      const q = Course.findOne(query);
+      if (q && typeof q.lean === 'function') {
+        return await q.lean();
+      }
+      return await q;
+    };
+
+    let course = null;
+    if (courseId) {
+      const cleanCourseId = String(courseId).trim();
+      const query = mongoose.Types.ObjectId.isValid(cleanCourseId)
+        ? { $or: [{ _id: cleanCourseId }, { courseId: cleanCourseId }] }
+        : { courseId: cleanCourseId };
+      course = await findCourseLean(query);
+    }
+    if (!course) {
+      course = await findCourseLean({ $or: [
+        { 'thumbnailMedia.s3Key': targetKey },
+        { 'thumbnailMedia.key': targetKey },
+        { 'modules.lessons.videoS3Key': targetKey },
+        { 'modules.lessons.s3Key': targetKey },
+        { 'modules.lessons.videoParts.s3Key': targetKey },
+        { 'modules.lessons.pdfNotes.s3Key': targetKey },
+        { 'modules.lessons.assignments.s3Key': targetKey },
+        { 'modules.lessons.attachments.s3Key': targetKey },
       ] });
-    if (!course || !courseContainsS3Key(course, key)) return fail(res, 404, 'S3 media was not found in this course.');
+    }
+    if (!course || !courseContainsS3Key(course, targetKey)) return fail(res, 404, 'S3 media was not found in this course.');
 
     const role = (req.user?.role || '').toLowerCase();
     const isStaff = ['admin', 'superadmin'].includes(role);

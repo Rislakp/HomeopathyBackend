@@ -998,6 +998,8 @@ const createExam = createGrandMockExam;
 const saveGrandMock = createGrandMockExam;
 const getExamById = getGrandMockById;
 
+const { getAdminExamResults } = require('../../controllers/examController');
+
 module.exports = {
   extractMCQs,
   createGrandMockExam,
@@ -1012,6 +1014,7 @@ module.exports = {
   addQuestionToExam,
   updateQuestionInExam,
   deleteQuestionFromExam,
+  getAdminExamResults,
   validateAndSanitizeQuestion,
   validateAndSanitizeQuestions
 };

@@ -317,3 +317,90 @@ test('serializeLesson correctly serializes S3 videoParts and lesson S3 reference
   assert.equal(vp.size, 7734893);
   assert.equal(vp._doc, undefined, '_doc must not be exposed on serialized video parts');
 });
+
+test('serializeLesson synthesizes videoParts when lesson has videoS3Key and empty videoParts array', async (t) => {
+  const courseDoc = new Course({
+    courseTitle: 'Production CRS-000075 Reproduction',
+    courseId: 'CRS-000075',
+    instructor: 'Instructor',
+    price: 100,
+    modules: [{
+      moduleName: 'Module 1',
+      lessons: [{
+        lessonTitle: 'testing',
+        lessonType: 'Live Class',
+        videoS3Key: 'videos/1791788204839-6fb73d4b-f0b0-4139-a6bf-5055cf82307e-video1.mp4',
+        videoBytes: 7734893,
+        videoParts: [],
+        pdfNotes: [{ title: 'PDF Note', url: 'https://api.whitecoat.academy/uploads/PDF Note' }],
+        assignments: [{ title: 'Assignment', url: 'https://api.whitecoat.academy/uploads/Assignment' }],
+      }],
+    }],
+  });
+
+  const lessonSubdoc = courseDoc.modules[0].lessons[0];
+  const serialized = courseController.serializeLesson(lessonSubdoc, { protocol: 'https', get: () => 'api.whitecoat.academy' });
+
+  assert.ok(serialized, 'serialized lesson must exist');
+  assert.equal(serialized.lessonTitle, 'testing');
+  assert.equal(serialized.videoS3Key, 'videos/1791788204839-6fb73d4b-f0b0-4139-a6bf-5055cf82307e-video1.mp4');
+  assert.equal(serialized.s3Key, 'videos/1791788204839-6fb73d4b-f0b0-4139-a6bf-5055cf82307e-video1.mp4');
+  assert.equal(serialized.storageProvider, 's3');
+  assert.equal(Array.isArray(serialized.videoParts), true);
+  assert.equal(serialized.videoParts.length, 1, 'videoParts must contain synthesized S3 video item');
+  assert.equal(serialized.videoParts[0].s3Key, 'videos/1791788204839-6fb73d4b-f0b0-4139-a6bf-5055cf82307e-video1.mp4');
+  assert.equal(serialized.videoParts[0].storageProvider, 's3');
+  assert.equal(serialized.videoParts[0].fileName, 'video1.mp4');
+  assert.equal(serialized.videoParts[0].title, 'testing');
+  assert.equal(serialized.videoParts[0].contentType, 'video/mp4');
+  assert.equal(serialized.videoParts[0].size, 7734893);
+  // Ensure pdfNotes and assignments remain intact
+  assert.equal(serialized.pdfNotes.length, 1);
+  assert.equal(serialized.assignments.length, 1);
+});
+
+test('getMediaAccessUrl resolves course by courseId business ID and recognizes lesson videoS3Key', async (t) => {
+  const originalFindOne = Course.findOne;
+  const originalSend = config.s3Client.send;
+
+  Course.findOne = (query) => {
+    return {
+      lean: async () => ({
+        _id: 'mongo-id-75',
+        courseId: 'CRS-000075',
+        modules: [{
+          lessons: [{
+            lessonTitle: 'testing',
+            videoS3Key: 'videos/1791788204839-6fb73d4b-f0b0-4139-a6bf-5055cf82307e-video1.mp4',
+            videoParts: [],
+          }],
+        }],
+      }),
+    };
+  };
+  config.s3Client.send = async () => ({});
+
+  t.after(() => {
+    Course.findOne = originalFindOne;
+    config.s3Client.send = originalSend;
+  });
+
+  const res = await call(controller.getMediaAccessUrl, {
+    courseId: 'CRS-000075',
+    s3Key: 'videos/1791788204839-6fb73d4b-f0b0-4139-a6bf-5055cf82307e-video1.mp4',
+  }, { id: 'admin-1', role: 'admin' });
+
+  assert.equal(res.statusCode, 200);
+  assert.equal(res.body.success, true);
+  assert.equal(res.body.s3Key, 'videos/1791788204839-6fb73d4b-f0b0-4139-a6bf-5055cf82307e-video1.mp4');
+  assert.match(res.body.url, /X-Amz-Signature=/);
+
+  // Unrelated key on same course is rejected with 404
+  const unrelated = await call(controller.getMediaAccessUrl, {
+    courseId: 'CRS-000075',
+    s3Key: 'videos/unrelated-random.mp4',
+  }, { id: 'admin-1', role: 'admin' });
+
+  assert.equal(unrelated.statusCode, 404);
+  assert.equal(unrelated.body.success, false);
+});

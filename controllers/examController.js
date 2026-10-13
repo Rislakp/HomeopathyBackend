@@ -1394,6 +1394,224 @@ async function deleteQuestionFromExam(req, res) {
   }
 }
 
+/**
+ * GET /api/v1/admin/exams/:examId/results
+ * Fetches student results/submissions for a specific exam with pagination and search.
+ * Enforces admin authorization.
+ */
+async function getAdminExamResults(req, res) {
+  try {
+    const rawExamId = req.params.examId || req.params.id;
+    const cleanExamId = (rawExamId || '').trim();
+
+    if (!cleanExamId || !mongoose.Types.ObjectId.isValid(cleanExamId)) {
+      return res.status(400).json({
+        success: false,
+        message: 'Invalid Exam ID format'
+      });
+    }
+
+    const exam = await Exam.findById(cleanExamId)
+      .select('_id title testType courseId moduleId marksPerQuestion totalQuestions durationMinutes')
+      .lean();
+
+    if (!exam) {
+      return res.status(404).json({
+        success: false,
+        message: 'Exam not found'
+      });
+    }
+
+    // Parse pagination parameters (safe defaults: page=1, limit=20, maxLimit=100)
+    let page, limit, skip;
+    try {
+      ({ page, limit, skip } = parsePaginationParams(req.query, { defaultLimit: 20, maxLimit: 100 }));
+    } catch (pErr) {
+      return res.status(pErr.statusCode || 400).json({
+        success: false,
+        message: pErr.message
+      });
+    }
+
+    const TestResult = mongoose.models.TestResult || require('../src/common/models/testResult.model');
+    const StudentModel = mongoose.models.Student || require('../models/Student');
+    const UserModel = mongoose.models.User || require('../models/User');
+
+    const filter = { examId: exam._id };
+
+    // Search filter (by student name or email)
+    const searchQuery = req.query.search;
+    if (searchQuery && typeof searchQuery === 'string' && searchQuery.trim()) {
+      const cleanSearch = searchQuery.trim();
+      const escaped = cleanSearch.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      const searchRegex = new RegExp(escaped, 'i');
+
+      const [matchingStudents, matchingUsers] = await Promise.all([
+        StudentModel.find({
+          $or: [{ name: searchRegex }, { email: searchRegex }]
+        }).select('_id userId').lean(),
+        UserModel.find({
+          $or: [{ name: searchRegex }, { email: searchRegex }]
+        }).select('_id').lean()
+      ]);
+
+      const matchingCandidateIds = new Set();
+      matchingStudents.forEach((s) => {
+        if (s._id) matchingCandidateIds.add(s._id.toString());
+        if (s.userId) matchingCandidateIds.add(s.userId.toString());
+      });
+      matchingUsers.forEach((u) => {
+        if (u._id) matchingCandidateIds.add(u._id.toString());
+      });
+
+      const candidateObjectIds = Array.from(matchingCandidateIds)
+        .filter((id) => mongoose.Types.ObjectId.isValid(id))
+        .map((id) => new mongoose.Types.ObjectId(id));
+
+      if (candidateObjectIds.length === 0) {
+        const pagination = buildPaginationResponse(0, page, limit);
+        return res.status(200).json({
+          success: true,
+          message: 'Exam results retrieved successfully',
+          data: [],
+          results: [],
+          pagination,
+          total: 0
+        });
+      }
+
+      filter.studentId = { $in: candidateObjectIds };
+    }
+
+    const [total, rawResults] = await Promise.all([
+      TestResult.countDocuments(filter),
+      TestResult.find(filter)
+        .select('_id studentId examId score totalMarks totalAttempted totalCorrect totalWrong unansweredQuestions positiveMarks negativeMarks maximumScore percentage status createdAt updatedAt')
+        .sort({ score: -1, createdAt: -1 })
+        .skip(skip)
+        .limit(limit)
+        .lean()
+    ]);
+
+    if (!rawResults || rawResults.length === 0) {
+      const pagination = buildPaginationResponse(total, page, limit);
+      return res.status(200).json({
+        success: true,
+        message: 'Exam results retrieved successfully',
+        data: [],
+        results: [],
+        pagination,
+        total
+      });
+    }
+
+    // Batch resolve Student / User details for the page
+    const studentIds = rawResults
+      .map((r) => r.studentId)
+      .filter((id) => id && mongoose.Types.ObjectId.isValid(id))
+      .map((id) => new mongoose.Types.ObjectId(id));
+
+    const [studentsById, studentsByUserId, usersById] = await Promise.all([
+      StudentModel.find({ _id: { $in: studentIds } }).select('_id userId name email phone').lean(),
+      StudentModel.find({ userId: { $in: studentIds } }).select('_id userId name email phone').lean(),
+      UserModel.find({ _id: { $in: studentIds } }).select('_id name email phone').lean()
+    ]);
+
+    const studentMap = new Map();
+    studentsById.forEach((s) => studentMap.set(s._id.toString(), s));
+    studentsByUserId.forEach((s) => {
+      if (s.userId) studentMap.set(s.userId.toString(), s);
+    });
+
+    const userMap = new Map();
+    usersById.forEach((u) => userMap.set(u._id.toString(), u));
+
+    const formattedResults = rawResults.map((result) => {
+      const sIdStr = result.studentId ? result.studentId.toString() : '';
+      const matchedStudent = studentMap.get(sIdStr);
+      const matchedUser = userMap.get(sIdStr);
+
+      const studentName = matchedStudent?.name || matchedUser?.name || 'Student';
+      const studentEmail = matchedStudent?.email || matchedUser?.email || '';
+
+      const score = typeof result.score === 'number' ? result.score : 0;
+      const totalMarks = typeof result.totalMarks === 'number' && result.totalMarks > 0
+        ? result.totalMarks
+        : ((exam.totalQuestions && exam.marksPerQuestion) ? exam.totalQuestions * exam.marksPerQuestion : 0);
+
+      const percentage = typeof result.percentage === 'number'
+        ? result.percentage
+        : (totalMarks > 0 ? Math.round((score / totalMarks) * 10000) / 100 : 0);
+
+      const correct = typeof result.totalCorrect === 'number' ? result.totalCorrect : 0;
+      const wrong = typeof result.totalWrong === 'number' ? result.totalWrong : 0;
+      const unanswered = typeof result.unansweredQuestions === 'number' ? result.unansweredQuestions : 0;
+      const totalAttempted = typeof result.totalAttempted === 'number' ? result.totalAttempted : (correct + wrong);
+      const status = result.status || 'Completed';
+
+      return {
+        _id: result._id.toString(),
+        id: result._id.toString(),
+        resultId: result._id.toString(),
+        examId: exam._id.toString(),
+        studentId: sIdStr,
+        studentName,
+        studentEmail,
+        name: studentName,
+        email: studentEmail,
+        student: {
+          _id: sIdStr,
+          id: sIdStr,
+          name: studentName,
+          email: studentEmail
+        },
+        score,
+        marksObtained: score,
+        totalScore: score,
+        totalMarks,
+        maxMarks: totalMarks,
+        percentage,
+        totalAttempted,
+        attempted: totalAttempted,
+        questionsAttempted: totalAttempted,
+        correct,
+        totalCorrect: correct,
+        correctAnswers: correct,
+        wrong,
+        totalWrong: wrong,
+        wrongAnswers: wrong,
+        unanswered,
+        totalUnanswered: unanswered,
+        unansweredQuestions: unanswered,
+        attemptStatus: status,
+        status,
+        submittedAt: result.createdAt ? result.createdAt.toISOString() : null,
+        submitted_at: result.createdAt ? result.createdAt.toISOString() : null,
+        submittedDate: result.createdAt ? result.createdAt.toISOString() : null,
+        createdAt: result.createdAt ? result.createdAt.toISOString() : null
+      };
+    });
+
+    const pagination = buildPaginationResponse(total, page, limit);
+
+    return res.status(200).json({
+      success: true,
+      message: 'Exam results retrieved successfully',
+      data: formattedResults,
+      results: formattedResults,
+      pagination,
+      total
+    });
+  } catch (error) {
+    console.error('Error fetching admin exam results:', error);
+    return res.status(500).json({
+      success: false,
+      message: 'Failed to retrieve exam results.',
+      error: error.message
+    });
+  }
+}
+
 const deleteExam = deleteGrandMockExam;
 const createExam = createGrandMockExam;
 const saveGrandMock = createGrandMockExam;
@@ -1413,6 +1631,7 @@ module.exports = {
   addQuestionToExam,
   updateQuestionInExam,
   deleteQuestionFromExam,
+  getAdminExamResults,
   validateAndSanitizeQuestion,
   validateAndSanitizeQuestions,
   normalizeTestType,
