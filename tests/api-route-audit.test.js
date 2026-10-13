@@ -333,3 +333,21 @@ test('5. Non-existent routes return structured 404', async () => {
   assert.strictEqual(resNotFound.body?.success, false);
   assert.ok(resNotFound.body?.message?.includes('Route not found'));
 });
+
+test('course media access route is mounted under /api and requires authentication', async () => {
+  const res = await simulateRequest({ method: 'GET', url: '/api/s3-upload/media/access-url?s3Key=pdfs/notes.pdf' });
+  assert.strictEqual(res.statusCode, 401);
+  assert.strictEqual(res.body?.success, false);
+  assert.match(res.body?.message || '', /authentication required/i);
+
+  const v1Res = await simulateRequest({ method: 'GET', url: '/api/v1/s3-upload/media/access-url?s3Key=pdfs/notes.pdf' });
+  assert.strictEqual(v1Res.statusCode, 404);
+  assert.ok(v1Res.body?.message?.includes('Route not found'));
+});
+
+test('missing legacy upload paths use static-file 404 then the generic route handler', async () => {
+  const res = await simulateRequest({ method: 'GET', url: '/uploads/PDF%20Note' });
+  assert.strictEqual(res.statusCode, 404);
+  assert.strictEqual(res.body?.success, false);
+  assert.strictEqual(res.body?.message, 'Route not found: GET /uploads/PDF%20Note');
+});

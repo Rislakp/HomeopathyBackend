@@ -13,6 +13,7 @@ const { getS3KeyFromUrl } = require('../services/s3Service');
 
 const ALLOWED_VIDEO_FORMATS = ['mp4', 'mov', 'avi', 'mkv', 'webm', 'flv', 'wmv', 'm4v'];
 const ALLOWED_DOC_FORMATS = ['pdf', 'doc', 'docx', 'ppt', 'pptx', 'xls', 'xlsx', 'txt', 'csv', 'zip', 'rar'];
+const S3_RESOURCE_PREFIXES = ['videos/', 'images/', 'pdfs/', 'documents/', 'attachments/', 'live_records/'];
 
 // Version identifier for debugging
 console.log('✨ LESSON API VERSION: MIME-DEBUG-2026-09-15');
@@ -75,7 +76,34 @@ const isValidS3MediaKey = (key, prefix) =>
   key.startsWith(`${prefix}/`) &&
   key.length <= 1024 &&
   !key.includes('..') &&
+  !key.includes('//') &&
   !/[\\\r\n]/.test(key);
+
+const isSupportedS3ResourceKey = (key) =>
+  typeof key === 'string' &&
+  S3_RESOURCE_PREFIXES.some((prefix) => isValidS3MediaKey(key, prefix.slice(0, -1)));
+
+const isStoredFileUrl = (value) =>
+  typeof value === 'string' &&
+  (/^https?:\/\//i.test(value.trim()) || /^\/?uploads\//i.test(value.trim()));
+
+const isTitleOnlyUploadUrl = (url, item) => {
+  if (typeof url !== 'string' || !url.trim()) return false;
+  let basename = '';
+  try {
+    const parsed = new URL(url, 'https://local.invalid');
+    if (!parsed.pathname.toLowerCase().startsWith('/uploads/')) return false;
+    // URL path separators are always forward slashes, including on Windows.
+    basename = decodeURIComponent(parsed.pathname.split('/').pop() || '');
+  } catch (_) {
+    return false;
+  }
+  if (!basename || path.extname(basename)) return false;
+  const labels = [item?.title, item?.name, item?.fileName, item?.originalFileName, item?.filename]
+    .filter((value) => typeof value === 'string' && value.trim())
+    .map((value) => value.trim().toLowerCase());
+  return labels.includes(basename.toLowerCase());
+};
 
 /**
  * Normalise a single raw resource item (string or object) into the
@@ -88,16 +116,18 @@ const toResourceObj = (item) => {
     if (!trimmed) return null;
 
     let s3Key = '';
-    if (trimmed.startsWith('videos/') || trimmed.startsWith('images/') || trimmed.startsWith('pdfs/')) {
+    if (isSupportedS3ResourceKey(trimmed)) {
       s3Key = trimmed;
     } else if (trimmed.includes('.amazonaws.com/')) {
-      s3Key = getS3KeyFromUrl(trimmed) || '';
+      const extractedKey = getS3KeyFromUrl(trimmed) || '';
+      s3Key = isSupportedS3ResourceKey(extractedKey) ? extractedKey : '';
     }
 
     if (s3Key) {
       let resourceType = 'image';
       if (s3Key.startsWith('videos/')) resourceType = 'video';
       else if (s3Key.startsWith('pdfs/')) resourceType = 'pdf';
+      else if (s3Key.startsWith('documents/') || s3Key.startsWith('attachments/')) resourceType = 'document';
       const fileName = path.basename(s3Key);
       return {
         title: fileName || 'Resource',
@@ -108,26 +138,28 @@ const toResourceObj = (item) => {
         documentUrl: '',
         path: '',
         public_id: s3Key,
-        resource_type: resourceType === 'pdf' ? 'raw' : resourceType,
+        resource_type: resourceType === 'pdf' || resourceType === 'document' ? 'raw' : resourceType,
         resourceType,
-        mimetype: resourceType === 'video' ? 'video/mp4' : (resourceType === 'pdf' ? 'application/pdf' : 'image/png'),
+        mimetype: resourceType === 'video' ? 'video/mp4' : (resourceType === 'pdf' ? 'application/pdf' : (resourceType === 'document' ? 'application/octet-stream' : 'image/png')),
         size: 0,
         storageProvider: 's3',
         s3Key,
         fileName,
         originalFileName: fileName,
-        contentType: resourceType === 'video' ? 'video/mp4' : (resourceType === 'pdf' ? 'application/pdf' : 'image/png'),
+        contentType: resourceType === 'video' ? 'video/mp4' : (resourceType === 'pdf' ? 'application/pdf' : (resourceType === 'document' ? 'application/octet-stream' : 'image/png')),
         uploadStatus: 'uploaded',
       };
     }
 
-    const url = normalizeFileUrl(trimmed);
+    const url = isStoredFileUrl(trimmed) ? normalizeFileUrl(trimmed) : '';
     let title = trimmed;
     try {
-      if (/^https?:\/\//i.test(url)) {
+      if (url && /^https?:\/\//i.test(url)) {
         const parsed = new URL(url);
         const name = path.basename(parsed.pathname);
         title = name ? decodeURIComponent(name) : trimmed;
+      } else if (url) {
+        title = decodeURIComponent(path.basename(url));
       }
     } catch (_) {
       title = trimmed;
@@ -157,16 +189,18 @@ const toResourceObj = (item) => {
   if (typeof item === 'object' && !Array.isArray(item)) {
     let s3Key = String(item.s3Key || item.key || '').trim();
     if (!s3Key) {
-      const rawCandidate = item.url || item.secure_url || item.secureUrl || item.fileUrl || item.path || '';
+      const rawCandidate = item.url || item.secure_url || item.secureUrl || item.fileUrl || item.path || item.mediaUrlOrPath || item.mediaUrl || '';
       if (typeof rawCandidate === 'string') {
         const candidateTrim = rawCandidate.trim();
-        if (candidateTrim.startsWith('videos/') || candidateTrim.startsWith('images/') || candidateTrim.startsWith('pdfs/')) {
+        if (isSupportedS3ResourceKey(candidateTrim)) {
           s3Key = candidateTrim;
         } else if (candidateTrim.includes('.amazonaws.com/')) {
-          s3Key = getS3KeyFromUrl(candidateTrim) || '';
+          const extractedKey = getS3KeyFromUrl(candidateTrim) || '';
+          s3Key = isSupportedS3ResourceKey(extractedKey) ? extractedKey : '';
         }
       }
     }
+    if (!isSupportedS3ResourceKey(s3Key)) s3Key = '';
     const storageProvider = String(item.storageProvider || item.storage_provider || (s3Key ? 's3' : '')).trim().toLowerCase();
     const isS3Resource = storageProvider === 's3' && !!s3Key;
     const rawId = item._id || item.id;
@@ -178,9 +212,12 @@ const toResourceObj = (item) => {
         : (item.path && item.path.startsWith('http'))
           ? item.path
           : null;
-    const rawUrl = isS3Resource ? '' : (cloudUrl || item.url || item.secure_url || item.path || item.partUrl || item.fileUrl || item.link || item.filename || '');
-    const url = isS3Resource ? '' : normalizeFileUrl(rawUrl);
+    const rawUrl = isS3Resource ? '' : (cloudUrl || item.url || item.secure_url || item.path || item.partUrl || item.fileUrl || item.documentUrl || item.link || item.mediaUrlOrPath || item.mediaUrl || '');
     let title = item.title || item.name || item.partTitle || item.originalname || item.filename || '';
+    const candidateUrl = isStoredFileUrl(rawUrl) ? rawUrl.trim() : '';
+    const url = isS3Resource || isTitleOnlyUploadUrl(candidateUrl, item)
+      ? ''
+      : (candidateUrl ? normalizeFileUrl(candidateUrl) : '');
     if (!title && url) {
       try {
         if (/^https?:\/\//i.test(url)) {
@@ -407,25 +444,38 @@ const sanitizeFiles = (files) => {
   if (!Array.isArray(files)) return [];
   return files
     .map((f) => {
-      // Already a Mongoose subdoc or plain object with expected keys
+      // Handle legacy string-indexed objects where each character stored separately
       if (f && typeof f === 'object' && !Array.isArray(f)) {
-        // Detect legacy string-indexed objects: all own keys are digit strings
-        const keys = Object.keys(f).filter(k => k !== '_id');
-        const isStringIndexed = keys.length > 0 && keys.every(k => /^\d+$/.test(k));
+        const keys = Object.keys(f).filter((k) => k !== "_id");
+        const isStringIndexed = keys.length > 0 && keys.every((k) => /^\d+$/.test(k));
         if (isStringIndexed) {
-          // Re-assemble the original string value from its characters
           const str = keys
             .sort((a, b) => Number(a) - Number(b))
-            .map(k => f[k])
-            .join('');
-          return str ? { title: str, url: str } : null;
+            .map((k) => f[k])
+            .join("");
+          return str ? toResourceObj(str) : null;
         }
-        // Normal object — pass through toResourceObj for key normalisation
+        // Normal object – forward to toResourceObj for normalization
         return toResourceObj(f);
       }
+      // Primitive or other – forward directly
       return toResourceObj(f);
     })
-    .filter(Boolean);
+    .filter(Boolean)
+    .map((item) => {
+      // Remove synthetic /uploads URLs for title‑only records
+      if (item && typeof item.url === "string" && item.url.startsWith("/uploads/")) {
+        const isTitleOnly = isTitleOnlyUploadUrl(item.url, item);
+        if (isTitleOnly) {
+          item.url = "";
+          item.secure_url = "";
+          item.fileUrl = "";
+          item.documentUrl = "";
+          item.path = "";
+        }
+      }
+      return item;
+    });
 };
 
 const getBaseUrl = (req) => {
@@ -468,12 +518,14 @@ const serializeLesson = async (lesson, req) => {
     const list = Array.isArray(items) ? items : (items ? [items] : []);
     return Promise.all(list.map(async (item) => {
       if (!item) return null;
-      const plain = (item && typeof item.toObject === 'function')
+      let plain = (item && typeof item.toObject === 'function')
         ? item.toObject({ virtuals: true })
         : (item && item._doc ? { ...item._doc } : (typeof item === 'object' ? { ...item } : item));
       if (typeof plain === 'string') {
-        const absUrl = toAbsoluteUrl(plain, req);
-        return { title: 'Resource', url: absUrl, secure_url: absUrl, fileUrl: absUrl, documentUrl: absUrl, path: absUrl };
+        plain = toResourceObj(plain) || { title: plain, url: '' };
+      } else {
+        const normalized = toResourceObj(plain);
+        if (normalized) plain = { ...plain, ...normalized };
       }
       const resource = plain;
       const s3Reference = normalizeS3Reference(resource);
@@ -484,7 +536,7 @@ const serializeLesson = async (lesson, req) => {
         : resource;
       const canonicalUrl = typeof media === 'string'
         ? media
-        : (media.secure_url || media.url || media.fileUrl || media.documentUrl || media.path || plain.secure_url || plain.url || plain.fileUrl || plain.documentUrl || plain.path || '');
+        : (media.secure_url || media.url || media.fileUrl || media.documentUrl || media.path || '');
       const absUrl = canonicalUrl ? toAbsoluteUrl(canonicalUrl, req) : '';
       if (typeof media === 'string') {
         return { title: 'Resource', url: absUrl, secure_url: absUrl, fileUrl: absUrl, documentUrl: absUrl, path: absUrl };
@@ -505,7 +557,7 @@ const serializeLesson = async (lesson, req) => {
           : (Number(resource.duration || resource.videoDuration) || 0));
       const partDuration = rawDuration > 0 ? rawDuration : (Number(lesson.videoDuration) > 0 ? Number(lesson.videoDuration) : 0);
 
-      return {
+const result = {
         ...plain,
         ...media,
         bytes: partBytes,
@@ -521,6 +573,18 @@ const serializeLesson = async (lesson, req) => {
         documentUrl: absUrl,
         path: absUrl,
       };
+      // Remove synthetic /uploads URLs for title‑only resources
+      if (result && typeof result.url === 'string' && isTitleOnlyUploadUrl(result.url, result)) {
+        const isTitleOnly = isTitleOnlyUploadUrl(result.url, result);
+        if (isTitleOnly) {
+          result.url = '';
+          result.secure_url = '';
+          result.fileUrl = '';
+          result.documentUrl = '';
+          result.path = '';
+        }
+      }
+      return result;
     })).then((items) => items.filter(Boolean));
   };
 
@@ -1590,14 +1654,8 @@ exports.addLesson = async (req, res) => {
 
     filesList.forEach((f) => {
       if (f && (f.secure_url || f.url || f.path || f.filename)) {
-        const rawFileUrl = (f.secure_url && f.secure_url.startsWith('http'))
-          ? f.secure_url
-          : (f.url && f.url.startsWith('http'))
-            ? f.url
-            : (f.path && f.path.startsWith('http'))
-              ? f.path
-              : (f.secure_url || f.url || f.path || (f.filename ? `/uploads/${f.filename}` : ''));
-        const fileUrl = normalizeFileUrl(rawFileUrl);
+        const rawFileUrl = [f.secure_url, f.url, f.path].find(isStoredFileUrl) || '';
+        const fileUrl = rawFileUrl ? normalizeFileUrl(rawFileUrl) : '';
         const fileTitle = f.originalname || f.filename || 'Resource';
         const field = (f.fieldname || '').toLowerCase();
         const fileMimeType = (f.mimetype || (f.originalname ? mimeTypes.lookup(f.originalname) : '') || '').toLowerCase();
@@ -2130,14 +2188,8 @@ exports.updateLesson = async (req, res) => {
 
     filesList.forEach((f) => {
       if (f && (f.secure_url || f.url || f.path || f.filename)) {
-        const rawFileUrl = (f.secure_url && f.secure_url.startsWith('http'))
-          ? f.secure_url
-          : (f.url && f.url.startsWith('http'))
-            ? f.url
-            : (f.path && f.path.startsWith('http'))
-              ? f.path
-              : (f.secure_url || f.url || f.path || (f.filename ? `/uploads/${f.filename}` : ''));
-        const fileUrl = normalizeFileUrl(rawFileUrl);
+        const rawFileUrl = [f.secure_url, f.url, f.path].find(isStoredFileUrl) || '';
+        const fileUrl = rawFileUrl ? normalizeFileUrl(rawFileUrl) : '';
         const fileTitle = f.originalname || f.filename || 'Resource';
         const field = (f.fieldname || '').toLowerCase();
         const fileMimeType = (f.mimetype || (f.originalname ? mimeTypes.lookup(f.originalname) : '') || '').toLowerCase();

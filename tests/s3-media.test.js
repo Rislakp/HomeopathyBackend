@@ -12,9 +12,19 @@ const DemoVideo = require('../models/DemoVideo');
 const Lesson = require('../models/Lesson.model');
 const { getS3Url } = require('../services/s3Service');
 const defaultCredentialProvider = config.s3Client.config.credentials;
+const defaultS3Send = config.s3Client.send;
 // Synthetic, in-memory credentials are scoped to this test process only.
 config.s3Client.config.credentials = async () => ({ accessKeyId: 'AKIDEXAMPLE', secretAccessKey: 'local-test-only-secret' });
-process.on('exit', () => { config.s3Client.config.credentials = defaultCredentialProvider; });
+config.s3Client.send = async (command) => {
+  if (command.constructor.name === 'HeadObjectCommand') {
+    return { ContentLength: 512, ContentType: 'application/pdf' };
+  }
+  return defaultS3Send(command);
+};
+process.on('exit', () => {
+  config.s3Client.config.credentials = defaultCredentialProvider;
+  config.s3Client.send = defaultS3Send;
+});
 
 const makeResponse = () => ({
   statusCode: 200,
@@ -176,6 +186,67 @@ test('private media access requires the key to be referenced by an authorized co
   const allowed = await call(controller.getMediaAccessUrl, { courseId: 'CRS-123', key: 'pdfs/stored-notes.pdf' });
   assert.equal(allowed.statusCode, 200);
   assert.match(allowed.body.url, /X-Amz-Signature=/);
+});
+
+test('media access accepts document and attachment keys only when stored on the course', async (t) => {
+  const originalFindOne = Course.findOne;
+  const documentKey = 'documents/course-handout.docx';
+  const attachmentKey = 'attachments/course-worksheet.pdf';
+  Course.findOne = async () => ({
+    _id: new mongoose.Types.ObjectId(),
+    courseId: 'CRS-DOCUMENTS',
+    modules: [{ lessons: [{
+      pdfNotes: [{ storageProvider: 's3', s3Key: documentKey }],
+      attachments: [{ storageProvider: 's3', s3Key: attachmentKey }],
+    }] }],
+  });
+  t.after(() => { Course.findOne = originalFindOne; });
+
+  for (const key of [documentKey, attachmentKey]) {
+    const response = await call(controller.getMediaAccessUrl, {}, { role: 'admin' }, { s3Key: key });
+    assert.equal(response.statusCode, 200);
+    assert.deepEqual(Object.keys(response.body).sort(), ['expiresIn', 'key', 's3Key', 'success', 'url']);
+    assert.equal(response.body.s3Key, key);
+    assert.equal(response.body.expiresIn, 900);
+    assert.match(response.body.url, /X-Amz-Signature=/);
+  }
+});
+
+test('media access reports a missing S3 object without returning a signed URL', async (t) => {
+  const originalFindOne = Course.findOne;
+  const originalSend = config.s3Client.send;
+  const key = 'pdfs/missing-object.pdf';
+  Course.findOne = async () => ({
+    _id: new mongoose.Types.ObjectId(),
+    courseId: 'CRS-MISSING-S3-OBJECT',
+    modules: [{ lessons: [{ pdfNotes: [{ storageProvider: 's3', s3Key: key }] }] }],
+  });
+  config.s3Client.send = async (command) => {
+    assert.equal(command.constructor.name, 'HeadObjectCommand');
+    const error = new Error('private object key should not be returned');
+    error.name = 'NoSuchKey';
+    error.$metadata = { httpStatusCode: 404 };
+    throw error;
+  };
+  t.after(() => {
+    Course.findOne = originalFindOne;
+    config.s3Client.send = originalSend;
+  });
+
+  const response = await call(controller.getMediaAccessUrl, {}, { role: 'admin' }, { s3Key: key });
+  assert.equal(response.statusCode, 404);
+  assert.equal(response.body.success, false);
+  assert.equal(response.body.message, 'S3 resource or bucket was not found.');
+  assert.equal(response.body.url, undefined);
+  assert.doesNotMatch(JSON.stringify(response.body), /private object key/);
+});
+
+test('media access rejects empty, malformed, and unsupported S3 keys', async () => {
+  for (const s3Key of ['', 'PDF Note', 'unknown/file.pdf', 'pdfs/../private.pdf', 'pdfs//file.pdf']) {
+    const response = await call(controller.getMediaAccessUrl, {}, { role: 'admin' }, { s3Key });
+    assert.equal(response.statusCode, 400, `expected ${JSON.stringify(s3Key)} to be rejected`);
+    assert.equal(response.body.success, false);
+  }
 });
 
 test('private video access signs the exact object key for the configured S3 bucket', async (t) => {
@@ -711,9 +782,43 @@ test('serializeLesson synthesizes videoParts when lesson has videoS3Key and empt
   assert.equal(serialized.videoParts[0].title, 'testing');
   assert.equal(serialized.videoParts[0].contentType, 'video/mp4');
   assert.equal(serialized.videoParts[0].size, 7734893);
-  // Ensure pdfNotes and assignments remain intact
+  // Display-only labels must not survive as synthetic local upload URLs.
   assert.equal(serialized.pdfNotes.length, 1);
+  assert.equal(serialized.pdfNotes[0].title, 'PDF Note');
+  assert.equal(serialized.pdfNotes[0].url, '');
+  assert.equal(serialized.pdfNotes[0].fileUrl, '');
   assert.equal(serialized.assignments.length, 1);
+  assert.equal(serialized.assignments[0].url, '');
+});
+
+test('serializeLesson preserves real URLs and S3 document keys but leaves title-only references unavailable', async () => {
+  const serialized = await courseController.serializeLesson({
+    lessonTitle: 'Document references',
+    lessonType: 'PDF Notes',
+    videoParts: [],
+    pdfNotes: [
+      { title: 'Legacy notes', fileName: 'stored-notes.pdf', url: '/uploads/stored-notes.pdf' },
+      { title: 'PDF Note', name: 'PDF Note', fileName: 'PDF Note', url: '/uploads/PDF%20Note' },
+      { title: 'Title only', name: 'Title only', fileName: 'Title only' },
+      'PDF Note',
+      'documents/course-handout.docx',
+      { title: 'S3 worksheet', storageProvider: 's3', s3Key: 'attachments/worksheet.pdf', fileName: 'worksheet.pdf' },
+    ],
+    assignments: [],
+    attachments: [],
+  }, { protocol: 'https', get: () => 'api.whitecoat.academy', user: { role: 'admin' } });
+
+  assert.equal(serialized.pdfNotes[0].url, 'https://api.whitecoat.academy/uploads/stored-notes.pdf');
+  for (const index of [1, 2, 3]) {
+    assert.equal(serialized.pdfNotes[index].url, '');
+    assert.equal(serialized.pdfNotes[index].fileUrl, '');
+  }
+  assert.equal(serialized.pdfNotes[4].s3Key, 'documents/course-handout.docx');
+  assert.equal(serialized.pdfNotes[4].storageProvider, 's3');
+  assert.match(serialized.pdfNotes[4].url, /X-Amz-Signature=/);
+  assert.equal(serialized.pdfNotes[5].s3Key, 'attachments/worksheet.pdf');
+  assert.equal(serialized.pdfNotes[5].storageProvider, 's3');
+  assert.match(serialized.pdfNotes[5].url, /X-Amz-Signature=/);
 });
 
 test('getMediaAccessUrl resolves course by courseId business ID and recognizes lesson videoS3Key', async (t) => {

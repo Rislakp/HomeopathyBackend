@@ -3,7 +3,7 @@ const { getSignedUrl } = require('@aws-sdk/s3-request-presigner');
 const { s3Client, bucket, region, publicBaseUrl } = require('../config/s3');
 
 const S3_MEDIA_URL_TTL_SECONDS = 900;
-const SAFE_S3_KEY = /^(videos|images|pdfs|reviews|unani_ranks|grand_mock_questions|live_records)\/[a-zA-Z0-9][a-zA-Z0-9._/-]*$/;
+const SAFE_S3_KEY = /^(videos|images|pdfs|documents|attachments|reviews|unani_ranks|grand_mock_questions|live_records)\/[a-zA-Z0-9][a-zA-Z0-9._/-]*$/;
 
 const stripS3ReferenceUrls = (reference) => ({
   ...reference,

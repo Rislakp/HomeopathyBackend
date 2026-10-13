@@ -99,7 +99,7 @@ const cleanFileName = (name) => name.trim().replace(/^.*[\\/]/, '').normalize('N
   .replace(/[\u0300-\u036f]/g, '').replace(/[^a-zA-Z0-9._-]+/g, '-')
   .replace(/-{2,}/g, '-').replace(/^[.-]+|[.-]+$/g, '').slice(0, 160);
 const validVideoKey = (key) => typeof key === 'string' && /^videos\/\d{13}-(?:[0-9a-f-]{36}-)?[a-zA-Z0-9][a-zA-Z0-9._-]{0,159}$/.test(key);
-const validStoredKey = (key, prefix) => typeof key === 'string' && key.startsWith(`${prefix}/`) && key.length <= 1024 && !key.includes('..') && !/[\\\r\n]/.test(key);
+const validStoredKey = (key, prefix) => typeof key === 'string' && key.startsWith(`${prefix}/`) && key.length <= 1024 && !key.includes('..') && !key.includes('//') && !/[\\\r\n]/.test(key);
 const validUploadId = (id) => typeof id === 'string' && id.length >= 1 && id.length <= 1024 && !/[\r\n]/.test(id);
 const safeFileName = (value) => {
   if (typeof value !== 'string' || !value.trim() || value.length > 1024 || /[\r\n]/.test(value)) return null;
@@ -150,14 +150,11 @@ const handleS3Error = (res, error, action) => {
     action,
     code,
     status,
-    message: error.message,
     hasCredentials: Boolean(
       process.env.AWS_ACCESS_KEY_ID ||
       process.env.S3_ACCESS_KEY ||
       process.env.AWS_KEY
     ),
-    region: process.env.AWS_REGION || process.env.S3_REGION || 'us-east-1',
-    bucket: process.env.AWS_S3_BUCKET || process.env.S3_BUCKET || 'whitecoat-media-prod',
   });
 
   if (code === 'CredentialsProviderError' || code === 'NoCredentials' || error.message?.includes('Could not load credentials')) {
@@ -177,7 +174,12 @@ const handleS3Error = (res, error, action) => {
   if (['EntityTooSmall', 'InvalidPart', 'InvalidPartOrder', 'MalformedXML'].includes(code)) {
     return fail(res, 400, 'S3 rejected the upload completion data.', code);
   }
-  return fail(res, status >= 400 && status < 500 ? status : 502, error.message || `S3 ${operationType} operation failed.`, code);
+  return fail(
+    res,
+    status >= 400 && status < 500 ? status : 502,
+    isSingleObject ? 'S3 media request failed.' : 'S3 multipart operation failed.',
+    code,
+  );
 };
 
 
@@ -481,7 +483,7 @@ const getMediaAccessUrl = async (req, res) => {
 
   // Handle legacy Cloudinary or local media URLs seamlessly
   const trimmedRawKey = rawKey.trim();
-  if (trimmedRawKey.includes('cloudinary.com') || trimmedRawKey.startsWith('/uploads/')) {
+  if (trimmedRawKey.includes('cloudinary.com') || trimmedRawKey.includes('/uploads/')) {
     return res.json({ success: true, url: trimmedRawKey, key: trimmedRawKey, s3Key: trimmedRawKey });
   }
 
@@ -703,7 +705,10 @@ const getMediaAccessUrl = async (req, res) => {
       }
     }
 
-    // 4. Generate SigV4 signed URL
+    // 4. Confirm the referenced private object still exists before issuing a URL.
+    await s3Client.send(new HeadObjectCommand({ Bucket: bucket, Key: key }));
+
+    // 5. Generate SigV4 signed URL
     let contentType = undefined;
     if (prefix === 'videos/' || prefix === 'live_records/') {
       contentType = key.endsWith('.webm') ? 'video/webm' : 'video/mp4';
@@ -717,7 +722,7 @@ const getMediaAccessUrl = async (req, res) => {
     }), { expiresIn: MEDIA_URL_TTL_SECONDS });
 
     const mediaOwnerId = resolvedCourse?.courseId || resolvedCourse?._id || recordingDoc?.courseId || recordingDoc?._id || demoVideoDoc?.courseId || 'authorized-media';
-    console.info('[S3 media] access URL issued', { courseId: String(mediaOwnerId), key, userId: req.user?.id });
+    console.info('[S3 media] access URL issued', { courseId: String(mediaOwnerId), prefix, userId: req.user?.id });
     return res.json({ success: true, url, key, s3Key: key, expiresIn: MEDIA_URL_TTL_SECONDS });
   } catch (error) {
     return handleS3Error(res, error, 'media-access');
