@@ -444,9 +444,12 @@ const getMediaAccessUrl = async (req, res) => {
 
     // 1. If courseId is explicitly provided, verify media belongs to this course
     if (courseId) {
-      resolvedCourse = mongoose.Types.ObjectId.isValid(courseId)
-        ? await Course.findById(courseId)
-        : await Course.findOne({ courseId });
+      const courseQuery = mongoose.Types.ObjectId.isValid(courseId)
+        ? Course.findById(courseId)
+        : Course.findOne({ courseId });
+      resolvedCourse = (courseQuery && typeof courseQuery.lean === 'function')
+        ? await courseQuery.lean()
+        : await courseQuery;
 
       if (resolvedCourse && courseContainsMediaKey(resolvedCourse, key)) {
         foundMedia = true;

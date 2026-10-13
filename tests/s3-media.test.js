@@ -656,7 +656,7 @@ test('serializeLesson correctly serializes S3 videoParts and lesson S3 reference
   });
 
   const lessonSubdoc = courseDoc.modules[0].lessons[0];
-  const serialized = courseController.serializeLesson(lessonSubdoc, { protocol: 'https', get: () => 'api.whitecoat.academy' });
+  const serialized = await courseController.serializeLesson(lessonSubdoc, { protocol: 'https', get: () => 'api.whitecoat.academy' });
 
   assert.ok(serialized, 'serialized lesson must exist');
   assert.equal(serialized.lessonTitle, 'S3 Video Lesson');
@@ -696,7 +696,7 @@ test('serializeLesson synthesizes videoParts when lesson has videoS3Key and empt
   });
 
   const lessonSubdoc = courseDoc.modules[0].lessons[0];
-  const serialized = courseController.serializeLesson(lessonSubdoc, { protocol: 'https', get: () => 'api.whitecoat.academy' });
+  const serialized = await courseController.serializeLesson(lessonSubdoc, { protocol: 'https', get: () => 'api.whitecoat.academy' });
 
   assert.ok(serialized, 'serialized lesson must exist');
   assert.equal(serialized.lessonTitle, 'testing');
@@ -718,6 +718,9 @@ test('serializeLesson synthesizes videoParts when lesson has videoS3Key and empt
 
 test('getMediaAccessUrl resolves course by courseId business ID and recognizes lesson videoS3Key', async (t) => {
   const originalFindOne = Course.findOne;
+  const originalRecFindOne = Recording.findOne;
+  const originalDemoFindOne = DemoVideo.findOne;
+  const originalLessonFindOne = Lesson.findOne;
   const originalSend = config.s3Client.send;
 
   Course.findOne = (query) => {
@@ -735,10 +738,16 @@ test('getMediaAccessUrl resolves course by courseId business ID and recognizes l
       }),
     };
   };
+  Recording.findOne = async () => null;
+  DemoVideo.findOne = async () => null;
+  Lesson.findOne = async () => null;
   config.s3Client.send = async () => ({});
 
   t.after(() => {
     Course.findOne = originalFindOne;
+    Recording.findOne = originalRecFindOne;
+    DemoVideo.findOne = originalDemoFindOne;
+    Lesson.findOne = originalLessonFindOne;
     config.s3Client.send = originalSend;
   });
 
