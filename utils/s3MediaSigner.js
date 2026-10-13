@@ -107,17 +107,19 @@ const signS3Reference = async (reference, responseContentType) => {
       ...(responseContentType ? { ResponseContentType: responseContentType, ResponseContentDisposition: 'inline' } : {}),
     }), { expiresIn: S3_MEDIA_URL_TTL_SECONDS });
 
+    // Encode the signed URL to ensure '+' characters are preserved when transmitted.
+    const encodedUrl = encodeURI(url).replace(/\+/g, '%2B');
     return {
       ...reference,
       fileName: reference.fileName || reference.originalFileName || '',
-      url,
-      secure_url: url,
-      secureUrl: url,
-      fileUrl: url,
-      documentUrl: url,
-      path: url,
-      videoUrl: url,
-      mediaUrl: url,
+      url: encodedUrl,
+      secure_url: encodedUrl,
+      secureUrl: encodedUrl,
+      fileUrl: encodedUrl,
+      documentUrl: encodedUrl,
+      path: encodedUrl,
+      videoUrl: encodedUrl,
+      mediaUrl: encodedUrl,
       accessUrlExpiresIn: S3_MEDIA_URL_TTL_SECONDS,
     };
   } catch (err) {
