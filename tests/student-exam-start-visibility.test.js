@@ -123,6 +123,24 @@ test('listed exam _id starts successfully; invalid, unpublished, and unauthorize
     assert.equal(startRes.body.success, true);
     assert.equal(requestedStartId, examId);
 
+    for (const legacyStatus of [undefined, null, '', 'published']) {
+      currentExam = { ...publishedGrandMock, status: legacyStatus };
+      if (legacyStatus === undefined) delete currentExam.status;
+
+      const legacyListRes = responseRecorder();
+      await getAvailableExams({
+        user,
+        query: { testType: 'grand_mock', page: '1', limit: '20' },
+        originalUrl: '/api/student/exams?testType=grand_mock',
+      }, legacyListRes);
+      assert.equal(legacyListRes.statusCode, 200);
+      assert.equal(legacyListRes.body.data.length, 1, `status ${String(legacyStatus)} should remain listed`);
+
+      const legacyStartRes = responseRecorder();
+      await startExam({ user, params: { id: examId } }, legacyStartRes);
+      assert.equal(legacyStartRes.statusCode, 200, `status ${String(legacyStatus)} should remain startable`);
+    }
+
     const invalidRes = responseRecorder();
     await startExam({ user, params: { id: 'not-an-object-id' } }, invalidRes);
     assert.equal(invalidRes.statusCode, 400);
@@ -143,6 +161,12 @@ test('listed exam _id starts successfully; invalid, unpublished, and unauthorize
     assert.equal(draftStartRes.statusCode, 404);
     assert.equal(draftStartRes.body.message, 'Grand Mock Exam not found.');
 
+    currentExam = null;
+    const missingExamRes = responseRecorder();
+    await startExam({ user, params: { id: examId } }, missingExamRes);
+    assert.equal(missingExamRes.statusCode, 404);
+    assert.equal(missingExamRes.body.message, 'Grand Mock Exam not found.');
+
     currentExam = {
       ...publishedGrandMock,
       testType: 'course_test',
@@ -153,6 +177,17 @@ test('listed exam _id starts successfully; invalid, unpublished, and unauthorize
     await startExam({ user, params: { id: examId } }, forbiddenRes);
     assert.equal(forbiddenRes.statusCode, 403);
     assert.equal(forbiddenRes.body.message, 'You are not authorized to access this exam.');
+
+    currentExam = {
+      ...publishedGrandMock,
+      testType: 'course_test',
+      status: '',
+      courseId: 'CRS-000075',
+      courseIds: ['CRS-000075'],
+    };
+    const legacyCourseTestRes = responseRecorder();
+    await startExam({ user, params: { id: examId } }, legacyCourseTestRes);
+    assert.equal(legacyCourseTestRes.statusCode, 200);
   } finally {
     Exam.find = original.examFind;
     Exam.countDocuments = original.examCount;

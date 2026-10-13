@@ -296,7 +296,7 @@ function normalizeTestType(input) {
 
 function isPublishedForStudents(exam) {
   const status = exam?.status === undefined || exam?.status === null || String(exam.status).trim() === ''
-    ? 'Published'
+    ? 'published'
     : String(exam.status).trim().toLowerCase();
   return status === 'published';
 }
