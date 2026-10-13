@@ -1836,16 +1836,6 @@ async function deleteGrandMockExam(req, res) {
         return res.status(500).json({ success: false, message: 'Failed to delete question from exam.', error: error.message });
       }
     }
-    return res.status(200).json({
-      success: true,
-      message: 'Question deleted successfully.',
-      totalQuestions: exam.totalQuestions
-    });
-  } catch (error) {
-    console.error('Error deleting question from exam:', error);
-    return res.status(500).json({ success: false, message: 'Failed to delete question from exam.', error: error.message });
-  }
-}
 
 /**
  * GET /api/v1/admin/exams/:examId/results
@@ -2065,32 +2055,11 @@ async function getAdminExamResults(req, res) {
   }
 }
 
-    const deleteExam = deleteGrandMockExam;
-    const createExam = createGrandMockExam;
-    const saveGrandMock = createGrandMockExam;
-    const getExamById = getGrandMockById;
+const deleteExam = deleteGrandMockExam;
+const createExam = createGrandMockExam;
+const saveGrandMock = createGrandMockExam;
+const getExamById = getGrandMockById;
 
-    module.exports = {
-      extractMCQs,
-      createGrandMockExam,
-      createExam,
-      saveGrandMock,
-      getAllGrandMocks,
-      getAdminExamResults,
-      getGrandMockById,
-      getExamById,
-      updateGrandMockExam,
-      deleteGrandMockExam,
-      deleteExam,
-      addQuestionToExam,
-      updateQuestionInExam,
-      deleteQuestionFromExam,
-      validateAndSanitizeQuestion,
-      validateAndSanitizeQuestions,
-      normalizeTestType,
-      parseRawTextToMCQs,
-      parseMCQText: parseRawTextToMCQs // Exported for test verification
-    };
 module.exports = {
   extractMCQs,
   createGrandMockExam,

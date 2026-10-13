@@ -365,12 +365,6 @@ const findStudentForMedia = async (user) => {
 const escapeRegex = (str) => String(str).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
 const courseContainsMediaKey = (course, key) => {
-  if (!course) return false;
-  if (course.thumbnailMedia?.s3Key === key || getS3KeyFromUrl(course.thumbnailMedia?.url) === key) return true;
-  if (getS3KeyFromUrl(course.thumbnail) === key) return true;
-  if (getS3KeyFromUrl(course.bannerUrl) === key) return true;
-  if (getS3KeyFromUrl(course.courseBanner) === key) return true;
-const courseContainsS3Key = (course, key) => {
   if (!course || !key) return false;
   const targetKey = String(key).trim();
   const getProp = (obj, prop) => {
@@ -383,40 +377,40 @@ const courseContainsS3Key = (course, key) => {
     return obj[prop];
   };
 
-  const thumbKey = getProp(course.thumbnailMedia, 's3Key') || getProp(course.thumbnailMedia, 'key');
+  const thumbObj = getProp(course, 'thumbnailMedia') || course.thumbnailMedia;
+  const thumbKey = getProp(thumbObj, 's3Key') || getProp(thumbObj, 'key') || getS3KeyFromUrl(getProp(thumbObj, 'url'));
   if (thumbKey === targetKey) return true;
+  if (getS3KeyFromUrl(getProp(course, 'thumbnail')) === targetKey) return true;
+  if (getS3KeyFromUrl(getProp(course, 'bannerUrl')) === targetKey) return true;
+  if (getS3KeyFromUrl(getProp(course, 'courseBanner')) === targetKey) return true;
 
-  for (const moduleItem of course.modules || []) {
-    for (const lesson of moduleItem.lessons || []) {
-      if (lesson.videoS3Key === key || lesson.s3Key === key) return true;
-      if (getS3KeyFromUrl(lesson.videoUrl) === key) return true;
-      if (normalizeS3Reference(lesson.videoUrl)?.s3Key === key) return true;
-      if (getS3KeyFromUrl(lesson.fileUrl) === key) return true;
-      if (getS3KeyFromUrl(lesson.pdfUrl) === key) return true;
-      if (getS3KeyFromUrl(lesson.documentUrl) === key) return true;
-      if (getS3KeyFromUrl(lesson.url) === key) return true;
-      if (getS3KeyFromUrl(lesson.path) === key) return true;
-      const lessonVideoS3 = getProp(lesson, 'videoS3Key');
-      const lessonS3 = getProp(lesson, 's3Key');
+  const modules = getProp(course, 'modules') || course.modules || [];
+  for (const moduleItem of modules) {
+    const lessons = getProp(moduleItem, 'lessons') || moduleItem.lessons || [];
+    for (const lesson of lessons) {
+      if (getProp(lesson, 'videoS3Key') === targetKey || getProp(lesson, 's3Key') === targetKey) return true;
+      if (getS3KeyFromUrl(getProp(lesson, 'videoUrl')) === targetKey) return true;
+      if (normalizeS3Reference(getProp(lesson, 'videoUrl'))?.s3Key === targetKey) return true;
+      if (getS3KeyFromUrl(getProp(lesson, 'fileUrl')) === targetKey) return true;
+      if (getS3KeyFromUrl(getProp(lesson, 'pdfUrl')) === targetKey) return true;
+      if (getS3KeyFromUrl(getProp(lesson, 'documentUrl')) === targetKey) return true;
+      if (getS3KeyFromUrl(getProp(lesson, 'url')) === targetKey) return true;
+      if (getS3KeyFromUrl(getProp(lesson, 'path')) === targetKey) return true;
       const lessonVideoUrl = getProp(lesson, 'videoUrl');
-      if (lessonVideoS3 === targetKey || lessonS3 === targetKey) return true;
       if (typeof lessonVideoUrl === 'string' && lessonVideoUrl.includes(targetKey)) return true;
 
       for (const collection of ['videoParts', 'pdfNotes', 'assignments', 'attachments']) {
-        if ((lesson[collection] || []).some((item) => (
-          item.s3Key === key ||
-          getS3KeyFromUrl(item.url) === key ||
-          getS3KeyFromUrl(item.secure_url) === key ||
-          getS3KeyFromUrl(item.secureUrl) === key ||
-          getS3KeyFromUrl(item.fileUrl) === key ||
-          getS3KeyFromUrl(item.documentUrl) === key ||
-          getS3KeyFromUrl(item.path) === key
-        ))) return true;
         const list = getProp(lesson, collection) || lesson[collection] || [];
         for (const item of list) {
-          const itemKey = getProp(item, 's3Key') || getProp(item, 'key');
+          const itemKey = getProp(item, 's3Key') || getProp(item, 'key') ||
+            getS3KeyFromUrl(getProp(item, 'url')) ||
+            getS3KeyFromUrl(getProp(item, 'secure_url')) ||
+            getS3KeyFromUrl(getProp(item, 'secureUrl')) ||
+            getS3KeyFromUrl(getProp(item, 'fileUrl')) ||
+            getS3KeyFromUrl(getProp(item, 'documentUrl')) ||
+            getS3KeyFromUrl(getProp(item, 'path'));
           if (itemKey === targetKey) return true;
-          const itemUrl = getProp(item, 'url') || getProp(item, 'secure_url');
+          const itemUrl = getProp(item, 'url') || getProp(item, 'secure_url') || getProp(item, 'secureUrl');
           if (typeof itemUrl === 'string' && itemUrl.includes(targetKey)) return true;
         }
       }
@@ -424,6 +418,8 @@ const courseContainsS3Key = (course, key) => {
   }
   return false;
 };
+
+const courseContainsS3Key = courseContainsMediaKey;
 
 const getMediaAccessUrl = async (req, res) => {
   const courseId = req.query?.courseId || req.body?.courseId;
@@ -634,37 +630,6 @@ const getMediaAccessUrl = async (req, res) => {
     }
 
     // 3. User Authorization
-    const targetKey = String(key).trim();
-    const findCourseLean = async (query) => {
-      const q = Course.findOne(query);
-      if (q && typeof q.lean === 'function') {
-        return await q.lean();
-      }
-      return await q;
-    };
-
-    let course = null;
-    if (courseId) {
-      const cleanCourseId = String(courseId).trim();
-      const query = mongoose.Types.ObjectId.isValid(cleanCourseId)
-        ? { $or: [{ _id: cleanCourseId }, { courseId: cleanCourseId }] }
-        : { courseId: cleanCourseId };
-      course = await findCourseLean(query);
-    }
-    if (!course) {
-      course = await findCourseLean({ $or: [
-        { 'thumbnailMedia.s3Key': targetKey },
-        { 'thumbnailMedia.key': targetKey },
-        { 'modules.lessons.videoS3Key': targetKey },
-        { 'modules.lessons.s3Key': targetKey },
-        { 'modules.lessons.videoParts.s3Key': targetKey },
-        { 'modules.lessons.pdfNotes.s3Key': targetKey },
-        { 'modules.lessons.assignments.s3Key': targetKey },
-        { 'modules.lessons.attachments.s3Key': targetKey },
-      ] });
-    }
-    if (!course || !courseContainsS3Key(course, targetKey)) return fail(res, 404, 'S3 media was not found in this course.');
-
     const role = (req.user?.role || '').toLowerCase();
     const isStaff = ['admin', 'superadmin'].includes(role);
     if (!isStaff) {
@@ -711,4 +676,6 @@ module.exports = {
   initiateObjectUpload,
   completeObjectUpload,
   getMediaAccessUrl,
+  courseContainsMediaKey,
+  courseContainsS3Key,
 };

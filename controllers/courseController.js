@@ -473,22 +473,22 @@ const serializeLesson = async (lesson, req) => {
         : (item && item._doc ? { ...item._doc } : (typeof item === 'object' ? { ...item } : item));
       if (typeof plain === 'string') {
         const absUrl = toAbsoluteUrl(plain, req);
-      const resource = typeof item.toObject === 'function'
-        ? item.toObject({ virtuals: true })
-        : item;
+        return { title: 'Resource', url: absUrl, secure_url: absUrl, fileUrl: absUrl, documentUrl: absUrl, path: absUrl };
+      }
+      const resource = plain;
       const s3Reference = normalizeS3Reference(resource);
       const media = s3Reference
         ? canSignS3Media
           ? await signS3Reference(s3Reference, s3Reference.contentType)
           : stripS3ReferenceUrls(s3Reference)
         : resource;
-      const canonicalUrl = typeof media === 'string' ? media : (media.secure_url || media.url || media.fileUrl || media.documentUrl || media.path || '');
-      const absUrl = toAbsoluteUrl(canonicalUrl, req);
+      const canonicalUrl = typeof media === 'string'
+        ? media
+        : (media.secure_url || media.url || media.fileUrl || media.documentUrl || media.path || plain.secure_url || plain.url || plain.fileUrl || plain.documentUrl || plain.path || '');
+      const absUrl = canonicalUrl ? toAbsoluteUrl(canonicalUrl, req) : '';
       if (typeof media === 'string') {
         return { title: 'Resource', url: absUrl, secure_url: absUrl, fileUrl: absUrl, documentUrl: absUrl, path: absUrl };
       }
-      const canonicalUrl = plain.secure_url || plain.url || plain.fileUrl || plain.documentUrl || plain.path || '';
-      const absUrl = canonicalUrl ? toAbsoluteUrl(canonicalUrl, req) : '';
       const rawBytes = typeof resource.bytes === 'number' && resource.bytes > 0
         ? resource.bytes
         : (typeof resource.fileSize === 'number' && resource.fileSize > 0
@@ -765,7 +765,6 @@ exports.getCourses = async (req, res) => {
     }
 
     const { search, status, category } = query;
-    const { search, status, category } = req.query || {};
     const filter = {};
 
     if (status && status.trim() && status.toLowerCase() !== 'all') {
@@ -814,27 +813,12 @@ exports.getCourses = async (req, res) => {
       // Keep lightweight array-returning model mocks usable without changing the Mongoose production path.
       const allCourses = await courseQuery;
       total = allCourses.length;
-        courses = allCourses.slice(skip, skip + limit).map((course) => (
-          course && typeof course.toObject === 'function'
-            ? course.toObject({ virtuals: true })
-            : course
-        ));
+      courses = allCourses.slice(skip, skip + limit).map((course) => (
+        course && typeof course.toObject === 'function'
+          ? course.toObject({ virtuals: true })
+          : course
+      ));
     }
-    let findQuery = Course.find(filter);
-    if (typeof findQuery.select === 'function') {
-      findQuery = findQuery
-        .select('courseId courseTitle instructor price shortDescription duration status thumbnail thumbnailMedia bannerUrl courseBanner category modules._id createdAt updatedAt')
-        .sort({ createdAt: -1 })
-        .skip(skip)
-        .limit(limit)
-        .lean();
-    }
-
-    const [total, rawCourses] = await Promise.all([
-      typeof Course.countDocuments === 'function' ? Course.countDocuments(filter).catch(() => 0) : Promise.resolve(0),
-      Promise.resolve(findQuery),
-    ]);
-    const courses = Array.isArray(rawCourses) ? rawCourses : [];
 
     const serialized = await Promise.all(courses.map(async (rawCourse) => {
       const course = rawCourse && typeof rawCourse.toObject === 'function' ? rawCourse.toObject() : (rawCourse || {});
@@ -857,7 +841,6 @@ exports.getCourses = async (req, res) => {
         const rawBanner = extractRawUrl(course.courseBanner) || extractRawUrl(course.thumbnail) || extractRawUrl(course.bannerUrl) || extractRawUrl(course.banner) || extractRawUrl(course.thumbnailUrl) || extractRawUrl(course.image) || extractRawUrl(course.imageUrl);
         const cloudinaryUrl = toAbsoluteUrl(rawBanner, req);
         absoluteBanner = isMongooseQuery ? optimizeCloudinaryUrl(cloudinaryUrl) : cloudinaryUrl;
-        absoluteBanner = toAbsoluteUrl(rawBanner, req);
       }
       const totalModules = Array.isArray(course.modules) ? course.modules.length : 0;
       // The list endpoint needs a count, never the curriculum array itself.
@@ -1727,11 +1710,8 @@ exports.addLesson = async (req, res) => {
     // Filter out fake / placeholder Cloudinary URLs (such as hardcoded wrong cloud names like doxb5l5vf)
     finalVideoParts = finalVideoParts.filter((p) => {
       if (!p) return false;
-      const isS3 = p.storageProvider === 's3' || Boolean(p.s3Key);
-      if (!isS3 && !p.url) return false;
-      if (p.url && p.url.includes('doxb5l5vf')) {
-      if (!p) return false;
-      if (p.storageProvider === 's3' && isValidS3MediaKey(p.s3Key, 'videos')) return true;
+      if (p.storageProvider === 's3' && (isValidS3MediaKey(p.s3Key, 'videos') || Boolean(p.s3Key))) return true;
+      if (p.storageProvider === 's3' || Boolean(p.s3Key)) return true;
       if (!p.url) return false;
       if (p.url.includes('doxb5l5vf')) {
         console.warn(`[addLesson] Rejecting fake placeholder video URL with invalid cloud name doxb5l5vf: "${p.url}"`);
@@ -1752,14 +1732,11 @@ exports.addLesson = async (req, res) => {
         const ext = path.extname(f.originalname || f.filename || '').toLowerCase().replace('.', '');
         return m.startsWith('video/') || ALLOWED_VIDEO_FORMATS.includes(ext) || ((f.fieldname || '').toLowerCase().includes('video'));
       });
-      const hasS3Video = finalVideoParts.some((p) => p.storageProvider === 's3' || Boolean(p.s3Key)) || Boolean(req.body.videoS3Key || req.body.s3Key);
       const rawVideoProvided = (videoUrl || uploadFileOrLink || fileOrLink || lessonFile || '').trim();
-      const isFakeOrRawFilename = rawVideoProvided && (!rawVideoProvided.startsWith('http://') && !rawVideoProvided.startsWith('https://') && !rawVideoProvided.startsWith('/uploads/'));
-      if (isFakeOrRawFilename && !hasUploadedVideo && !hasS3Video) {
       const isS3KeyOrUrl = rawVideoProvided.startsWith('videos/') || rawVideoProvided.includes('.amazonaws.com/') || Boolean(getS3KeyFromUrl(rawVideoProvided));
-      const hasS3Part = finalVideoParts.some((p) => p.storageProvider === 's3' && p.s3Key);
+      const hasS3Video = finalVideoParts.some((p) => p.storageProvider === 's3' || Boolean(p.s3Key)) || Boolean(req.body.videoS3Key || req.body.s3Key);
       const isFakeOrRawFilename = rawVideoProvided && (!rawVideoProvided.startsWith('http://') && !rawVideoProvided.startsWith('https://') && !rawVideoProvided.startsWith('/uploads/') && !isS3KeyOrUrl);
-      if (isFakeOrRawFilename && !hasUploadedVideo && !hasS3Part) {
+      if (isFakeOrRawFilename && !hasUploadedVideo && !hasS3Video) {
         return res.status(400).json({
           success: false,
           message: `Invalid video URL or file "${rawVideoProvided}". Please upload a video file or provide a valid streaming URL.`,
@@ -2274,11 +2251,8 @@ exports.updateLesson = async (req, res) => {
     if (targetLesson.videoParts && targetLesson.videoParts.length > 0) {
       targetLesson.videoParts = targetLesson.videoParts.filter((p) => {
         if (!p) return false;
-        const isS3 = p.storageProvider === 's3' || Boolean(p.s3Key);
-        if (!isS3 && !p.url) return false;
-        if (p.url && p.url.includes('doxb5l5vf')) {
-        if (!p) return false;
-        if (p.storageProvider === 's3' && isValidS3MediaKey(p.s3Key, 'videos')) return true;
+        if (p.storageProvider === 's3' && (isValidS3MediaKey(p.s3Key, 'videos') || Boolean(p.s3Key))) return true;
+        if (p.storageProvider === 's3' || Boolean(p.s3Key)) return true;
         if (!p.url) return false;
         if (p.url.includes('doxb5l5vf')) {
           console.warn(`[updateLesson] Rejecting fake placeholder video URL with invalid cloud name doxb5l5vf: "${p.url}"`);
