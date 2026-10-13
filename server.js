@@ -193,7 +193,9 @@ app.use((req, res, next) => {
     url.includes('/recording') ||
     url.includes('/live-record') ||
     url.includes('/demo-video') ||
-    url.includes('/media');
+    url.includes('/media') ||
+    ((req.method === 'POST' || req.method === 'PUT' || req.method === 'PATCH') &&
+      (url.includes('/lessons') || url.includes('/courses')));
   const timeoutMs = isUploadRoute ? 300000 : 30000;
 
   res.setTimeout(timeoutMs, () => {

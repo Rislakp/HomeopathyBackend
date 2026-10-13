@@ -632,12 +632,16 @@ exports.uploadRecordingVideo = async (req, res) => {
     }
 
     const uploadedFile = req.file || (Array.isArray(req.files) ? req.files[0] : (req.uploadedFiles ? req.uploadedFiles[0] : null));
-    const directUrl = sanitizeVideoUrl(req.body.secure_url || req.body.videoUrl || req.body.url || req.body.recordedVideoUrl || req.body.recordingFileUrl || '');
+    const s3KeyFromBody = (req.body?.s3Key || req.body?.key || '').trim();
+    let directUrl = sanitizeVideoUrl(req.body?.secure_url || req.body?.videoUrl || req.body?.url || req.body?.recordedVideoUrl || req.body?.recordingFileUrl || '');
+    if (!directUrl && s3KeyFromBody) {
+      directUrl = s3Service.getS3Url(s3KeyFromBody);
+    }
 
     if (!uploadedFile && !directUrl) {
       return res.status(400).json({
         success: false,
-        message: 'A non-empty video file upload or video URL is required',
+        message: 'A non-empty video file upload, video URL, or s3Key is required',
       });
     }
 
@@ -673,13 +677,13 @@ exports.uploadRecordingVideo = async (req, res) => {
       }
     } else {
       secureUrl = directUrl;
-      const key = req.body.s3Key || req.body.key || s3Service.getS3KeyFromUrl(directUrl) || '';
+      const key = s3KeyFromBody || req.body?.s3Key || req.body?.key || s3Service.getS3KeyFromUrl(directUrl) || '';
       uploaded = {
         secure_url: directUrl,
         url: directUrl,
         s3Key: key,
         key: key,
-        storageProvider: req.body.storageProvider || (key ? 's3' : (directUrl.includes('cloudinary.com') ? 'cloudinary' : '')),
+        storageProvider: req.body?.storageProvider || (key ? 's3' : (directUrl.includes('cloudinary.com') ? 'cloudinary' : '')),
       };
     }
 

@@ -25,7 +25,9 @@ const MEDIA_URL_TTL_SECONDS = 900;
 const SINGLE_UPLOAD_URL_TTL_SECONDS = 900;
 const IMAGE_MAX_BYTES = 25 * 1024 * 1024;
 const PDF_MAX_BYTES = 250 * 1024 * 1024;
+const DOCUMENT_MAX_BYTES = 100 * 1024 * 1024;
 const VIDEO_MAX_BYTES = 2 * 1024 * 1024 * 1024 * 1024;
+
 const MEDIA_RULES = {
   image: {
     prefix: 'images',
@@ -44,6 +46,51 @@ const MEDIA_RULES = {
     extensions: { 'application/pdf': new Set(['pdf']) },
     types: new Set(['application/pdf']),
   },
+  document: {
+    prefix: 'documents',
+    maxBytes: DOCUMENT_MAX_BYTES,
+    extensions: {
+      'application/msword': new Set(['doc']),
+      'application/vnd.openxmlformats-officedocument.wordprocessingml.document': new Set(['docx']),
+      'application/vnd.ms-powerpoint': new Set(['ppt']),
+      'application/vnd.openxmlformats-officedocument.presentationml.presentation': new Set(['pptx']),
+      'application/vnd.ms-excel': new Set(['xls', 'csv']),
+      'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet': new Set(['xlsx']),
+      'text/plain': new Set(['txt', 'csv']),
+      'text/csv': new Set(['csv']),
+      'application/zip': new Set(['zip']),
+      'application/x-zip-compressed': new Set(['zip']),
+      'application/vnd.rar': new Set(['rar']),
+      'application/x-rar-compressed': new Set(['rar']),
+      'application/x-rar': new Set(['rar']),
+      'application/octet-stream': new Set(['doc', 'docx', 'ppt', 'pptx', 'xls', 'xlsx', 'txt', 'csv', 'zip', 'rar']),
+    },
+    types: new Set([
+      'application/msword',
+      'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+      'application/vnd.ms-powerpoint',
+      'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+      'application/vnd.ms-excel',
+      'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+      'text/plain',
+      'text/csv',
+      'application/zip',
+      'application/x-zip-compressed',
+      'application/vnd.rar',
+      'application/x-rar-compressed',
+      'application/x-rar',
+      'application/octet-stream',
+    ]),
+  },
+};
+
+const normalizeMediaType = (val) => {
+  if (typeof val !== 'string') return '';
+  const clean = val.toLowerCase().trim();
+  if (clean === 'image' || clean === 'images') return 'image';
+  if (clean === 'pdf' || clean === 'pdfs') return 'pdf';
+  if (['document', 'documents', 'doc', 'docx', 'ppt', 'pptx', 'xls', 'xlsx', 'txt', 'csv', 'zip', 'rar', 'attachment', 'attachments'].includes(clean)) return 'document';
+  return clean;
 };
 
 const log = (action, fields = {}) => console.info(`[S3 multipart] ${action}`, fields);
@@ -66,6 +113,10 @@ const makeReference = ({ key, fileName, contentType, fileSize, duration, uploadS
     ? Number(duration)
     : undefined;
 
+  const isVideo = contentType?.startsWith('video/');
+  const isPdf = contentType === 'application/pdf';
+  const isDoc = (key && (key.startsWith('documents/') || key.startsWith('attachments/'))) || (!isVideo && !isPdf && !contentType?.startsWith('image/'));
+
   return {
     title: fileName,
     url: '',
@@ -76,8 +127,8 @@ const makeReference = ({ key, fileName, contentType, fileSize, duration, uploadS
     path: '',
     storageProvider: 's3',
     s3Key: key,
-    resourceType: contentType?.startsWith('video/') ? 'video' : (contentType === 'application/pdf' ? 'pdf' : 'image'),
-    resource_type: contentType?.startsWith('video/') ? 'video' : (contentType === 'application/pdf' ? 'raw' : 'image'),
+    resourceType: isVideo ? 'video' : (isPdf ? 'pdf' : (isDoc ? 'document' : 'image')),
+    resource_type: isVideo ? 'video' : (isPdf ? 'raw' : (isDoc ? 'raw' : 'image')),
     fileName,
     originalFileName: fileName,
     contentType,
@@ -257,10 +308,11 @@ const abortMultipartUpload = async (req, res) => {
 };
 
 const initiateObjectUpload = async (req, res) => {
-  const { mediaType, contentType, fileSize } = req.body || {};
+  const { contentType, fileSize } = req.body || {};
+  const mediaType = normalizeMediaType(req.body?.mediaType);
   const rule = MEDIA_RULES[mediaType];
   const fileName = safeFileName(req.body?.fileName);
-  if (!rule) return fail(res, 400, 'mediaType must be image or pdf.');
+  if (!rule) return fail(res, 400, 'mediaType must be image, pdf, or document.');
   if (!fileName) return fail(res, 400, 'A valid fileName is required.');
   if (typeof contentType !== 'string' || !rule.types.has(contentType.toLowerCase())) {
     return fail(res, 400, `contentType is not supported for ${mediaType} uploads.`);
@@ -327,9 +379,10 @@ const initiateObjectUpload = async (req, res) => {
 };
 
 const completeObjectUpload = async (req, res) => {
-  const { mediaType, key, fileName, contentType, fileSize } = req.body || {};
+  const { key, fileName, contentType, fileSize } = req.body || {};
+  const mediaType = normalizeMediaType(req.body?.mediaType);
   const rule = MEDIA_RULES[mediaType];
-  if (!rule) return fail(res, 400, 'mediaType must be image or pdf.');
+  if (!rule) return fail(res, 400, 'mediaType must be image, pdf, or document.');
   if (!validStoredKey(key, rule.prefix)) return fail(res, 400, 'Invalid S3 object key.');
   const safeName = safeFileName(fileName);
   if (!safeName || typeof contentType !== 'string' || !rule.types.has(contentType.toLowerCase())) return fail(res, 400, 'Valid fileName and contentType are required.');
@@ -433,7 +486,7 @@ const getMediaAccessUrl = async (req, res) => {
   }
 
   const key = getS3KeyFromUrl(trimmedRawKey) || trimmedRawKey;
-  const prefix = ['videos/', 'images/', 'pdfs/', 'live_records/', 'grand_mock_questions/', 'reviews/', 'unani_ranks/'].find((item) => typeof key === 'string' && key.startsWith(item));
+  const prefix = ['videos/', 'images/', 'pdfs/', 'documents/', 'attachments/', 'live_records/', 'grand_mock_questions/', 'reviews/', 'unani_ranks/'].find((item) => typeof key === 'string' && key.startsWith(item));
   if (!prefix || !validStoredKey(key, prefix.slice(0, -1))) return fail(res, 400, 'Invalid S3 media key.');
 
   try {
