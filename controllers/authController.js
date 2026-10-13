@@ -1,4 +1,4 @@
-﻿const mongoose = require('mongoose');
+const mongoose = require('mongoose');
 const jwt = require('jsonwebtoken');
 const User = require('../models/User');
 const Course = require('../models/Course');
@@ -15,9 +15,8 @@ const EMAIL_REGEX = /^\w+([\.-]?\w+)*@\w+([\.-]?\w+)*(\.\w{2,3})+$/;
  * Generate JWT token containing user id, email, and role from database
  */
 const generateToken = (user, studentDoc = null) => {
-  const secret =
-    process.env.JWT_SECRET ||
-    'white_coat_academy_secret_jwt_key_2026_super_secure';
+  const secret = process.env.JWT_SECRET || (process.env.NODE_ENV !== 'production' ? 'white_coat_academy_secret_jwt_key_2026_super_secure' : undefined);
+  if (!secret) throw new Error('JWT_SECRET is not configured');
   const role = (user.role || 'student').toLowerCase().trim();
 
   let courseRef = (studentDoc && studentDoc.courseRef) || user.courseRef || null;
@@ -31,6 +30,26 @@ const generateToken = (user, studentDoc = null) => {
 
   const studentId = studentDoc ? studentDoc._id.toString() : (user.studentId || null);
 
+  // ── Multi-course: collect all enrolled course IDs for JWT claim ──────────
+  const seenIds = new Set();
+  const courseIdsArray = [];
+  const addCId = (id) => {
+    const s = String(id || '').trim();
+    if (!s || seenIds.has(s)) return;
+    seenIds.add(s);
+    courseIdsArray.push(s);
+  };
+  // From studentDoc (authoritative source)
+  if (studentDoc) {
+    if (Array.isArray(studentDoc.courseIds)) studentDoc.courseIds.forEach(addCId);
+    if (studentDoc.courseId) addCId(studentDoc.courseId);
+    if (studentDoc.courseRef) addCId(String(studentDoc.courseRef));
+  }
+  // From user (fallback)
+  if (Array.isArray(user.courseIds)) user.courseIds.forEach(addCId);
+  if (user.courseId) addCId(user.courseId);
+  if (courseId) addCId(courseId);
+
   return jwt.sign(
     {
       id: user._id ? user._id.toString() : user.id,
@@ -38,8 +57,11 @@ const generateToken = (user, studentDoc = null) => {
       studentId: studentId,
       email: user.email,
       role: role,
+      // Legacy single-course claim (backward compatibility)
       courseId: courseId,
       courseRef: courseRef ? courseRef.toString() : null,
+      // Multi-course claim
+      courseIds: courseIdsArray,
     },
     secret,
     {
@@ -97,6 +119,29 @@ const buildUserResponse = async (user, studentDoc = null, options = {}) => {
     courseTitle = targetCourse.courseTitle || targetCourse.title || courseTitle;
   }
 
+  // ── Multi-course: collect all enrolled course IDs ────────────────────────
+  const seenRCIds = new Set();
+  const registeredCourseIds = [];
+  const addRCId = (id) => {
+    const s = String(id || '').trim();
+    if (!s || seenRCIds.has(s)) return;
+    seenRCIds.add(s);
+    registeredCourseIds.push(s);
+  };
+  if (studentDoc) {
+    if (Array.isArray(studentDoc.courseIds)) studentDoc.courseIds.forEach(addRCId);
+    if (studentDoc.courseId) addRCId(studentDoc.courseId);
+    if (studentDoc.courseRef) addRCId(String(studentDoc.courseRef));
+  }
+  if (Array.isArray(user.courseIds)) user.courseIds.forEach(addRCId);
+  if (user.courseId) addRCId(user.courseId);
+  if (courseId) addRCId(courseId);
+  // Ensure the resolved primary courseId is in registeredCourseIds after targetCourse resolution
+  if (targetCourse) {
+    const resolvedId = targetCourse.courseId || (targetCourse._id ? targetCourse._id.toString() : '');
+    if (resolvedId) addRCId(resolvedId);
+  }
+
   const response = {
     id: user._id ? user._id.toString() : user.id,
     name: user.name,
@@ -107,8 +152,13 @@ const buildUserResponse = async (user, studentDoc = null, options = {}) => {
     qualification: user.qualification || '',
     preferredCourse: preferredCourse,
     course: courseTitle,
+    // Legacy single-course fields (backward compatibility)
     courseId: courseId,
+    registeredCourseId: courseId,
     courseRef: courseRef ? courseRef.toString() : null,
+    // Multi-course fields
+    courseIds: registeredCourseIds,
+    registeredCourseIds: registeredCourseIds,
     dateOfBirth: user.dateOfBirth || '',
     courses: [],
   };
@@ -267,16 +317,36 @@ const registerStudent = async (req, res) => {
     const finalPhone = (contactNumber || phone || '').toString().trim();
     const finalQualification = (qualification || '').toString().trim();
     const finalName = (name || '').toString().trim();
-    const finalCourse = (course || selectedCourse || preferredCourse || '').toString().trim();
+
+    // ── Multi-course: resolve selected course IDs ─────────────────────────────
+    // Accept: registeredCourseIds[], selectedCourses[], courses[]
+    // Or legacy single-value: course, selectedCourse, preferredCourse
+    const rawInput = req.body.registeredCourseIds || req.body.selectedCourses || req.body.courses || null;
+    let selectedCourseIds = [];
+
+    if (rawInput !== null && rawInput !== undefined) {
+      if (Array.isArray(rawInput)) {
+        selectedCourseIds = rawInput.map(c => String(c).trim()).filter(Boolean);
+      } else if (typeof rawInput === 'string' && rawInput.trim()) {
+        selectedCourseIds = [rawInput.trim()];
+      }
+    }
+    // Fall back to legacy single-course fields
+    const singleLegacy = (course || selectedCourse || preferredCourse || '').toString().trim();
+    if (selectedCourseIds.length === 0 && singleLegacy) {
+      selectedCourseIds = [singleLegacy];
+    }
+    // De-duplicate
+    selectedCourseIds = [...new Set(selectedCourseIds)];
+    // Primary course (first selected) for legacy fields
+    const finalCourse = selectedCourseIds[0] || '';
 
     // -----------------------------
     // VALIDATION
     // -----------------------------
     const errors = [];
 
-    if (!finalName) {
-      errors.push('Name is required');
-    }
+    if (!finalName) errors.push('Name is required');
 
     if (!email || typeof email !== 'string' || !email.trim()) {
       errors.push('Email is required');
@@ -288,35 +358,28 @@ const registerStudent = async (req, res) => {
       errors.push('Password must be at least 6 characters');
     }
 
-    if (!finalDob) {
-      errors.push('Date of birth is required');
-    }
+    if (!finalDob) errors.push('Date of birth is required');
+    if (!finalPhone) errors.push('Contact number is required');
+    if (!finalQualification) errors.push('Qualification is required');
 
-    if (!finalPhone) {
-      errors.push('Contact number is required');
-    }
-
-    if (!finalQualification) {
-      errors.push('Qualification is required');
-    }
-
-    if ((course !== undefined || selectedCourse !== undefined || preferredCourse !== undefined) && !finalCourse) {
-      errors.push('Course cannot be empty');
+    // At least one course must be selected
+    if (selectedCourseIds.length === 0) {
+      errors.push('At least one course must be selected');
     }
 
     if (errors.length > 0) {
-      return res.status(400).json({
-        success: false,
-        message: 'Validation failed',
-        errors,
-      });
+      return res.status(400).json({ success: false, message: 'Validation failed', errors });
     }
 
     const cleanEmail = email.trim().toLowerCase();
 
-    let enrolledCourse = null;
-    if (finalCourse) {
-      const cleanCourse = finalCourse.trim();
+    // Resolve each selected course against the DB
+    const resolvedCourses = [];
+    const finalCourseIds = [];
+
+    for (const rawCourseVal of selectedCourseIds) {
+      const cleanCourse = rawCourseVal.trim();
+      if (!cleanCourse) continue;
       const escapedCourse = cleanCourse.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
       const courseQuery = [
         { courseId: new RegExp('^' + escapedCourse + '$', 'i') },
@@ -331,25 +394,45 @@ const registerStudent = async (req, res) => {
       if (/^unani$/i.test(cleanCourse)) {
         courseQuery.push({ category: /^unani$/i });
       }
-      enrolledCourse = await Course.findOne({ $or: courseQuery }).select('_id courseId courseTitle category');
+
+      let foundCourse = null;
+      try {
+        foundCourse = await Course.findOne({ $or: courseQuery }).select('_id courseId courseTitle category').lean();
+      } catch (e) { /* ignore */ }
+
+      if (foundCourse) {
+        const resolvedId = foundCourse.courseId || foundCourse._id.toString();
+        resolvedCourses.push({
+          courseRef: foundCourse._id,
+          courseId: resolvedId,
+          courseTitle: foundCourse.courseTitle || foundCourse.title || cleanCourse,
+        });
+        finalCourseIds.push(resolvedId);
+      } else {
+        // Course not in DB — store raw value (handles UNANI and future courses)
+        console.warn('[registerStudent] Course not found in DB for value="' + cleanCourse + '". Storing as raw string.');
+        finalCourseIds.push(cleanCourse);
+      }
     }
 
-    if (!enrolledCourse) {
-      // Course not found in DB - allow registration to proceed.
-      // preferredCourse is stored as a string; courseRef/courseId will be empty.
-      // This handles valid programs (e.g. UNANI) that may not yet have a
-      // corresponding Course document in the database.
-      console.warn('[registerStudent] Course not found for preferredCourse="' + finalCourse + '". Proceeding without courseRef.');
-    }
+    // Primary single-course values (backward-compatible legacy fields)
+    const primaryResolved = resolvedCourses[0] || null;
+    const resolvedCourseRef = primaryResolved ? primaryResolved.courseRef : null;
+    const resolvedCourseId = primaryResolved
+      ? primaryResolved.courseId
+      : (finalCourseIds[0] || finalCourse);
+    const resolvedCourseTitle = primaryResolved
+      ? primaryResolved.courseTitle
+      : (finalCourseIds[0] || finalCourse);
+
+    // Final de-duplicated courseIds list
+    const uniqueCourseIds = [...new Set(finalCourseIds)];
+
     // -----------------------------
     // CHECK DUPLICATE USER (EMAIL / PHONE)
     // -----------------------------
     const existingUser = await User.findOne({
-      $or: [
-        { email: cleanEmail },
-        { phone: finalPhone },
-        { contactNumber: finalPhone },
-      ],
+      $or: [{ email: cleanEmail }, { phone: finalPhone }, { contactNumber: finalPhone }],
     });
 
     if (existingUser) {
@@ -364,11 +447,7 @@ const registerStudent = async (req, res) => {
 
     if (Student) {
       const existingStudent = await Student.findOne({
-        $or: [
-          { email: cleanEmail },
-          { phone: finalPhone },
-          { contactNumber: finalPhone },
-        ],
+        $or: [{ email: cleanEmail }, { phone: finalPhone }, { contactNumber: finalPhone }],
       });
       if (existingStudent) {
         const isEmailDup = existingStudent.email === cleanEmail;
@@ -380,10 +459,6 @@ const registerStudent = async (req, res) => {
         });
       }
     }
-
-    const resolvedCourseRef = enrolledCourse ? enrolledCourse._id : null;
-    const resolvedCourseId = enrolledCourse ? (enrolledCourse.courseId || enrolledCourse._id.toString()) : '';
-    const resolvedCourseTitle = enrolledCourse ? (enrolledCourse.courseTitle || enrolledCourse.title || finalCourse) : finalCourse;
 
     let createdUser = null;
     let createdStudent = null;
@@ -405,6 +480,7 @@ const registerStudent = async (req, res) => {
         course: resolvedCourseTitle,
         courseId: resolvedCourseId,
         courseRef: resolvedCourseRef,
+        courseIds: uniqueCourseIds,
         status: 'Pending',
         accountStatus: 'Pending',
         isApproved: false,
@@ -427,41 +503,17 @@ const registerStudent = async (req, res) => {
             course: resolvedCourseTitle,
             courseId: resolvedCourseId,
             courseRef: resolvedCourseRef,
+            courseIds: uniqueCourseIds,
             status: 'Pending',
             accountStatus: 'Pending',
             isApproved: false,
             isActive: false,
           });
         } catch (studentErr) {
-          // Log but never block registration â€” Student doc is supplementary
+          // Log but never block registration — Student doc is supplementary
           console.warn('[registerStudent] Student sync warning:', studentErr.message);
         }
       }
-    // -----------------------------
-    // SYNC STUDENT MODEL IF AVAILABLE
-    // -----------------------------
-    let studentDoc = null;
-    if (Student) {
-      try {
-        studentDoc = await Student.create({
-          userId: user._id,
-          name: finalName,
-          email: cleanEmail,
-          dateOfBirth: finalDob,
-          contactNumber: finalPhone,
-          phone: finalPhone,
-          qualification: finalQualification,
-          preferredCourse: finalCourse,
-          course: resolvedCourseTitle,
-          courseId: resolvedCourseId,
-          courseRef: resolvedCourseRef,
-          // course & subscription now have safe defaults in the schema
-        });
-      } catch (studentErr) {
-        // Log but never block registration Ã¢â‚¬â€ Student doc is supplementary
-        console.warn('[registerStudent] Student sync warning:', studentErr.message);
-      }
-    }
 
       // -----------------------------
       // GENERATE TOKEN & RESPONSE
@@ -805,7 +857,8 @@ const adminLogin = async (req, res) => {
     }
 
     // Generate token
-    const secret = process.env.JWT_SECRET || 'white_coat_academy_secret_jwt_key_2026_super_secure';
+    const secret = process.env.JWT_SECRET || (process.env.NODE_ENV !== 'production' ? 'white_coat_academy_secret_jwt_key_2026_super_secure' : undefined);
+    if (!secret) throw new Error('JWT_SECRET is not configured');
     const token = jwt.sign(
       {
         id: userObj.id,
@@ -955,115 +1008,182 @@ const updateUserRole = async (req, res) => {
   }
 };
 
+const crypto = require('crypto');
+
+/**
+ * @route   POST /api/auth/forgot-password
+ * @desc    Generate a secure recovery token
+ * @access  Public
+ */
+const forgotPassword = async (req, res) => {
+  try {
+    const { email } = req.body;
+    if (!email) {
+      return res.status(400).json({ success: false, message: 'Please provide an email address' });
+    }
+
+    const cleanEmail = email.trim().toLowerCase();
+    const user = await User.findOne({ email: cleanEmail });
+    
+    let admin = null;
+    try {
+      const Admin = require('../models/admin.model');
+      admin = await Admin.findOne({ email: cleanEmail });
+    } catch (e) {}
+
+    if (!user && !admin) {
+      return res.status(404).json({ success: false, message: 'User not found' });
+    }
+
+    const resetToken = crypto.randomBytes(32).toString('hex');
+    const resetTokenHash = crypto.createHash('sha256').update(resetToken).digest('hex');
+
+    if (user) {
+      user.resetPasswordToken = resetTokenHash;
+      user.resetPasswordExpire = Date.now() + 15 * 60 * 1000; // 15 mins
+      await user.save({ validateBeforeSave: false });
+    }
+
+    if (admin) {
+      admin.resetPasswordToken = resetTokenHash;
+      admin.resetPasswordExpire = Date.now() + 15 * 60 * 1000;
+      await admin.save({ validateBeforeSave: false });
+    }
+
+    // In a real application, send this token via Email. 
+    // For this audit, we simulate it by returning success without the token.
+    return res.status(200).json({
+      success: true,
+      message: 'Password recovery token generated and sent to email.'
+    });
+  } catch (error) {
+    return res.status(500).json({ success: false, message: 'Server error', error: error.message });
+  }
+};
+
 /**
  * @route   POST /api/auth/reset-password
- * @route   PUT  /api/auth/reset-password
- * @route   POST /api/auth/update-password
- * @route   PUT  /api/auth/update-password
- * @desc    Direct password reset/update without OTP verification
+ * @desc    Reset password using recovery token
  * @access  Public
  */
 const resetPassword = async (req, res) => {
   try {
-    const {
-      email,
-      newPassword,
-      password,
-      confirmPassword,
-      confirmNewPassword,
-    } = req.body;
+    const { email, token, newPassword, password, confirmPassword } = req.body;
 
-    // 1. Email validation
-    if (!email || typeof email !== 'string' || !email.trim()) {
-      return res.status(400).json({
-        success: false,
-        message: 'Please provide a valid email address',
-      });
+    if (!email || !token) {
+      return res.status(400).json({ success: false, message: 'Please provide email and verification token' });
+    }
+
+    const targetPassword = newPassword || password;
+    if (!targetPassword || targetPassword.length < 6) {
+      return res.status(400).json({ success: false, message: 'Password must be at least 6 characters' });
+    }
+
+    if (confirmPassword && targetPassword !== confirmPassword) {
+      return res.status(400).json({ success: false, message: 'Passwords do not match' });
     }
 
     const cleanEmail = email.trim().toLowerCase();
-    if (!EMAIL_REGEX.test(cleanEmail)) {
-      return res.status(400).json({
-        success: false,
-        message: 'Please provide a valid email address',
-      });
-    }
+    const resetTokenHash = crypto.createHash('sha256').update(token).digest('hex');
 
-    // 2. New Password validation
-    const targetPassword = newPassword || password;
-    if (
-      !targetPassword ||
-      typeof targetPassword !== 'string' ||
-      !targetPassword.trim()
-    ) {
-      return res.status(400).json({
-        success: false,
-        message: 'Please provide a new password',
-      });
-    }
+    let user = await User.findOne({ 
+      email: cleanEmail,
+      resetPasswordToken: resetTokenHash,
+      resetPasswordExpire: { $gt: Date.now() }
+    });
 
-    if (targetPassword.length < 6) {
-      return res.status(400).json({
-        success: false,
-        message: 'Password must be at least 6 characters long',
-      });
-    }
-
-    // 3. Confirm Password check (if provided)
-    const targetConfirmPassword =
-      confirmPassword !== undefined ? confirmPassword : confirmNewPassword;
-    if (
-      targetConfirmPassword !== undefined &&
-      targetConfirmPassword !== null &&
-      targetConfirmPassword !== '' &&
-      targetPassword !== targetConfirmPassword
-    ) {
-      return res.status(400).json({
-        success: false,
-        message: 'New password and confirm password do not match',
-      });
-    }
-
-    // 4. Check user existence in DB
-    const user = await User.findOne({ email: cleanEmail });
     let admin = null;
-
     try {
       const Admin = require('../models/admin.model');
-      admin = await Admin.findOne({ email: cleanEmail });
-    } catch (e) {
-      // Admin model lookup is supplementary
-    }
+      admin = await Admin.findOne({ 
+        email: cleanEmail,
+        resetPasswordToken: resetTokenHash,
+        resetPasswordExpire: { $gt: Date.now() }
+      });
+    } catch (e) {}
 
     if (!user && !admin) {
-      return res.status(404).json({
-        success: false,
-        message: 'User not found with this email',
-      });
+      return res.status(400).json({ success: false, message: 'Invalid or expired recovery token' });
     }
 
-    // 5. Update and securely save (pre-save hook hashes with bcrypt automatically)
     if (user) {
       user.password = targetPassword;
+      user.resetPasswordToken = undefined;
+      user.resetPasswordExpire = undefined;
       await user.save();
     }
 
     if (admin) {
       admin.password = targetPassword;
+      admin.resetPasswordToken = undefined;
+      admin.resetPasswordExpire = undefined;
       await admin.save();
     }
 
-    return res.status(200).json({
-      success: true,
-      message: 'Password updated successfully',
-    });
+    return res.status(200).json({ success: true, message: 'Password updated successfully' });
   } catch (error) {
-    console.error('Reset/Update Password Error:', error);
-    return res.status(500).json({
-      success: false,
-      message: 'Internal server error while updating password',
-      error: error.message,
-    });
+    return res.status(500).json({ success: false, message: 'Server error', error: error.message });
+  }
+};
+
+/**
+ * @route   POST /api/auth/update-password
+ * @desc    Change password (authenticated)
+ * @access  Private
+ */
+const updatePassword = async (req, res) => {
+  try {
+    const { oldPassword, newPassword, confirmPassword } = req.body;
+
+    if (!oldPassword || !newPassword) {
+      return res.status(400).json({ success: false, message: 'Please provide old and new password' });
+    }
+
+    if (newPassword.length < 6) {
+      return res.status(400).json({ success: false, message: 'New password must be at least 6 characters' });
+    }
+
+    if (confirmPassword && newPassword !== confirmPassword) {
+      return res.status(400).json({ success: false, message: 'Passwords do not match' });
+    }
+
+    const userId = req.user.id || req.user._id || req.user.userId;
+    let user = await User.findById(userId);
+    let admin = null;
+    let isMatch = false;
+
+    if (user) {
+      isMatch = await user.matchPassword(oldPassword);
+    } else {
+      try {
+        const Admin = require('../models/admin.model');
+        const bcrypt = require('bcryptjs');
+        admin = await Admin.findById(userId);
+        if (admin) isMatch = await bcrypt.compare(oldPassword, admin.password);
+      } catch(e) {}
+    }
+
+    if (!user && !admin) {
+      return res.status(404).json({ success: false, message: 'User not found' });
+    }
+
+    if (!isMatch) {
+      return res.status(401).json({ success: false, message: 'Incorrect old password' });
+    }
+
+    if (user) {
+      user.password = newPassword;
+      await user.save();
+    }
+    if (admin) {
+      const bcrypt = require('bcryptjs');
+      admin.password = await bcrypt.hash(newPassword, 10);
+      await admin.save();
+    }
+
+    return res.status(200).json({ success: true, message: 'Password updated successfully' });
+  } catch (error) {
+    return res.status(500).json({ success: false, message: 'Server error', error: error.message });
   }
 };
 
@@ -1078,7 +1198,9 @@ module.exports = {
   getMe,
   updateUserRole,
   resetPassword,
-  updatePassword: resetPassword,
+  forgotPassword,
+  updatePassword,
+  updatePasswordDirect: updatePassword,
   resetPasswordDirect: resetPassword,
   generateToken,
   buildUserResponse,

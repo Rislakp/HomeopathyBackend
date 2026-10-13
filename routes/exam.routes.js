@@ -5,6 +5,7 @@ const {
   extractMCQs,
   createGrandMockExam,
   getAllGrandMocks,
+  getAdminExamResults,
   getGrandMockById,
   updateGrandMockExam,
   deleteGrandMockExam,
@@ -62,6 +63,10 @@ router.get('/api/v1/exams/grand-mock', requireAuthUser, getAllGrandMocks);
 router.get('/api/v1/exams', requireAuthUser, getAllGrandMocks);
 router.get('/api/v1/admin/exams', requireAuthUser, getAllGrandMocks);
 
+// Admin exam-level results. Kept separate from student-by-ID result history.
+router.get('/api/admin/exams/:examId/results', requireAdmin, getAdminExamResults);
+router.get('/api/v1/admin/exams/:examId/results', requireAdmin, getAdminExamResults);
+
 // Endpoint to get single Grand Mock exam details
 router.get('/api/exams/grand-mock/:id', requireAuthUser, getGrandMockById);
 router.get('/api/exams/:id', requireAuthUser, getGrandMockById);
@@ -79,8 +84,8 @@ router.get('/api/v1/exams/:id/results', requireAdmin, getAdminExamResults);
 router.get('/api/exams/:id/results', requireAdmin, getAdminExamResults);
 
 // Admin Route: Update Grand Mock Exam
-router.put('/api/exams/grand-mock/:id', updateGrandMockExam);
-router.put('/api/exams/:id', updateGrandMockExam);
+router.put('/api/exams/grand-mock/:id', requireAdmin, updateGrandMockExam);
+router.put('/api/exams/:id', requireAdmin, updateGrandMockExam);
 
 // Admin Routes: Granular Question operations
 router.post('/api/exams/:id/questions', requireAdmin, addQuestionToExam);
@@ -99,8 +104,8 @@ router.get('/api/exams/grand-mock/:id/answer-key/download', requireAuthUser, dow
 router.post('/api/exams/grand-mock/:id/answer-key/download', requireAuthUser, downloadAnswerKey);
 
 // Route to delete exam by ID
-router.delete('/api/exams/grand-mock/:id', deleteGrandMockExam);
-router.delete('/api/exams/:id', deleteExam);
+router.delete('/api/exams/grand-mock/:id', requireAdmin, deleteGrandMockExam);
+router.delete('/api/exams/:id', requireAdmin, deleteExam);
 
 module.exports = router;
 

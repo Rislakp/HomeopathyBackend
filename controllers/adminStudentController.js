@@ -142,16 +142,32 @@ async function getAdminStudents(req, res) {
       });
       const uniqueCourseValues = [...new Set(courseValues)];
 
+      // A student can have a legacy primary course plus multiple enrolled
+      // course IDs. Match against every representation so an admin can filter
+      // by any assigned course without changing the legacy behavior.
+      const courseMatchConditions = [
+        { course: { $in: uniqueCourseValues } },
+        { courseId: { $in: uniqueCourseValues } },
+        { courseIds: { $in: uniqueCourseValues } },
+      ];
+
+      const matchingCourseObjectIds = matchingCourses
+        .map((matchedCourse) => matchedCourse._id)
+        .filter(Boolean);
+      if (matchingCourseObjectIds.length > 0) {
+        courseMatchConditions.push({ courseRef: { $in: matchingCourseObjectIds } });
+      }
+
       if (matchConditions.$or) {
         matchConditions.$and = [
           { $or: matchConditions.$or },
           {
-            $or: uniqueCourseValues.map((value) => ({ course: value }))
+            $or: courseMatchConditions,
           }
         ];
         delete matchConditions.$or;
       } else {
-        matchConditions.course = { $in: uniqueCourseValues };
+        matchConditions.$or = courseMatchConditions;
       }
     }
 
@@ -159,7 +175,7 @@ async function getAdminStudents(req, res) {
     const [total, rawStudents] = await Promise.all([
       Student.countDocuments(matchConditions),
       Student.find(matchConditions)
-        .select('_id userId name email phone contactNumber dateOfBirth qualification profileImage avatar course courseRef courseId status accountStatus isApproved subscription joinedDate createdAt updatedAt')
+        .select('_id userId name email phone contactNumber dateOfBirth qualification profileImage avatar course courseRef courseId courseIds status accountStatus isApproved subscription joinedDate createdAt updatedAt')
         .sort({ createdAt: -1 })
         .skip(skip)
         .limit(limit)
@@ -198,6 +214,16 @@ async function getAdminStudents(req, res) {
       }
       if (s.courseId) {
         courseIdsToFetch.add(s.courseId.toString().trim());
+      }
+      if (Array.isArray(s.courseIds)) {
+        s.courseIds.forEach((courseId) => {
+          const normalizedCourseId = String(courseId || '').trim();
+          if (!normalizedCourseId) return;
+          courseIdsToFetch.add(normalizedCourseId);
+          if (mongoose.Types.ObjectId.isValid(normalizedCourseId)) {
+            courseRefsToFetch.add(normalizedCourseId);
+          }
+        });
       }
       if (s.course) {
         courseTitlesToFetch.add(s.course.toString().trim());
@@ -294,6 +320,43 @@ async function getAdminStudents(req, res) {
       const cTitle = s.course ? s.course.toString().toLowerCase().trim() : '';
       const courseObj = courseMap.get(cRef) || courseMap.get(cId) || courseMap.get(cTitle) || null;
 
+      const formatCourse = (resolvedCourse) => ({
+        id: resolvedCourse.courseId || (resolvedCourse._id ? resolvedCourse._id.toString() : ''),
+        title: resolvedCourse.courseTitle || '',
+        category: resolvedCourse.category || 'General',
+        price: resolvedCourse.price || 0,
+      });
+
+      // `courseIds` is the canonical multi-course field. Append the legacy
+      // primary course values only when they are not already represented, so
+      // old single-course records still receive a one-item array.
+      const enrolledCourseIdentifiers = [];
+      const addCourseIdentifier = (value) => {
+        const normalizedValue = String(value || '').trim();
+        if (!normalizedValue || enrolledCourseIdentifiers.includes(normalizedValue)) return;
+        enrolledCourseIdentifiers.push(normalizedValue);
+      };
+
+      if (Array.isArray(s.courseIds)) s.courseIds.forEach(addCourseIdentifier);
+      addCourseIdentifier(s.courseId);
+      addCourseIdentifier(cRef);
+      addCourseIdentifier(s.course);
+
+      const enrolledCourseKeys = new Set();
+      const enrolledCourses = enrolledCourseIdentifiers.reduce((courses, identifier) => {
+        const resolvedCourse =
+          courseMap.get(identifier) ||
+          courseMap.get(identifier.toLowerCase()) ||
+          null;
+        if (!resolvedCourse) return courses; // Deleted/invalid course references are safe to ignore.
+
+        const courseKey = resolvedCourse.courseId || resolvedCourse._id.toString();
+        if (enrolledCourseKeys.has(courseKey)) return courses;
+        enrolledCourseKeys.add(courseKey);
+        courses.push(formatCourse(resolvedCourse));
+        return courses;
+      }, []);
+
       const statObj = statsMap.get(s._id.toString()) || null;
 
       const profileImage =
@@ -320,6 +383,7 @@ async function getAdminStudents(req, res) {
           category: courseObj?.category || 'General',
           price: courseObj?.price || 0,
         },
+        enrolled_courses: enrolledCourses,
         subscription: {
           status: s.status || 'Active',
           type: s.subscription || 'Free',
@@ -976,9 +1040,26 @@ async function getAdminStudentById(req, res) {
       });
     }
 
+    // The aggregation preserves the established primary enrolled_course field.
+    // Fetch the enrollment source once so the edit screen also receives every
+    // assigned course and the canonical stored courseIds array.
+    const enrollmentSource = await Student.findOne({
+      $or: [
+        { _id: studentObjectId },
+        { userId: studentObjectId },
+      ],
+    })
+      .select('course courseId courseIds courseRef')
+      .lean();
+    const studentDetails = result[0];
+    studentDetails.courseIds = Array.isArray(enrollmentSource?.courseIds)
+      ? enrollmentSource.courseIds.map((courseId) => String(courseId).trim()).filter(Boolean)
+      : [];
+    studentDetails.enrolled_courses = await getEnrolledCourseDetails(enrollmentSource);
+
     return res.status(200).json({
       success: true,
-      data: result[0]
+      data: studentDetails
     });
   } catch (error) {
     console.error('Error fetching student by ID:', error);
@@ -1237,6 +1318,130 @@ async function resolveCourseAssignment(courseId, course) {
     : { course: rawCourse };
 }
 
+/**
+ * Resolve a submitted multi-course assignment in one database query.
+ * The public courseId is persisted in Student.courseIds, while accepting the
+ * same identifier forms as the legacy single-course assignment.
+ */
+async function resolveCourseAssignments(courseIds) {
+  if (!Array.isArray(courseIds)) {
+    const error = new Error('courseIds must be an array');
+    error.statusCode = 400;
+    throw error;
+  }
+
+  const requestedIds = [];
+  const requestedIdSet = new Set();
+  courseIds.forEach((value) => {
+    const normalizedValue = String(value || '').trim();
+    if (!normalizedValue || requestedIdSet.has(normalizedValue)) return;
+    requestedIdSet.add(normalizedValue);
+    requestedIds.push(normalizedValue);
+  });
+
+  if (requestedIds.length === 0) return [];
+
+  const objectIds = requestedIds
+    .filter((value) => mongoose.Types.ObjectId.isValid(value))
+    .map((value) => new mongoose.Types.ObjectId(value));
+
+  const matchedCourses = await Course.find({
+    $or: [
+      { courseId: { $in: requestedIds } },
+      { courseTitle: { $in: requestedIds } },
+      ...(objectIds.length > 0 ? [{ _id: { $in: objectIds } }] : []),
+    ],
+  })
+    .select('_id courseId courseTitle category price')
+    .lean();
+
+  const courseMap = new Map();
+  matchedCourses.forEach((matchedCourse) => {
+    if (matchedCourse._id) courseMap.set(matchedCourse._id.toString(), matchedCourse);
+    if (matchedCourse.courseId) courseMap.set(String(matchedCourse.courseId).trim(), matchedCourse);
+    if (matchedCourse.courseTitle) {
+      courseMap.set(String(matchedCourse.courseTitle).trim(), matchedCourse);
+      courseMap.set(String(matchedCourse.courseTitle).trim().toLowerCase(), matchedCourse);
+    }
+  });
+
+  const resolvedCourses = requestedIds.map((requestedId) => {
+    const matchedCourse = courseMap.get(requestedId) || courseMap.get(requestedId.toLowerCase());
+    if (!matchedCourse) {
+      const error = new Error(`Assigned course not found in database: ${requestedId}`);
+      error.statusCode = 404;
+      throw error;
+    }
+    return matchedCourse;
+  });
+
+  return resolvedCourses;
+}
+
+/**
+ * Resolve every current student enrollment for the detail response without
+ * changing its established singular enrolled_course contract.
+ */
+async function getEnrolledCourseDetails(student) {
+  if (!student) return [];
+
+  const identifiers = [];
+  const seenIdentifiers = new Set();
+  const addIdentifier = (value) => {
+    const normalizedValue = String(value || '').trim();
+    if (!normalizedValue || seenIdentifiers.has(normalizedValue)) return;
+    seenIdentifiers.add(normalizedValue);
+    identifiers.push(normalizedValue);
+  };
+
+  if (Array.isArray(student.courseIds)) student.courseIds.forEach(addIdentifier);
+  addIdentifier(student.courseId);
+  addIdentifier(student.courseRef);
+  addIdentifier(student.course);
+
+  if (identifiers.length === 0) return [];
+
+  const objectIds = identifiers
+    .filter((value) => mongoose.Types.ObjectId.isValid(value))
+    .map((value) => new mongoose.Types.ObjectId(value));
+  const courses = await Course.find({
+    $or: [
+      { courseId: { $in: identifiers } },
+      { courseTitle: { $in: identifiers } },
+      ...(objectIds.length > 0 ? [{ _id: { $in: objectIds } }] : []),
+    ],
+  })
+    .select('_id courseId courseTitle category price')
+    .lean();
+
+  const courseMap = new Map();
+  courses.forEach((courseDoc) => {
+    if (courseDoc._id) courseMap.set(courseDoc._id.toString(), courseDoc);
+    if (courseDoc.courseId) courseMap.set(String(courseDoc.courseId).trim(), courseDoc);
+    if (courseDoc.courseTitle) {
+      courseMap.set(String(courseDoc.courseTitle).trim(), courseDoc);
+      courseMap.set(String(courseDoc.courseTitle).trim().toLowerCase(), courseDoc);
+    }
+  });
+
+  const resolvedCourseKeys = new Set();
+  return identifiers.reduce((enrolledCourses, identifier) => {
+    const courseDoc = courseMap.get(identifier) || courseMap.get(identifier.toLowerCase());
+    if (!courseDoc) return enrolledCourses;
+
+    const courseKey = courseDoc.courseId || courseDoc._id.toString();
+    if (resolvedCourseKeys.has(courseKey)) return enrolledCourses;
+    resolvedCourseKeys.add(courseKey);
+    enrolledCourses.push({
+      id: courseDoc.courseId || courseDoc._id.toString(),
+      title: courseDoc.courseTitle || '',
+      category: courseDoc.category || 'General',
+      price: courseDoc.price || 0,
+    });
+    return enrolledCourses;
+  }, []);
+}
+
 async function updateAdminStudent(req, res) {
   try {
     const { id } = req.params;
@@ -1278,7 +1483,24 @@ async function updateAdminStudent(req, res) {
       updateFields.qualification = String(req.body.qualification).trim();
     }
 
-    if (
+    const hasCourseIds = Object.prototype.hasOwnProperty.call(req.body, 'courseIds');
+    if (hasCourseIds) {
+      const resolvedCourses = await resolveCourseAssignments(req.body.courseIds);
+      updateFields.courseIds = resolvedCourses.map((courseDoc) => courseDoc.courseId || courseDoc._id.toString());
+
+      // The first selected course remains the legacy primary assignment for
+      // existing consumers that use course/courseId/courseRef.
+      if (resolvedCourses.length > 0) {
+        const primaryCourse = resolvedCourses[0];
+        updateFields.courseId = primaryCourse.courseId || primaryCourse._id.toString();
+        updateFields.course = primaryCourse.courseTitle || '';
+        updateFields.courseRef = primaryCourse._id;
+      } else {
+        updateFields.courseId = '';
+        updateFields.course = '';
+        updateFields.courseRef = null;
+      }
+    } else if (
       (req.body.courseId !== undefined && req.body.courseId !== null) ||
       (req.body.course !== undefined && req.body.course !== null)
     ) {
@@ -1373,6 +1595,12 @@ async function updateAdminStudent(req, res) {
       }
       if (updateFields.dateOfBirth) userUpdateFields.dateOfBirth = updateFields.dateOfBirth;
       if (updateFields.qualification) userUpdateFields.qualification = updateFields.qualification;
+      if (Object.prototype.hasOwnProperty.call(updateFields, 'courseIds')) {
+        // User.courseIds is already populated during registration and read by
+        // authentication/course-access code, so keep this existing duplicate
+        // enrollment representation in sync with Student.courseIds.
+        userUpdateFields.courseIds = updateFields.courseIds;
+      }
       if (updateFields.profileImage !== undefined) {
         userUpdateFields.profileImage = updateFields.profileImage;
         userUpdateFields.avatar = updateFields.profileImage;
@@ -1471,12 +1699,10 @@ async function createAdminStudent(req, res) {
 
     let linkedUser = await User.findOne({ email: cleanEmail });
     if (!linkedUser && password) {
-      const bcrypt = require('bcryptjs');
-      const hashedPassword = await bcrypt.hash(password, 10);
       linkedUser = await User.create({
         name: String(name).trim(),
         email: cleanEmail,
-        password: hashedPassword,
+        password: password,
         role: 'student',
         phone: phone ? String(phone).trim() : '',
         contactNumber: phone ? String(phone).trim() : '',
@@ -1538,8 +1764,82 @@ async function createAdminStudent(req, res) {
  */
 async function exportStudentsScores(req, res) {
   try {
-    const students = await Student.find()
-      .select('_id userId name email phone contactNumber course subscription status joinedDate createdAt')
+    // 1. Build search and filter match conditions
+    const matchConditions = {};
+
+    // Search Filter (name, email, phone)
+    if (req.query.search && typeof req.query.search === 'string' && req.query.search.trim()) {
+      const searchStr = req.query.search.trim();
+      const escapedSearch = searchStr.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      const searchRegex = new RegExp(escapedSearch, 'i');
+
+      matchConditions.$or = [
+        { name: searchRegex },
+        { email: searchRegex },
+        { phone: searchRegex },
+        { contactNumber: searchRegex }
+      ];
+    }
+
+    // Status Filter (Active, Trial, Expired, Inactive)
+    if (req.query.status && typeof req.query.status === 'string' && req.query.status.trim()) {
+      const statusStr = req.query.status.trim();
+      if (statusStr !== 'All' && statusStr !== 'All Status') {
+        matchConditions.status = new RegExp('^' + statusStr + '$', 'i');
+      }
+    }
+
+    // Course Filter (course_id or course)
+    const courseFilter = req.query.course_id || req.query.course;
+    if (courseFilter && typeof courseFilter === 'string' && courseFilter.trim() &&
+        courseFilter !== 'All' && courseFilter !== 'All Courses') {
+      const cleanCourse = courseFilter.trim();
+      const escapedCourse = cleanCourse.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      const courseRegex = new RegExp(escapedCourse, 'i');
+
+      const matchingCourses = await Course.find({
+        $or: [
+          { courseId: courseRegex },
+          { courseTitle: courseRegex },
+          ...(mongoose.Types.ObjectId.isValid(cleanCourse) ? [{ _id: cleanCourse }] : [])
+        ]
+      }).select('_id courseId courseTitle').lean();
+
+      const courseValues = [cleanCourse];
+      matchingCourses.forEach((matchedCourse) => {
+        if (matchedCourse.courseId) courseValues.push(matchedCourse.courseId);
+        if (matchedCourse.courseTitle) courseValues.push(matchedCourse.courseTitle);
+      });
+      const uniqueCourseValues = [...new Set(courseValues)];
+
+      const courseMatchConditions = [
+        { course: { $in: uniqueCourseValues } },
+        { courseId: { $in: uniqueCourseValues } },
+        { courseIds: { $in: uniqueCourseValues } },
+      ];
+
+      const matchingCourseObjectIds = matchingCourses
+        .map((matchedCourse) => matchedCourse._id)
+        .filter(Boolean);
+      if (matchingCourseObjectIds.length > 0) {
+        courseMatchConditions.push({ courseRef: { $in: matchingCourseObjectIds } });
+      }
+
+      if (matchConditions.$or) {
+        matchConditions.$and = [
+          { $or: matchConditions.$or },
+          { $or: courseMatchConditions }
+        ];
+        delete matchConditions.$or;
+      } else {
+        matchConditions.$or = courseMatchConditions;
+      }
+    }
+
+    // 2. Fetch filtered students with all course fields
+    const students = await Student.find(matchConditions)
+      .select('_id userId name email phone contactNumber course courseId courseIds courseRef subscription status joinedDate createdAt')
+      .sort({ createdAt: -1 })
       .lean();
     
     const acceptHeader = req.headers.accept || '';
@@ -1559,6 +1859,60 @@ async function exportStudentsScores(req, res) {
       }
     });
 
+    // 3. Batch resolve supplementary Course data
+    const courseRefsToFetch = new Set();
+    const courseIdsToFetch = new Set();
+    const courseTitlesToFetch = new Set();
+
+    students.forEach((s) => {
+      if (s.courseRef && mongoose.Types.ObjectId.isValid(s.courseRef)) {
+        courseRefsToFetch.add(s.courseRef.toString());
+      }
+      if (s.courseId) {
+        courseIdsToFetch.add(s.courseId.toString().trim());
+      }
+      if (Array.isArray(s.courseIds)) {
+        s.courseIds.forEach((courseId) => {
+          const normalized = String(courseId || '').trim();
+          if (!normalized) return;
+          courseIdsToFetch.add(normalized);
+          if (mongoose.Types.ObjectId.isValid(normalized)) {
+            courseRefsToFetch.add(normalized);
+          }
+        });
+      }
+      if (s.course) {
+        courseTitlesToFetch.add(s.course.toString().trim());
+      }
+    });
+
+    const courseQueryConditions = [];
+    if (courseRefsToFetch.size > 0) {
+      courseQueryConditions.push({
+        _id: { $in: [...courseRefsToFetch].map((id) => new mongoose.Types.ObjectId(id)) },
+      });
+    }
+    if (courseIdsToFetch.size > 0) {
+      courseQueryConditions.push({ courseId: { $in: [...courseIdsToFetch] } });
+    }
+    if (courseTitlesToFetch.size > 0) {
+      courseQueryConditions.push({ courseTitle: { $in: [...courseTitlesToFetch] } });
+    }
+
+    const matchedCourses = courseQueryConditions.length > 0
+      ? await Course.find({ $or: courseQueryConditions })
+          .select('_id courseId courseTitle category price')
+          .lean()
+      : [];
+
+    const courseMap = new Map();
+    matchedCourses.forEach((c) => {
+      if (c._id) courseMap.set(c._id.toString(), c);
+      if (c.courseId) courseMap.set(c.courseId.toString().trim(), c);
+      if (c.courseTitle) courseMap.set(c.courseTitle.toString().toLowerCase().trim(), c);
+    });
+
+    // 4. Construct export data with multi-course resolution
     const exportData = students.map(st => {
       const sId = st._id.toString();
       const uId = st.userId ? st.userId.toString() : null;
@@ -1568,12 +1922,65 @@ async function exportStudentsScores(req, res) {
       const totalScore = studentResults.reduce((acc, r) => acc + (r.score || 0), 0);
       const avgScore = totalExams > 0 ? (totalScore / totalExams).toFixed(2) : 0;
 
+      const enrolledIdentifiers = [];
+      const addIdentifier = (val) => {
+        const norm = String(val || '').trim();
+        if (!norm || enrolledIdentifiers.includes(norm)) return;
+        enrolledIdentifiers.push(norm);
+      };
+
+      if (Array.isArray(st.courseIds)) st.courseIds.forEach(addIdentifier);
+      addIdentifier(st.courseId);
+      addIdentifier(st.courseRef);
+      addIdentifier(st.course);
+
+      const resolvedCourseTitles = [];
+      const seenTitles = new Set();
+      const enrolledCourses = [];
+
+      enrolledIdentifiers.forEach(identifier => {
+        const resolved = courseMap.get(identifier) || courseMap.get(identifier.toLowerCase());
+        if (resolved && resolved.courseTitle) {
+          const title = resolved.courseTitle.trim();
+          if (title && !seenTitles.has(title.toLowerCase())) {
+            seenTitles.add(title.toLowerCase());
+            resolvedCourseTitles.push(title);
+            enrolledCourses.push({
+              id: resolved.courseId || resolved._id.toString(),
+              title: title,
+              category: resolved.category || 'General',
+              price: resolved.price || 0,
+            });
+          }
+        } else if (!mongoose.Types.ObjectId.isValid(identifier)) {
+          const title = identifier.trim();
+          if (title && !seenTitles.has(title.toLowerCase()) && title.toLowerCase() !== 'null' && title.toLowerCase() !== 'none') {
+            seenTitles.add(title.toLowerCase());
+            resolvedCourseTitles.push(title);
+            enrolledCourses.push({
+              id: title,
+              title: title,
+              category: 'General',
+              price: 0,
+            });
+          }
+        }
+      });
+
+      const multiCourseString = resolvedCourseTitles.length > 0
+        ? resolvedCourseTitles.join(', ')
+        : (st.course && st.course.trim() ? st.course.trim() : 'None');
+
       return {
         id: sId,
+        student_id: sId,
         name: st.name || '',
         email: st.email || '',
         phone: st.phone || st.contactNumber || '',
-        course: st.course || 'General',
+        course: multiCourseString,
+        courseIds: Array.isArray(st.courseIds) ? st.courseIds : [],
+        enrolled_courses: enrolledCourses,
+        enrolled_course: enrolledCourses[0] || { title: multiCourseString },
         subscription: st.subscription || 'Free',
         status: st.status || 'Active',
         totalExamsAttended: totalExams,

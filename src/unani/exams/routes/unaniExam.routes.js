@@ -66,6 +66,14 @@ router.get('/api/v1/unani-exams/history/:examId/rank', requireAdmin, unaniExamCo
 router.get('/api/unani-exams/:examId/rank', requireAdmin, unaniExamController.getRank);
 router.get('/api/v1/unani-exams/:examId/rank', requireAdmin, unaniExamController.getRank);
 
+// Rank image operations (Admin only)
+router.put('/api/unani-exams/:examId/rank-image', requireAdmin, unaniExamController.updateRankImage);
+router.put('/api/v1/unani-exams/:examId/rank-image', requireAdmin, unaniExamController.updateRankImage);
+router.post('/api/unani-exams/:examId/rank-image', requireAdmin, unaniExamController.updateRankImage);
+router.post('/api/v1/unani-exams/:examId/rank-image', requireAdmin, unaniExamController.updateRankImage);
+router.delete('/api/unani-exams/:examId/rank-image', requireAdmin, unaniExamController.deleteRankImage);
+router.delete('/api/v1/unani-exams/:examId/rank-image', requireAdmin, unaniExamController.deleteRankImage);
+
 // ─────────────────────────────────────────────────────────────────────────────
 // 2. EXAM CRUD
 // ─────────────────────────────────────────────────────────────────────────────

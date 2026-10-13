@@ -5,6 +5,10 @@ const PDFDocument = require('pdfkit');
 const Exam = require('../../models/Exam');
 const User = require('../../models/User');
 const Student = require('../../models/Student');
+const TestResult = require('../common/models/testResult.model');
+const { getStudentCandidateIds } = require('../../utils/examAttemptHelper');
+const { verifyStudentCourseAccessAny } = require('../../utils/courseAccessHelper');
+const { getExamAssignedCourseIds } = require('../../utils/examCourseAssignment');
 
 /**
  * Resolves the filesystem path to the brand logo image asset.
@@ -341,6 +345,41 @@ async function downloadAnswerKey(req, res) {
         success: false,
         message: 'Exam not found.'
       });
+    }
+
+    const role = String(req.user?.role || '').toLowerCase().trim();
+    if (role === 'student') {
+      const examStatus = exam.status === undefined || exam.status === null || String(exam.status).trim() === ''
+        ? 'published'
+        : String(exam.status).trim().toLowerCase();
+      if (examStatus !== 'published') {
+        return res.status(404).json({ success: false, message: 'Exam not found.' });
+      }
+
+      const isCourseTest = String(exam.testType || '').trim().toLowerCase().replace(/[ -]/g, '_') === 'course_test';
+      if (isCourseTest) {
+        const assignedCourseIds = getExamAssignedCourseIds(exam);
+        if (assignedCourseIds.length === 0) {
+          return res.status(404).json({ success: false, message: 'Course Test not found.' });
+        }
+        const hasCourseAccess = await verifyStudentCourseAccessAny(req.user, assignedCourseIds);
+        if (!hasCourseAccess) {
+          return res.status(403).json({ success: false, message: 'You are not authorized to access this exam.' });
+        }
+      }
+
+      const candidateIds = await getStudentCandidateIds(req.user);
+      if (candidateIds.length === 0) {
+        return res.status(401).json({ success: false, message: 'Student identity could not be resolved.' });
+      }
+      const completedAttempt = await TestResult.exists({
+        studentId: { $in: candidateIds },
+        examId: exam._id,
+        status: { $in: ['Completed', 'Attempted'] },
+      });
+      if (!completedAttempt) {
+        return res.status(403).json({ success: false, message: 'A completed attempt is required to download this answer key.' });
+      }
     }
 
     // 3. Obtain User details from req.user (or query DB as fallback)

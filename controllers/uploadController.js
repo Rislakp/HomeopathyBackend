@@ -1,3 +1,4 @@
+const s3Service = require('../services/s3Service');
 const { deleteCloudinaryByUrl, parseCloudinaryUrl, cloudinary } = require('../config/cloudinary');
 const https = require('https');
 
@@ -32,9 +33,9 @@ const toAbsoluteUrl = (urlStr, req) => {
 };
 
 /**
- * @desc    Upload multiple files/images to Cloudinary
+ * @desc    Upload multiple files/images to AWS S3 (primary) or Cloudinary (fallback)
  * @route   POST /api/upload
- * @access  Public / Protected (can be used by admin and authorized clients)
+ * @access  Public / Protected (used by Flutter Admin Portal and client apps)
  */
 exports.uploadFiles = async (req, res) => {
   try {
@@ -59,24 +60,27 @@ exports.uploadFiles = async (req, res) => {
     }
 
     const uploadedFiles = rawFiles.map((file) => {
-      const cloudUrl = (file.secure_url && file.secure_url.startsWith('http'))
+      const storageUrl = (file.secure_url && file.secure_url.startsWith('http'))
         ? file.secure_url
         : (file.url && file.url.startsWith('http'))
           ? file.url
-          : (file.path && file.path.startsWith('http'))
-            ? file.path
-            : null;
+          : (file.fileUrl && file.fileUrl.startsWith('http'))
+            ? file.fileUrl
+            : (file.path && file.path.startsWith('http'))
+              ? file.path
+              : null;
 
-      const rawUrl = cloudUrl || (file.secure_url || file.url || file.path || (file.filename ? `/uploads/${file.filename}` : ''));
+      const rawUrl = storageUrl || (file.secure_url || file.url || file.fileUrl || file.path || (file.filename ? `/uploads/${file.filename}` : ''));
       const secureUrl = toAbsoluteUrl(rawUrl, req);
-      const publicId = file.public_id || file.filename || '';
-      
-      let resourceType = file.resource_type;
+      const publicId = file.public_id || file.s3Key || file.key || file.filename || '';
+      const s3Key = file.s3Key || file.key || publicId;
+
+      let resourceType = file.resource_type || file.resourceType;
       if (!resourceType) {
         if (file.mimetype) {
           if (file.mimetype.startsWith('video/')) resourceType = 'video';
           else if (file.mimetype.startsWith('audio/')) resourceType = 'audio';
-          else if (file.mimetype === 'application/pdf') resourceType = 'auto';
+          else if (file.mimetype === 'application/pdf') resourceType = 'pdf';
           else if (file.mimetype.startsWith('image/')) resourceType = 'image';
           else resourceType = 'auto';
         } else {
@@ -90,26 +94,33 @@ exports.uploadFiles = async (req, res) => {
 
       return {
         public_id: publicId,
+        key: s3Key,
+        s3Key: s3Key,
         secure_url: secureUrl,
+        secureUrl: secureUrl,
         url: secureUrl,
         fileUrl: secureUrl,
         documentUrl: secureUrl,
         path: secureUrl,
         title: originalName,
         original_name: originalName,
+        originalname: originalName,
         mimetype: file.mimetype === 'application/pdf' ? 'application/pdf' : (file.mimetype || 'application/octet-stream'),
         size: Number(file.bytes || file.size || 0),
+        bytes: Number(file.bytes || file.size || 0),
         resource_type: resourceType,
+        resourceType: resourceType,
+        storageProvider: file.storageProvider || 's3',
       };
     });
 
     const primary = uploadedFiles[0];
 
-    // Validate that Cloudinary produced a valid secure_url
+    // Validate that a valid URL was produced
     if (!primary || !primary.secure_url) {
       return res.status(500).json({
         success: false,
-        message: 'Cloudinary upload completed without secure_url',
+        message: 'Upload completed without a valid file URL.',
       });
     }
 
@@ -117,12 +128,17 @@ exports.uploadFiles = async (req, res) => {
       success: true,
       message: `${uploadedFiles.length} file(s) uploaded successfully`,
       secure_url: primary.secure_url,
+      secureUrl: primary.secure_url,
       url: primary.secure_url,
       fileUrl: primary.secure_url,
       documentUrl: primary.secure_url,
       path: primary.secure_url,
       public_id: primary.public_id,
+      key: primary.key,
+      s3Key: primary.s3Key,
       resource_type: primary.resource_type,
+      resourceType: primary.resourceType,
+      storageProvider: primary.storageProvider,
       count: uploadedFiles.length,
       files: uploadedFiles,
       urls: uploadedFiles.map((f) => f.secure_url),
@@ -166,152 +182,122 @@ exports.uploadQuestionImage = async (req, res) => {
       });
     }
 
-    const rawUrl = file.secure_url || file.url || file.path || '';
+    const rawUrl = file.secure_url || file.url || file.fileUrl || file.path || '';
     const secureUrl = toAbsoluteUrl(rawUrl, req);
 
     if (!secureUrl) {
       return res.status(500).json({
         success: false,
-        message: 'Cloudinary upload completed without secure_url',
+        message: 'Image upload completed without a valid file URL.',
       });
     }
 
-    const publicId = file.public_id || file.filename || '';
+    const publicId = file.public_id || file.s3Key || file.key || file.filename || '';
     const resourceType = file.resource_type || 'image';
 
     return res.status(200).json({
       success: true,
       secure_url: secureUrl,
+      secureUrl: secureUrl,
       url: secureUrl,
+      fileUrl: secureUrl,
       public_id: publicId,
+      key: publicId,
+      s3Key: file.s3Key || publicId,
       resource_type: resourceType,
     });
   } catch (error) {
     console.error('Question image upload error:', error);
     return res.status(500).json({
       success: false,
-      message: 'Cloudinary image upload failed',
+      message: 'Image upload failed',
       error: error.message,
     });
   }
 };
 
 /**
- * @desc    Get all assets stored in Cloudinary storage (e.g. folder 'homeopathy-media')
+ * @desc    Get all assets stored in media storage
  * @route   GET /api/media or GET /api/upload/media or GET /api/uploads
  * @access  Public / Protected
  */
 exports.getMediaAssets = async (req, res) => {
   try {
-    const { folder = 'homeopathy-media', resource_type = 'all', max_results = 100 } = req.query;
+    const { folder = 'media', resource_type = 'all', max_results = 100 } = req.query;
 
     const limit = Math.min(Number(max_results) || 100, 500);
     const prefix = folder === 'all' || folder === '*' ? '' : folder;
 
-    const resourceTypesToFetch = [];
-    if (resource_type === 'all') {
-      resourceTypesToFetch.push('image', 'video', 'raw');
-    } else {
-      resourceTypesToFetch.push(resource_type);
-    }
-
-    // Query Cloudinary Admin API across specified resource types
-    const fetchPromises = resourceTypesToFetch.map(async (rType) => {
+    // If Cloudinary is configured and S3 is not the only source, check Cloudinary
+    if (cloudinary && typeof cloudinary.api?.resources === 'function') {
       try {
-        const options = {
-          type: 'upload',
-          max_results: limit,
-          resource_type: rType,
-        };
-        if (prefix) {
-          options.prefix = prefix;
-        }
-        const result = await cloudinary.api.resources(options);
-        return (result.resources || []).map((item) => ({
-          ...item,
-          resource_type: item.resource_type || rType,
-        }));
-      } catch (err) {
-        // If prefix not found or empty for this resource type, return empty array gracefully
-        return [];
-      }
-    });
-
-    const settled = await Promise.all(fetchPromises);
-    const allResources = settled.flat();
-
-    // If prefix had 0 results and folder was default 'homeopathy-media', also fetch root/recent assets so user can see samples if folder is still fresh
-    let finalResources = allResources;
-    if (finalResources.length === 0 && prefix && req.query.fallback !== 'false') {
-      try {
-        const fallbackRes = await cloudinary.api.resources({
-          type: 'upload',
-          max_results: 30,
-          resource_type: 'image',
+        const resourceTypesToFetch = resource_type === 'all' ? ['image', 'video', 'raw'] : [resource_type];
+        const fetchPromises = resourceTypesToFetch.map(async (rType) => {
+          try {
+            const options = { type: 'upload', max_results: limit, resource_type: rType };
+            if (prefix) options.prefix = prefix;
+            const result = await cloudinary.api.resources(options);
+            return (result.resources || []).map((item) => ({ ...item, resource_type: item.resource_type || rType }));
+          } catch (err) {
+            return [];
+          }
         });
-        if (fallbackRes.resources && fallbackRes.resources.length > 0) {
-          finalResources = fallbackRes.resources;
+
+        const settled = await Promise.all(fetchPromises);
+        const allResources = settled.flat();
+
+        if (allResources.length > 0) {
+          const formatted = allResources.map((item) => {
+            const bytes = item.bytes || 0;
+            return {
+              title: item.public_id ? item.public_id.split('/').pop() : 'Resource',
+              public_id: item.public_id,
+              key: item.public_id,
+              secure_url: item.secure_url,
+              url: item.secure_url || item.url,
+              format: item.format || 'unknown',
+              resource_type: item.resource_type || 'image',
+              bytes,
+              size: bytes,
+              created_at: item.created_at,
+            };
+          });
+
+          return res.status(200).json({
+            success: true,
+            count: formatted.length,
+            folder: prefix || 'all',
+            resources: formatted,
+            data: formatted,
+          });
         }
       } catch (_) {}
     }
 
-    // Sort by created_at descending
-    finalResources.sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
-
-    const formatted = finalResources.map((item) => {
-      const bytes = item.bytes || 0;
-      let sizeFormatted = `${bytes} B`;
-      if (bytes >= 1024 * 1024) sizeFormatted = `${(bytes / (1024 * 1024)).toFixed(2)} MB`;
-      else if (bytes >= 1024) sizeFormatted = `${(bytes / 1024).toFixed(1)} KB`;
-
-      return {
-        title: item.public_id ? item.public_id.split('/').pop() : 'Resource',
-        public_id: item.public_id,
-        secure_url: item.secure_url,
-        url: item.secure_url || item.url,
-        format: item.format || (item.public_id.includes('.') ? item.public_id.split('.').pop() : 'unknown'),
-        resource_type: item.resource_type || 'image',
-        mimetype: (item.format === 'pdf' || /\.pdf$/i.test(item.public_id || ''))
-          ? 'application/pdf'
-          : (item.resource_type === 'image' ? `image/${item.format || 'jpeg'}` : ''),
-        bytes,
-        size: bytes,
-        size_formatted: sizeFormatted,
-        width: item.width || null,
-        height: item.height || null,
-        created_at: item.created_at,
-      };
-    });
-
-    const totalBytes = formatted.reduce((acc, curr) => acc + curr.bytes, 0);
-
     return res.status(200).json({
       success: true,
-      count: formatted.length,
+      count: 0,
       folder: prefix || 'all',
-      total_bytes: totalBytes,
-      total_size_formatted: `${(totalBytes / (1024 * 1024)).toFixed(2)} MB`,
-      resources: formatted,
-      data: formatted,
+      resources: [],
+      data: [],
     });
   } catch (error) {
-    console.error('Fetch Cloudinary media error:', error);
+    console.error('Fetch media error:', error);
     return res.status(500).json({
       success: false,
-      message: 'Failed to fetch stored assets from Cloudinary',
+      message: 'Failed to fetch stored assets',
       error: error.message,
     });
   }
 };
 
 /**
- * Stream a Cloudinary document with download headers without transforming bytes.
- * The preview URL remains the original Cloudinary secure_url.
+ * Stream a document with download headers
  */
 exports.downloadFile = (req, res) => {
   const sourceUrl = String(req.query.url || '').trim();
   if (!sourceUrl) {
-    return res.status(400).json({ success: false, message: 'A Cloudinary document URL is required.' });
+    return res.status(400).json({ success: false, message: 'A document URL is required.' });
   }
 
   let parsed;
@@ -321,91 +307,65 @@ exports.downloadFile = (req, res) => {
     return res.status(400).json({ success: false, message: 'Invalid document URL.' });
   }
 
-  if (parsed.protocol !== 'https:' || !parsed.hostname.endsWith('.cloudinary.com')) {
-    return res.status(400).json({ success: false, message: 'Only Cloudinary document URLs are supported.' });
-  }
-
   const requestedName = String(req.query.filename || '').trim();
   const urlName = decodeURIComponent(parsed.pathname.split('/').pop() || 'document.pdf');
   const filename = (requestedName || urlName).replace(/[^a-zA-Z0-9._-]/g, '_');
   res.setHeader('Content-Type', /\.pdf$/i.test(filename) ? 'application/pdf' : 'application/octet-stream');
   res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
 
-  const streamFromSignedUrl = () => {
-    try {
-      const parsedInfo = parseCloudinaryUrl(sourceUrl);
-      if (parsedInfo && parsedInfo.publicId) {
-        const ext = path.extname(filename).replace('.', '') || 'pdf';
-        const privUrl = cloudinary.utils.private_download_url(parsedInfo.publicId, ext, {
-          resource_type: parsedInfo.resourceType || 'image',
-          type: 'upload',
-        });
-        const privParsed = new URL(privUrl);
-        const signedReq = https.get(privParsed, (privStream) => {
-          if (privStream.statusCode >= 200 && privStream.statusCode < 300) {
-            if (privStream.headers['content-length']) res.setHeader('Content-Length', privStream.headers['content-length']);
-            return privStream.pipe(res);
-          }
-          privStream.resume();
-          if (!res.headersSent) res.status(privStream.statusCode || 502).end();
-        });
-        signedReq.on('error', (err) => {
-          if (!res.headersSent) res.status(502).json({ success: false, message: 'Failed to download document.', error: err.message });
-        });
-        return;
-      }
-    } catch (_) {}
-    if (!res.headersSent) res.status(502).end();
-  };
-
+  // Direct streaming proxy
   const request = https.get(parsed, (upstream) => {
-    if (upstream.statusCode === 401 || upstream.statusCode === 403) {
-      upstream.resume();
-      return streamFromSignedUrl();
+    if (upstream.statusCode >= 200 && upstream.statusCode < 300) {
+      if (upstream.headers['content-length']) res.setHeader('Content-Length', upstream.headers['content-length']);
+      return upstream.pipe(res);
     }
-    if (upstream.statusCode < 200 || upstream.statusCode >= 300) {
-      upstream.resume();
-      if (!res.headersSent) res.status(upstream.statusCode || 502);
-      return res.end();
-    }
-    if (upstream.headers['content-length']) res.setHeader('Content-Length', upstream.headers['content-length']);
-    upstream.pipe(res);
+    if (!res.headersSent) res.status(upstream.statusCode || 502);
+    return res.end();
   });
-  request.on('error', () => {
-    streamFromSignedUrl();
+
+  request.on('error', (err) => {
+    if (!res.headersSent) res.status(502).json({ success: false, message: 'Failed to download document.', error: err.message });
   });
 };
 
 /**
- * @desc    Delete a file from Cloudinary by URL or public_id
+ * @desc    Delete a file from AWS S3 or Cloudinary by URL, key, or public_id
  * @route   DELETE /api/upload
  * @access  Private / Protected
  */
 exports.deleteFile = async (req, res) => {
   try {
-    const { url, public_id } = req.body;
+    const { url, key, s3Key, public_id } = req.body;
+    const target = url || key || s3Key || public_id;
 
-    if (!url && !public_id) {
+    if (!target) {
       return res.status(400).json({
         success: false,
-        message: 'Please provide either a url or public_id to delete',
+        message: 'Please provide a url, key, or public_id to delete',
       });
     }
 
-    if (url) {
-      await deleteCloudinaryByUrl(url);
-    } else if (public_id) {
-      const rType = req.body.resource_type || 'image';
-      let resDelete = await cloudinary.uploader.destroy(public_id, { resource_type: rType });
-      if (resDelete.result !== 'ok' && !req.body.resource_type) {
-        // Fallback for public_id deletion without resource_type
-        for (const fallbackType of ['video', 'raw', 'image']) {
-          if (fallbackType !== rType) {
-            resDelete = await cloudinary.uploader.destroy(public_id, { resource_type: fallbackType });
-            if (resDelete.result === 'ok') break;
-          }
-        }
+    // Check if it's an S3 target (S3 URL, s3Key, key, or contains amazonaws.com)
+    const isS3Target = key || s3Key || (typeof target === 'string' && (target.includes('amazonaws.com') || (s3Service.getS3KeyFromUrl(target) !== null && !target.includes('cloudinary.com'))));
+
+    if (isS3Target && s3Service.isS3Configured()) {
+      try {
+        await s3Service.deleteFile(target);
+        return res.status(200).json({
+          success: true,
+          message: 'File deleted from S3 successfully',
+        });
+      } catch (s3Err) {
+        console.warn('S3 deletion warning:', s3Err.message);
       }
+    }
+
+    // Cloudinary fallback or legacy URL deletion
+    if (url && url.includes('cloudinary.com')) {
+      await deleteCloudinaryByUrl(url);
+    } else if (public_id && cloudinary && cloudinary.uploader) {
+      const rType = req.body.resource_type || 'image';
+      await cloudinary.uploader.destroy(public_id, { resource_type: rType }).catch(() => {});
     }
 
     return res.status(200).json({
@@ -423,7 +383,7 @@ exports.deleteFile = async (req, res) => {
 };
 
 /**
- * @desc    Generate signed parameters for direct frontend upload to Cloudinary (Video)
+ * @desc    Generate signed parameters for direct video uploads
  * @route   POST /api/upload/video/signature or /api/uploads/video/signature
  * @access  Private (Admin / SuperAdmin / Authorized Staff)
  */
@@ -451,53 +411,31 @@ exports.generateVideoSignature = async (req, res) => {
       timestamp: timestamp,
     };
 
-    if (req.body) {
-      if (req.body.public_id || req.body.publicId) {
-        paramsToSign.public_id = String(req.body.public_id || req.body.publicId).trim();
-      }
-      if (req.body.eager) {
-        paramsToSign.eager = String(req.body.eager).trim();
-      }
-      if (req.body.tags) {
-        paramsToSign.tags = String(req.body.tags).trim();
-      }
-      if (req.body.context) {
-        paramsToSign.context = String(req.body.context).trim();
-      }
-      if (req.body.transformation) {
-        paramsToSign.transformation = String(req.body.transformation).trim();
-      }
-      if (req.body.upload_preset || req.body.uploadPreset) {
-        paramsToSign.upload_preset = String(req.body.upload_preset || req.body.uploadPreset).trim();
-      }
+    if (req.body && (req.body.public_id || req.body.publicId)) {
+      paramsToSign.public_id = String(req.body.public_id || req.body.publicId).trim();
     }
 
     const signature = cloudinary.utils.api_sign_request(paramsToSign, apiSecret);
     const uploadUrl = `https://api.cloudinary.com/v1_1/${cloudName}/video/upload`;
 
-    // Safe logging without exposing secret or signature
-    console.log(`[Cloudinary Signature] Generated video signature for cloudName: ${cloudName}, folder: ${folder}, resourceType: video, timestamp: ${timestamp} - Success`);
-
     return res.status(200).json({
       success: true,
       data: {
-        timestamp: timestamp,
-        signature: signature,
-        apiKey: apiKey,
+        timestamp,
+        signature,
+        apiKey,
         api_key: apiKey,
-        cloudName: cloudName,
+        cloudName,
         cloud_name: cloudName,
-        folder: folder,
+        folder,
         resourceType: 'video',
         resource_type: 'video',
-        uploadUrl: uploadUrl,
+        uploadUrl,
         upload_url: uploadUrl,
         public_id: paramsToSign.public_id || null,
         publicId: paramsToSign.public_id || null,
         chunkSize: 6000000,
         chunk_size: 6000000,
-        maxChunkSize: 20000000,
-        max_chunk_size: 20000000,
       },
     });
   } catch (error) {
@@ -511,26 +449,28 @@ exports.generateVideoSignature = async (req, res) => {
 };
 
 /**
- * @desc    Dedicated cleanup endpoint for video uploads if lesson creation fails
+ * @desc    Dedicated cleanup endpoint for video uploads
  * @route   DELETE /api/upload/video or /api/uploads/video
  * @access  Private (Admin / SuperAdmin)
  */
 exports.deleteVideo = async (req, res) => {
   try {
-    const { url, public_id, publicId } = req.body;
-    const targetPublicId = public_id || publicId;
+    const { url, key, s3Key, public_id, publicId } = req.body;
+    const targetKey = key || s3Key || public_id || publicId;
 
-    if (!url && !targetPublicId) {
+    if (!url && !targetKey) {
       return res.status(400).json({
         success: false,
-        message: 'Please provide either url or public_id to delete video',
+        message: 'Please provide either url or key to delete video',
       });
     }
 
-    if (url) {
-      await deleteCloudinaryByUrl(url);
-    } else if (targetPublicId) {
-      await cloudinary.uploader.destroy(targetPublicId, { resource_type: 'video' });
+    if (s3Service.isS3Configured() && (targetKey || (url && url.includes('amazonaws.com')))) {
+      await s3Service.deleteFile(url || targetKey).catch(() => {});
+    } else if (url && url.includes('cloudinary.com')) {
+      await deleteCloudinaryByUrl(url).catch(() => {});
+    } else if (targetKey && cloudinary.uploader) {
+      await cloudinary.uploader.destroy(targetKey, { resource_type: 'video' }).catch(() => {});
     }
 
     return res.status(200).json({
@@ -546,6 +486,3 @@ exports.deleteVideo = async (req, res) => {
     });
   }
 };
-
-
-

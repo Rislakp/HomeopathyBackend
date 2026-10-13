@@ -9,6 +9,8 @@ const {
   getMe,
   updateUserRole,
   resetPassword,
+  forgotPassword,
+  updatePassword,
 } = require('../controllers/authController');
 
 const { requireAuth, requireAdmin } = require('../middleware/rbac');
@@ -34,20 +36,22 @@ router.post('/student/login', studentLogin);
 router.post('/admin/login', adminLogin);
 
 // -----------------------------
-// PASSWORD MANAGEMENT (Direct Reset / Update without OTP)
+// PASSWORD MANAGEMENT
 // -----------------------------
+router.post('/forgot-password', forgotPassword);
+router.put('/forgot-password', forgotPassword);
+
 router.post('/reset-password', resetPassword);
 router.put('/reset-password', resetPassword);
 router.patch('/reset-password', resetPassword);
-router.post('/update-password', resetPassword);
-router.put('/update-password', resetPassword);
-router.patch('/update-password', resetPassword);
-router.post('/forgot-password', resetPassword);
-router.put('/forgot-password', resetPassword);
 router.post('/password/reset', resetPassword);
 router.put('/password/reset', resetPassword);
 router.post('/student/reset-password', resetPassword);
 router.put('/student/reset-password', resetPassword);
+
+router.post('/update-password', requireAuth, updatePassword);
+router.put('/update-password', requireAuth, updatePassword);
+router.patch('/update-password', requireAuth, updatePassword);
 
 // -----------------------------
 // USER PROFILE ENDPOINT

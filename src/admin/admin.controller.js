@@ -8,6 +8,7 @@ const {
   getStudentExamAttemptMap,
   computeExamAttemptMetrics
 } = require('../../utils/examAttemptHelper');
+const { resolveProfileImageUrl } = require('../../utils/s3MediaSigner');
 try { require('../../models/Course'); } catch (e) {}
 
 /**
@@ -428,6 +429,7 @@ async function getAllGrandMocks(req, res) {
     if (isGrandMockEndpoint || isExplicitGrandMock) {
       // Grand mock query without requiring courseId
       filter.testType = { $ne: 'course_test' };
+      filter.courseId = { $nin: ['unani', 'UNANI', 'Unani'] };
       filter.$or = [
         { testType: 'grand_mock' },
         { testType: { $regex: /^(grand[-_ ]?mock|mock)$/i } },
@@ -445,6 +447,9 @@ async function getAllGrandMocks(req, res) {
       // Returns all tests including course tests and grand mocks!
       if (reqQuery.courseId && String(reqQuery.courseId).trim()) {
         filter.courseId = String(reqQuery.courseId).trim();
+      } else {
+        // Defensive exclusion: Normal test history must never return Unani exams
+        filter.courseId = { $nin: ['unani', 'UNANI', 'Unani'] };
       }
     }
 
@@ -647,8 +652,25 @@ async function getGrandMockById(req, res) {
     const resultsForExam = attemptMap.get(exam._id.toString()) || [];
     const metrics = computeExamAttemptMetrics(exam, resultsForExam);
 
+    const formattedQuestions = await Promise.all(
+      (exam.questions || []).map(async (q) => {
+        const rawImg = q.imageUrl || q.image || q.questionImage || q.imgUrl;
+        if (typeof rawImg === 'string' && rawImg.trim()) {
+          const signed = await resolveProfileImageUrl(rawImg.trim());
+          return {
+            ...q,
+            imageUrl: signed,
+            image: signed,
+            questionImage: signed,
+          };
+        }
+        return q;
+      })
+    );
+
     const formattedExam = {
       ...exam,
+      questions: formattedQuestions,
       courseId: courseIdStr,
       courseName: finalCourseName,
       moduleId: moduleIdStr,

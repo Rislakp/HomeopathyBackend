@@ -1,12 +1,57 @@
-﻿const Recording = require('../models/Recording');
+const Recording = require('../models/Recording');
 const Course = require('../models/Course');
 const mongoose = require('mongoose');
+const s3Service = require('../services/s3Service');
 const {
+  isCloudinaryConfigured,
   deleteCloudinaryByUrl,
   uploadBufferToCloudinary,
 } = require('../config/cloudinary');
 const { verifyStudentCourseAccess } = require('../utils/courseAccessHelper');
 const { parsePaginationParams, buildPaginationResponse } = require('../utils/pagination');
+const { normalizeS3Reference, signS3Reference } = require('../utils/s3MediaSigner');
+
+const parseDurationInSeconds = (val) => {
+  if (val === null || val === undefined || val === '') return 0;
+  if (typeof val === 'number') return isFinite(val) && val > 0 ? val : 0;
+  const str = String(val).trim();
+  if (!str) return 0;
+
+  // Handle clock formats like "18:45" or "01:23:45"
+  if (str.includes(':')) {
+    const parts = str.split(':').map((p) => parseFloat(p.trim()));
+    if (parts.some((p) => isNaN(p) || p < 0)) return 0;
+    if (parts.length === 2) {
+      const [min, sec] = parts;
+      return (min * 60) + sec;
+    }
+    if (parts.length === 3) {
+      const [hr, min, sec] = parts;
+      return (hr * 3600) + (min * 60) + sec;
+    }
+  }
+
+  // Handle unit formats like "120 sec", "120s", "2.5 min", "1 hr"
+  const secMatch = str.match(/^([\d.]+)\s*(?:s|sec|secs|seconds?)$/i);
+  if (secMatch) {
+    const s = parseFloat(secMatch[1]);
+    return isFinite(s) && s > 0 ? s : 0;
+  }
+  const minMatch = str.match(/^([\d.]+)\s*(?:m|min|mins|minutes?)$/i);
+  if (minMatch) {
+    const m = parseFloat(minMatch[1]);
+    return isFinite(m) && m > 0 ? m * 60 : 0;
+  }
+  const hrMatch = str.match(/^([\d.]+)\s*(?:h|hr|hrs|hours?)$/i);
+  if (hrMatch) {
+    const h = parseFloat(hrMatch[1]);
+    return isFinite(h) && h > 0 ? h * 3600 : 0;
+  }
+
+  // Numeric fallback (only if valid non-negative)
+  const num = parseFloat(str);
+  return isFinite(num) && num > 0 ? num : 0;
+};
 
 const findCourseByIdOrCustomId = async (id) => {
   if (!id) return null;
@@ -64,7 +109,7 @@ const calculateResolutionMetrics = (width, height, bytes, format) => {
     const i = Math.floor(Math.log(formattedBytes) / Math.log(k));
     formattedSize = parseFloat((formattedBytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
   } else {
-    formattedSize = '12.5 MB';
+    formattedSize = '';
   }
 
   return {
@@ -117,7 +162,7 @@ const extractFileUrl = (f) => {
 /**
  * Format a Recording document for dashboard consumption with normalized fields
  */
-const formatRecordingDocument = (rec) => {
+const formatRecordingDocument = async (rec) => {
   const course = rec.courseId;
   let courseName = rec.courseName || '';
   let moduleName = rec.moduleName || '';
@@ -152,7 +197,15 @@ const formatRecordingDocument = (rec) => {
 
   const streamUrl = (rec.streamUrl || rec.liveClassUrl || '').trim();
   // Ensure recordedVideoUrl is strictly clean public URL or empty string "" if pending
-  const recordedVideoUrl = sanitizeVideoUrl(rec.recordedVideoUrl || rec.recordingFileUrl || '');
+  const storedVideoUrl = sanitizeVideoUrl(rec.recordedVideoUrl || rec.recordingFileUrl || '');
+  const s3RefCandidate = (rec.storageProvider === 's3' && rec.s3Key)
+    ? { storageProvider: 's3', s3Key: rec.s3Key, contentType: 'video/mp4' }
+    : storedVideoUrl;
+  const s3VideoReference = normalizeS3Reference(s3RefCandidate);
+  const signedResult = s3VideoReference
+    ? await signS3Reference(s3VideoReference, s3VideoReference.contentType || 'video/mp4')
+    : null;
+  const recordedVideoUrl = signedResult?.url || storedVideoUrl;
 
   // Calculate resolution and quality metrics
   const metrics = calculateResolutionMetrics(
@@ -162,18 +215,35 @@ const formatRecordingDocument = (rec) => {
     rec.format
   );
 
+  const resolvedS3Key = rec.s3Key || s3VideoReference?.s3Key || s3Service.getS3KeyFromUrl(storedVideoUrl) || '';
+  const storageProvider = rec.storageProvider || (resolvedS3Key ? 's3' : (storedVideoUrl.includes('cloudinary.com') ? 'cloudinary' : ''));
+
   return {
     _id: rec._id,
     courseName,
     moduleName,
     lessonTitle,
     streamUrl,
-    recordedVideoUrl, // "" if pending / no video uploaded yet
+    recordedVideoUrl, // "" if pending / signed S3 URL or Cloudinary URL
+    recordingFileUrl: recordedVideoUrl,
+    videoUrl: recordedVideoUrl,
+    url: recordedVideoUrl,
+    secure_url: recordedVideoUrl,
+    secureUrl: recordedVideoUrl,
+    fileUrl: recordedVideoUrl,
+    mediaUrl: recordedVideoUrl,
+    s3Key: resolvedS3Key,
+    key: resolvedS3Key,
+    public_id: resolvedS3Key || (rec._id ? rec._id.toString() : ''),
+    storageProvider,
     status: rec.status || 'pending',
     duration: rec.duration || '',
+    videoDuration: parseDurationInSeconds(rec.duration),
     width: metrics.width,
     height: metrics.height,
     bytes: metrics.bytes,
+    videoBytes: metrics.bytes,
+    size: metrics.bytes,
     format: metrics.format,
     resolution: rec.resolution || metrics.resolution,
     qualityTag: rec.qualityTag || metrics.qualityTag,
@@ -186,7 +256,6 @@ const formatRecordingDocument = (rec) => {
     moduleId: rec.moduleId || null,
     lessonId: rec.lessonId || null,
     liveClassUrl: streamUrl,
-    recordingFileUrl: recordedVideoUrl,
     createdAt: rec.createdAt,
     updatedAt: rec.updatedAt,
   };
@@ -222,8 +291,13 @@ exports.createRecording = async (req, res) => {
     const paramLessonId = req.params.lessonId || bodyLessonId;
 
     const resolvedStreamUrl = (streamUrl || liveClassUrl || '').trim();
-    // Validate recorded video URL if provided in body; default to "" if pending
-    const initialRecordedVideoUrl = sanitizeVideoUrl(req.body.recordedVideoUrl || req.body.recordingFileUrl || '');
+    // Validate recorded video URL if provided in body or file; default to "" if pending
+    const uploadedFile = req.file || (Array.isArray(req.files) ? req.files[0] : (req.uploadedFiles ? req.uploadedFiles[0] : null));
+    const initialRecordedVideoUrl = sanitizeVideoUrl(
+      extractFileUrl(uploadedFile) || req.body.recordedVideoUrl || req.body.recordingFileUrl || req.body.videoUrl || req.body.secure_url || ''
+    );
+    const initialS3Key = req.body.s3Key || req.body.key || (uploadedFile?.s3Key) || (uploadedFile?.key) || s3Service.getS3KeyFromUrl(initialRecordedVideoUrl) || '';
+    const initialStorageProvider = req.body.storageProvider || (uploadedFile?.storageProvider) || (initialS3Key ? 's3' : (initialRecordedVideoUrl.includes('cloudinary.com') ? 'cloudinary' : ''));
 
     let resolvedCourseName = (courseName || '').trim();
     let resolvedModuleName = (moduleName || '').trim();
@@ -259,6 +333,8 @@ exports.createRecording = async (req, res) => {
       liveClassUrl: resolvedStreamUrl,
       recordedVideoUrl: initialRecordedVideoUrl,
       recordingFileUrl: initialRecordedVideoUrl,
+      s3Key: initialS3Key,
+      storageProvider: initialStorageProvider,
       duration: (duration || '').trim(),
       status: status || 'pending',
       width: metrics.width,
@@ -274,10 +350,27 @@ exports.createRecording = async (req, res) => {
 
     await recording.save();
 
+    const formattedRecording = await formatRecordingDocument(recording);
+    const activeVideoUrl = formattedRecording.recordedVideoUrl || initialRecordedVideoUrl;
+    const finalKey = recording.s3Key || formattedRecording.s3Key || '';
+    const publicId = finalKey || (recording._id ? recording._id.toString() : '');
+
     return res.status(201).json({
       success: true,
       message: 'Recording session created successfully',
-      data: formatRecordingDocument(recording),
+      secure_url: activeVideoUrl,
+      secureUrl: activeVideoUrl,
+      url: activeVideoUrl,
+      videoUrl: activeVideoUrl,
+      fileUrl: activeVideoUrl,
+      mediaUrl: activeVideoUrl,
+      recordedVideoUrl: activeVideoUrl,
+      recordingFileUrl: activeVideoUrl,
+      public_id: publicId,
+      key: finalKey,
+      s3Key: finalKey,
+      storageProvider: recording.storageProvider || 's3',
+      data: formattedRecording,
     });
   } catch (error) {
     console.error('Create Recording Error:', error);
@@ -333,11 +426,19 @@ exports.getRecordings = async (req, res) => {
     // Add student authorization filter
     const isStaff = ['admin', 'superadmin'].includes((req.user?.role || '').toLowerCase());
     if (req.user && !isStaff) {
-      const studentCourseRef = req.user.courseRef;
-      const studentCourseId = req.user.courseId;
+      // ── Multi-course: use all enrolled course IDs ─────────────────────────
+      const { getStudentEnrolledCourseIds } = require('../utils/courseAccessHelper');
+      // Build a temporary student-shaped object from JWT claims
+      const enrolledSource = {
+        courseIds: Array.isArray(req.user.courseIds) ? req.user.courseIds : [],
+        courseId: req.user.courseId || '',
+        courseRef: req.user.courseRef || null,
+        course: req.user.course || '',
+      };
+      const { rawIds, objectIds } = getStudentEnrolledCourseIds(enrolledSource);
       const studentCourseTitle = req.user.course;
 
-      if (!studentCourseRef && !studentCourseId && !studentCourseTitle) {
+      if (rawIds.length === 0 && objectIds.length === 0 && !studentCourseTitle) {
         return res.status(200).json({
           success: true,
           message: 'Registered course could not be loaded or is not assigned to student profile.',
@@ -349,15 +450,15 @@ exports.getRecordings = async (req, res) => {
       }
 
       const courseOrFilter = [];
-      if (studentCourseRef && mongoose.Types.ObjectId.isValid(studentCourseRef)) {
-        courseOrFilter.push({ courseId: new mongoose.Types.ObjectId(studentCourseRef) });
+      if (objectIds.length > 0) courseOrFilter.push({ courseId: { $in: objectIds } });
+      if (rawIds.length > 0) {
+        courseOrFilter.push({ courseId: { $in: rawIds } });
+        const moreObjIds = rawIds
+          .filter(id => mongoose.Types.ObjectId.isValid(id))
+          .map(id => new mongoose.Types.ObjectId(id));
+        if (moreObjIds.length > 0) courseOrFilter.push({ courseId: { $in: moreObjIds } });
       }
-      if (studentCourseId) {
-        courseOrFilter.push({ courseId: studentCourseId });
-      }
-      if (studentCourseTitle) {
-        courseOrFilter.push({ courseName: studentCourseTitle });
-      }
+      if (studentCourseTitle) courseOrFilter.push({ courseName: studentCourseTitle });
 
       if (courseOrFilter.length > 0) {
         filter.$and = filter.$or ? [{ $or: filter.$or }, { $or: courseOrFilter }] : courseOrFilter;
@@ -376,14 +477,14 @@ exports.getRecordings = async (req, res) => {
     const [total, recordings] = await Promise.all([
       Recording.countDocuments(filter),
       Recording.find(filter)
-        .select('_id courseId moduleId lessonId courseName moduleName lessonTitle streamUrl recordedVideoUrl liveClassUrl recordingFileUrl duration status width height bytes format resolution qualityTag createdAt updatedAt')
+        .select('_id courseId moduleId lessonId courseName moduleName lessonTitle streamUrl recordedVideoUrl liveClassUrl recordingFileUrl duration status width height bytes format resolution qualityTag s3Key storageProvider createdAt updatedAt')
         .sort({ createdAt: -1 })
         .skip(skip)
         .limit(limit)
         .lean(),
     ]);
 
-    const formattedList = recordings.map((rec) => formatRecordingDocument(rec));
+    const formattedList = await Promise.all(recordings.map((rec) => formatRecordingDocument(rec)));
     const pagination = buildPaginationResponse(total, page, limit);
 
     return res.status(200).json({
@@ -418,7 +519,10 @@ exports.getRecordingById = async (req, res) => {
       return res.status(400).json({ success: false, message: 'Invalid recording ID format' });
     }
 
-    const recording = await Recording.findById(id).populate('courseId', 'courseId courseTitle thumbnail category modules');
+    const query = Recording.findById(id);
+    const recording = (query && typeof query.populate === 'function')
+      ? await query.populate('courseId', 'courseId courseTitle thumbnail category modules')
+      : await query;
     if (!recording) {
       return res.status(404).json({ success: false, message: 'Recording document not found' });
     }
@@ -447,7 +551,7 @@ exports.getRecordingById = async (req, res) => {
 
     return res.status(200).json({
       success: true,
-      data: formatRecordingDocument(recording),
+      data: await formatRecordingDocument(recording),
     });
   } catch (error) {
     console.error('Get Recording By ID Error:', error);
@@ -490,12 +594,15 @@ exports.updateRecordingStatus = async (req, res) => {
     recording.status = targetStatus;
     await recording.save();
 
-    const populatedRec = await Recording.findById(id).populate('courseId', 'courseId courseTitle thumbnail category modules');
+    const popQuery = Recording.findById(id);
+    const populatedRec = (popQuery && typeof popQuery.populate === 'function')
+      ? await popQuery.populate('courseId', 'courseId courseTitle thumbnail category modules')
+      : (await popQuery || recording);
 
     return res.status(200).json({
       success: true,
       message: `Recording status updated to '${targetStatus}'`,
-      data: formatRecordingDocument(populatedRec),
+      data: await formatRecordingDocument(populatedRec),
     });
   } catch (error) {
     console.error('Update Recording Status Error:', error);
@@ -524,37 +631,89 @@ exports.uploadRecordingVideo = async (req, res) => {
       return res.status(404).json({ success: false, message: 'Recording document not found' });
     }
 
-    const uploadedFile = req.file || (Array.isArray(req.files) ? req.files[0] : null);
-    if (!uploadedFile || !Buffer.isBuffer(uploadedFile.buffer) || uploadedFile.buffer.length === 0) {
+    const uploadedFile = req.file || (Array.isArray(req.files) ? req.files[0] : (req.uploadedFiles ? req.uploadedFiles[0] : null));
+    const directUrl = sanitizeVideoUrl(req.body.secure_url || req.body.videoUrl || req.body.url || req.body.recordedVideoUrl || req.body.recordingFileUrl || '');
+
+    if (!uploadedFile && !directUrl) {
       return res.status(400).json({
         success: false,
-        message: 'A non-empty video file upload is required',
+        message: 'A non-empty video file upload or video URL is required',
       });
     }
 
-    const uploaded = await uploadBufferToCloudinary(
-      uploadedFile,
-      'live_records',
-      { resource_type: 'video' }
-    );
-    const secureUrl = sanitizeVideoUrl(uploaded.secure_url);
-    if (!secureUrl || !secureUrl.includes('res.cloudinary.com')) {
-      throw new Error('Cloudinary did not return a public secure URL.');
+    if (uploadedFile) {
+      const fileSize = Number(uploadedFile.size || (uploadedFile.buffer ? uploadedFile.buffer.length : 0)) || 0;
+      if (fileSize <= 0) {
+        return res.status(400).json({
+          success: false,
+          message: 'The uploaded video file is empty (0 bytes). Upload aborted to prevent corrupt records.',
+        });
+      }
+    }
+
+    let secureUrl = '';
+    let uploaded = {};
+
+    if (uploadedFile) {
+      if (s3Service.isS3Configured()) {
+        uploaded = await s3Service.uploadFile(uploadedFile, 'videos', {
+          originalname: uploadedFile.originalname || `recording-${id}.mp4`,
+          mimetype: uploadedFile.mimetype || 'video/mp4',
+        });
+        secureUrl = sanitizeVideoUrl(uploaded.secure_url || uploaded.url);
+      } else if (isCloudinaryConfigured()) {
+        uploaded = await uploadBufferToCloudinary(
+          uploadedFile,
+          'live_records',
+          { resource_type: 'video' }
+        );
+        secureUrl = sanitizeVideoUrl(uploaded.secure_url);
+      } else {
+        throw new Error('Neither AWS S3 nor Cloudinary is configured for recording storage.');
+      }
+    } else {
+      secureUrl = directUrl;
+      const key = req.body.s3Key || req.body.key || s3Service.getS3KeyFromUrl(directUrl) || '';
+      uploaded = {
+        secure_url: directUrl,
+        url: directUrl,
+        s3Key: key,
+        key: key,
+        storageProvider: req.body.storageProvider || (key ? 's3' : (directUrl.includes('cloudinary.com') ? 'cloudinary' : '')),
+      };
+    }
+
+    if (!secureUrl) {
+      throw new Error('Storage service did not return a valid HTTPS media URL.');
     }
     
     // Save to req for potential cleanup in catch block
     req.uploadedSecureUrl = secureUrl;
 
-    // Extract Cloudinary image/video dimensions & specs if present
+    const resolvedKey = uploaded.s3Key || uploaded.key || s3Service.getS3KeyFromUrl(secureUrl) || '';
+    const activeStorageProvider = uploaded.storageProvider || (resolvedKey ? 's3' : (secureUrl.includes('cloudinary.com') ? 'cloudinary' : ''));
+
+    // Extract image/video dimensions & specs if present
     const width = Number(uploaded.width || req.body.width) || 1920;
     const height = Number(uploaded.height || req.body.height) || 1080;
-    const bytes = Number(uploaded.bytes || uploadedFile.buffer.length) || 0;
+    const bytes = Number(
+      uploaded.bytes ||
+      uploaded.fileSize ||
+      uploaded.size ||
+      req.body.bytes ||
+      req.body.fileSize ||
+      req.body.size ||
+      (uploadedFile?.size) ||
+      (uploadedFile?.buffer ? uploadedFile.buffer.length : 0)
+    ) || 0;
     const format = (uploaded.format || req.body.format || 'mp4').toLowerCase();
 
     const metrics = calculateResolutionMetrics(width, height, bytes, format);
 
     recording.recordedVideoUrl = secureUrl;
     recording.recordingFileUrl = secureUrl;
+    recording.s3Key = resolvedKey;
+    recording.storageProvider = activeStorageProvider;
     recording.status = req.body.status || 'stopped';
     recording.width = metrics.width;
     recording.height = metrics.height;
@@ -563,8 +722,9 @@ exports.uploadRecordingVideo = async (req, res) => {
     recording.resolution = metrics.resolution;
     recording.qualityTag = metrics.qualityTag;
 
-    if (req.body.duration) {
-      recording.duration = req.body.duration.trim();
+    const durationInput = req.body.duration !== undefined ? req.body.duration : req.body.videoDuration;
+    if (durationInput) {
+      recording.duration = String(durationInput).trim();
     }
 
     await recording.save();
@@ -579,12 +739,46 @@ exports.uploadRecordingVideo = async (req, res) => {
             const lessonItem = moduleItem.lessons.id(recording.lessonId);
             if (lessonItem) {
               if (!lessonItem.videoUrl) lessonItem.videoUrl = secureUrl;
-              const hasPart = lessonItem.videoParts.some((p) => p.url === secureUrl);
-              if (!hasPart) {
+              const s3Reference = normalizeS3Reference(uploaded);
+              const partBytes = metrics.bytes || 0;
+              const partDur = parseDurationInSeconds(recording.duration);
+              const videoPart = s3Reference || {
+                title: `${lessonItem.lessonTitle} - Recorded Video`,
+                url: secureUrl,
+                secure_url: secureUrl,
+              };
+              const existingPart = lessonItem.videoParts.find((part) => (
+                (s3Reference && part.s3Key === s3Reference.s3Key) || part.url === secureUrl
+              ));
+              if (!existingPart) {
                 lessonItem.videoParts.push({
-                  title: `${lessonItem.lessonTitle} - Recorded Video`,
-                  url: secureUrl,
+                  ...videoPart,
+                  title: videoPart.title || `${lessonItem.lessonTitle} - Recorded Video`,
+                  bytes: partBytes,
+                  fileSize: partBytes,
+                  size: partBytes,
+                  duration: partDur,
+                  videoDuration: partDur,
                 });
+              } else {
+                if (partBytes > 0) {
+                  existingPart.bytes = partBytes;
+                  existingPart.fileSize = partBytes;
+                  existingPart.size = partBytes;
+                }
+                if (partDur > 0) {
+                  existingPart.duration = partDur;
+                  existingPart.videoDuration = partDur;
+                }
+              }
+              if (!lessonItem.videoBytes && partBytes > 0) {
+                lessonItem.videoBytes = partBytes;
+              }
+              if (!lessonItem.videoDuration && partDur > 0) {
+                lessonItem.videoDuration = partDur;
+              }
+              if ((!lessonItem.durationOrPages || lessonItem.durationOrPages === '0 sec') && partDur > 0) {
+                lessonItem.durationOrPages = `${Math.round(partDur)} sec`;
               }
               await course.save();
             }
@@ -595,19 +789,41 @@ exports.uploadRecordingVideo = async (req, res) => {
       }
     }
 
-    const populatedRec = await Recording.findById(id).populate('courseId', 'courseId courseTitle thumbnail category modules');
+    const query = Recording.findById(id);
+    const populatedRec = (query && typeof query.populate === 'function')
+      ? await query.populate('courseId', 'courseId courseTitle thumbnail category modules')
+      : (await query || recording);
+    const formattedRecording = await formatRecordingDocument(populatedRec || recording);
+
+    const activeVideoUrl = formattedRecording.recordedVideoUrl || secureUrl;
+    const finalKey = recording.s3Key || resolvedKey;
+    const publicId = finalKey || uploaded.public_id || (recording._id ? recording._id.toString() : id);
 
     return res.status(200).json({
       success: true,
       message: 'Recording uploaded successfully',
-      secureUrl,
-      recordedVideoUrl: secureUrl,
-      recordingFileUrl: secureUrl,
-      data: formatRecordingDocument(populatedRec),
+      secure_url: activeVideoUrl,
+      secureUrl: activeVideoUrl,
+      url: activeVideoUrl,
+      videoUrl: activeVideoUrl,
+      fileUrl: activeVideoUrl,
+      mediaUrl: activeVideoUrl,
+      recordedVideoUrl: activeVideoUrl,
+      recordingFileUrl: activeVideoUrl,
+      public_id: publicId,
+      key: finalKey,
+      s3Key: finalKey,
+      storageProvider: activeStorageProvider,
+      bytes: metrics.bytes,
+      data: formattedRecording,
     });
   } catch (error) {
     if (req.uploadedSecureUrl) {
-      deleteCloudinaryByUrl(req.uploadedSecureUrl).catch(err => console.error('Failed to cleanup recording video on save failure:', err));
+      if (req.uploadedSecureUrl.includes('cloudinary.com')) {
+        deleteCloudinaryByUrl(req.uploadedSecureUrl).catch(err => console.error('Failed to cleanup recording video on save failure:', err));
+      } else if (s3Service.isS3Configured()) {
+        s3Service.deleteFile(req.uploadedSecureUrl).catch(err => console.error('Failed to cleanup S3 recording video:', err));
+      }
     }
     console.error('========== UPLOAD RECORDING VIDEO ERROR ==========');
     console.error('MESSAGE:', error?.message);
@@ -622,7 +838,7 @@ exports.uploadRecordingVideo = async (req, res) => {
 };
 
 /**
- * @desc    Delete recording document from DB and remove corresponding video asset from Cloudinary storage
+ * @desc    Delete recording document from DB and remove corresponding video asset from storage
  * @route   DELETE /api/recordings/:id
  * @access  Private/Admin
  */
@@ -639,8 +855,12 @@ exports.deleteRecording = async (req, res) => {
     }
 
     const targetUrl = recording.recordedVideoUrl || recording.recordingFileUrl || '';
-    if (targetUrl && targetUrl.includes('cloudinary.com')) {
-      await deleteCloudinaryByUrl(targetUrl);
+    if (targetUrl) {
+      if (targetUrl.includes('cloudinary.com')) {
+        await deleteCloudinaryByUrl(targetUrl).catch(() => {});
+      } else if (s3Service.isS3Configured() || targetUrl.includes('amazonaws.com')) {
+        await s3Service.deleteFile(targetUrl).catch(() => {});
+      }
     }
 
     return res.status(200).json({
@@ -661,6 +881,9 @@ exports.deleteRecording = async (req, res) => {
 exports.getLiveRecords = exports.getRecordings;
 exports.uploadRecording = exports.createRecording;
 exports.getLiveRecordById = exports.getRecordingById;
+exports.formatRecordingDocument = formatRecordingDocument;
+exports.calculateResolutionMetrics = calculateResolutionMetrics;
+exports.parseDurationInSeconds = parseDurationInSeconds;
 
 module.exports = {
   createRecording: exports.createRecording,
@@ -672,5 +895,8 @@ module.exports = {
   getLiveRecords: exports.getRecordings,
   uploadRecording: exports.createRecording,
   getLiveRecordById: exports.getRecordingById,
+  formatRecordingDocument,
+  calculateResolutionMetrics,
+  parseDurationInSeconds,
   ...exports,
 };

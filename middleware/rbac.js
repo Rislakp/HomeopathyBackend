@@ -8,10 +8,9 @@ try { Admin = require('../models/admin.model'); } catch (e) { /* optional */ }
 try { Student = require('../models/Student'); } catch (e) { /* optional */ }
 
 const getJwtSecret = () => {
-  return (
-    process.env.JWT_SECRET ||
-    'white_coat_academy_secret_jwt_key_2026_super_secure'
-  );
+  const secret = process.env.JWT_SECRET || (process.env.NODE_ENV !== 'production' ? 'white_coat_academy_secret_jwt_key_2026_super_secure' : undefined);
+  if (!secret) throw new Error('JWT_SECRET is not configured');
+  return secret;
 };
 
 /**
@@ -163,6 +162,14 @@ const requireAuth = async (req, res, next) => {
       error: error.message,
     });
   }
+};
+
+const optionalAuth = (req, res, next) => {
+  if (!req.headers.authorization) return next();
+  return requireAuth(req, {
+    status() { return this; },
+    json() { return next(); },
+  }, next);
 };
 
 /**
@@ -333,6 +340,7 @@ const requireCourseAccess = (requiredCourseId) => {
 
 module.exports = {
   requireAuth,
+  optionalAuth,
   requireRole,
   requireAdmin,
   requireStudent,

@@ -70,8 +70,8 @@ router.get('/api/admin/exams/:id/results', requireAdmin, getAdminExamResults);
 router.get('/api/exams/:id/results', requireAdmin, getAdminExamResults);
 
 // Admin Route: Update Grand Mock Exam
-router.put('/api/exams/grand-mock/:id', updateGrandMockExam);
-router.put('/api/exams/:id', updateGrandMockExam);
+router.put('/api/exams/grand-mock/:id', requireAdmin, updateGrandMockExam);
+router.put('/api/exams/:id', requireAdmin, updateGrandMockExam);
 
 // Admin Routes: Granular Question operations
 router.post('/api/exams/:id/questions', requireAdmin, addQuestionToExam);
@@ -84,8 +84,8 @@ router.delete('/api/exams/:id/questions/:questionId', requireAdmin, deleteQuesti
 router.delete('/api/exams/grand-mock/:id/questions/:questionId', requireAdmin, deleteQuestionFromExam);
 
 // Admin Route: Delete Grand Mock Exam
-router.delete('/api/exams/grand-mock/:id', deleteGrandMockExam);
-router.delete('/api/exams/:id', deleteExam);
+router.delete('/api/exams/grand-mock/:id', requireAdmin, deleteGrandMockExam);
+router.delete('/api/exams/:id', requireAdmin, deleteExam);
 
 module.exports = router;
 

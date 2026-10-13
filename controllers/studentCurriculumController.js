@@ -5,7 +5,7 @@ const CourseProgress = require('../models/CourseProgress');
 const ContentItemProgress = require('../models/ContentItemProgress');
 const { verifyStudentCourseAccess } = require('../utils/courseAccessHelper');
 const { logActivity } = require('../utils/activityLogger');
-const { signS3Reference } = require('../utils/s3MediaSigner');
+const { signS3Reference, normalizeS3Reference } = require('../utils/s3MediaSigner');
 
 const addSignedS3MediaUrls = async (course) => {
   if (!course || typeof course !== 'object') return course;
@@ -28,7 +28,22 @@ const addSignedS3MediaUrls = async (course) => {
         }
       }
       const firstVideo = (lesson.videoParts || []).find((resource) => resource.storageProvider === 's3' && resource.s3Key);
-      if (firstVideo && !lesson.videoUrl) lesson.videoUrl = firstVideo.url;
+      if (firstVideo && !lesson.videoUrl) {
+        lesson.videoUrl = firstVideo.url;
+      } else if (!firstVideo && (lesson.videoS3Key || lesson.s3Key || lesson.storageProvider === 's3' || (lesson.videoUrl && (lesson.videoUrl.includes('.amazonaws.com/') || lesson.videoUrl.startsWith('videos/'))))) {
+        const candidateKey = lesson.videoS3Key || lesson.s3Key || (lesson.videoUrl && lesson.videoUrl.startsWith('videos/') ? lesson.videoUrl : undefined);
+        const s3Ref = normalizeS3Reference({
+          storageProvider: 's3',
+          s3Key: candidateKey,
+          videoUrl: lesson.videoUrl,
+        });
+        if (s3Ref && s3Ref.s3Key) {
+          const signed = await signS3Reference(s3Ref);
+          if (signed?.url) {
+            lesson.videoUrl = signed.url;
+          }
+        }
+      }
       const firstPdf = (lesson.pdfNotes || []).find((resource) => resource.storageProvider === 's3' && resource.s3Key);
       if (firstPdf && !lesson.pdfUrl) {
         lesson.pdfUrl = firstPdf.url;
@@ -362,18 +377,31 @@ const getMyCourses = async (req, res) => {
     if (isStaff) {
       courses = await Course.find({ status: 'Published' }).sort({ createdAt: -1 });
     } else {
-      const courseRef = student?.courseRef || req.user?.courseRef;
-      const courseId = student?.courseId || req.user?.courseId || student?.registeredCourseId || req.user?.registeredCourseId;
+      // ── Multi-course: build OR query from all enrolled course IDs ────────────
+      const { getStudentEnrolledCourseIds } = require('../utils/courseAccessHelper');
+      const { rawIds, objectIds } = getStudentEnrolledCourseIds(student || {
+        courseId: req.user?.courseId,
+        courseRef: req.user?.courseRef,
+        courseIds: req.user?.courseIds || [],
+        course: req.user?.course,
+      });
+
+      // Also include course title string from student/user
       const courseTitle = student?.course || req.user?.course || req.user?.preferredCourse;
+
       const queryOr = [];
 
-      if (courseRef && require('mongoose').Types.ObjectId.isValid(courseRef)) {
-        queryOr.push({ _id: courseRef });
+      if (objectIds.length > 0) {
+        queryOr.push({ _id: { $in: objectIds } });
       }
-      if (courseId) {
-        queryOr.push({ courseId: courseId });
-        if (require('mongoose').Types.ObjectId.isValid(courseId)) {
-          queryOr.push({ _id: courseId });
+      if (rawIds.length > 0) {
+        queryOr.push({ courseId: { $in: rawIds } });
+        // Also try matching ObjectId _id for any valid ObjectIds in rawIds
+        const objIdMatches = rawIds
+          .filter(id => require('mongoose').Types.ObjectId.isValid(id))
+          .map(id => new (require('mongoose').Types.ObjectId)(id));
+        if (objIdMatches.length > 0) {
+          queryOr.push({ _id: { $in: objIdMatches } });
         }
       }
       if (courseTitle) {
@@ -483,6 +511,7 @@ const getMyCourses = async (req, res) => {
     });
   }
 };
+
 
 /**
  * GET /api/student/courses/:courseId/learn

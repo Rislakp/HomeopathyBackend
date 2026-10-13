@@ -27,6 +27,24 @@ const buildProfileResponse = async (user, studentDoc = null) => {
   const resolvedPhone = (studentDoc && (studentDoc.phone || studentDoc.contactNumber)) || user.phone || user.contactNumber || '';
   const canonicalId = (user && user._id) ? user._id.toString() : ((studentDoc && studentDoc._id) ? studentDoc._id.toString() : (user.id || ''));
 
+  // ── Multi-course: collect all enrolled course IDs ─────────────────────────
+  const seenIds = new Set();
+  const registeredCourseIds = [];
+  const addRCId = (id) => {
+    const s = String(id || '').trim();
+    if (!s || seenIds.has(s)) return;
+    seenIds.add(s);
+    registeredCourseIds.push(s);
+  };
+  if (studentDoc) {
+    if (Array.isArray(studentDoc.courseIds)) studentDoc.courseIds.forEach(addRCId);
+    if (studentDoc.courseId) addRCId(studentDoc.courseId);
+    if (studentDoc.courseRef) addRCId(String(studentDoc.courseRef));
+  }
+  if (Array.isArray(user.courseIds)) user.courseIds.forEach(addRCId);
+  if (user.courseId) addRCId(user.courseId);
+  if (courseId) addRCId(courseId);
+
   const base = {
     _id: canonicalId,
     id: canonicalId,
@@ -35,11 +53,15 @@ const buildProfileResponse = async (user, studentDoc = null) => {
     role: (user.role || 'student').toLowerCase().trim(),
     phone: resolvedPhone,
     contactNumber: resolvedPhone,
+    // Legacy single-course fields (backward compatibility)
     registeredCourseId: courseId || '',
     courseId: courseId || '',
     course: courseTitle,
     preferredCourse: user.preferredCourse || courseTitle,
     courseRef: courseRef ? courseRef.toString() : null,
+    // Multi-course fields
+    courseIds: registeredCourseIds,
+    registeredCourseIds: registeredCourseIds,
     dateOfBirth: (studentDoc && studentDoc.dateOfBirth) || user.dateOfBirth || '',
     qualification: (studentDoc && studentDoc.qualification) || user.qualification || '',
     subscription: (studentDoc && studentDoc.subscription) || 'Free',
@@ -232,6 +254,9 @@ const getProfile = async (req, res) => {
         courseId: studentDoc.courseId || '',
         registeredCourseId: studentDoc.courseId || '',
         courseRef: studentDoc.courseRef || null,
+        // Multi-course
+        courseIds: Array.isArray(studentDoc.courseIds) ? studentDoc.courseIds : [],
+        registeredCourseIds: Array.isArray(studentDoc.courseIds) ? studentDoc.courseIds : [],
         dateOfBirth: studentDoc.dateOfBirth || '',
         qualification: studentDoc.qualification || '',
         subscription: studentDoc.subscription || 'Free',

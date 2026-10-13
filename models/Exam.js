@@ -70,6 +70,14 @@ const examSchema = new mongoose.Schema({
     default: 'grand_mock',
     trim: true
   },
+  // Single source of truth for exam availability. Existing documents that
+  // predate this field are treated as Published by the read paths.
+  status: {
+    type: String,
+    enum: ['Draft', 'Published'],
+    default: 'Published',
+    trim: true,
+  },
   courseId: {
     type: String,
     ref: 'Course',
@@ -77,11 +85,29 @@ const examSchema = new mongoose.Schema({
     required: false,
     default: null
   },
+  // Multi-course Course Tests store every selected public course ID here.
+  // `courseId` remains populated as the primary/legacy single-course value.
+  courseIds: [{
+    type: String,
+    trim: true,
+  }],
   moduleId: {
     type: String,
     trim: true,
     required: false,
     default: null
+  },
+  courseIds: {
+    type: [String],
+    trim: true,
+    default: undefined,
+  },
+  // Multiple modules for Academic Course Tests. moduleId remains the first
+  // selected module for compatibility with existing readers and documents.
+  moduleIds: {
+    type: [String],
+    trim: true,
+    default: undefined,
   },
   courseName: {
     type: String,
@@ -126,8 +152,10 @@ const examSchema = new mongoose.Schema({
 
 // MongoDB performance indexes
 examSchema.index({ testType: 1, createdAt: -1 });
+examSchema.index({ status: 1, testType: 1, createdAt: -1 });
 examSchema.index({ courseId: 1, moduleId: 1 });
 examSchema.index({ courseId: 1 });
+examSchema.index({ courseIds: 1 });
 examSchema.index({ createdAt: -1 });
 
 module.exports = mongoose.models.Exam || mongoose.model('Exam', examSchema);

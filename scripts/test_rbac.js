@@ -100,6 +100,9 @@ async function runRBACTests() {
           contactNumber: studentPhone,
           qualification: 'BHMS',
           dateOfBirth: '2000-01-01',
+          // Multi-course: supply at least one course (required since multi-course update)
+          course: 'UPSC',
+          registeredCourseIds: ['UPSC'],
         }
       );
       assert(
@@ -109,6 +112,19 @@ async function runRBACTests() {
       );
       studentToken = regRes.data?.token;
       studentId = regRes.data?.user?.id;
+
+      // Approve the test student in DB so login-gated tests (Tests 2-7) can proceed.
+      // Registration intentionally creates students as Pending; RBAC tests need an Active student.
+      if (studentId) {
+        await User.updateOne(
+          { _id: studentId },
+          { $set: { accountStatus: 'Approved', status: 'Active', isApproved: true } }
+        );
+        await Student.updateOne(
+          { email: studentEmail },
+          { $set: { accountStatus: 'Approved', status: 'Active', isApproved: true } }
+        );
+      }
 
       // Create Admin user directly in MongoDB
       const adminUser = await User.create({

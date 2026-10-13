@@ -42,6 +42,16 @@ const demoVideoSchema = new mongoose.Schema({
     ref: 'Course',
     default: null,
   },
+  storageProvider: {
+    type: String,
+    trim: true,
+    default: '',
+  },
+  s3Key: {
+    type: String,
+    trim: true,
+    default: '',
+  },
 }, {
   timestamps: true,
 });
