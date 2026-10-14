@@ -849,41 +849,67 @@ exports.uploadRecordingVideo = async (req, res) => {
 exports.deleteRecording = async (req, res) => {
   try {
     const { id } = req.params;
+    if (!id || typeof id !== 'string') {
+      return res.status(400).json({ success: false, message: 'Invalid recording ID format' });
+    }
 
-    // Determine whether the supplied identifier is a MongoDB ObjectId or an S3 key/public_id
-    const isObjectId = mongoose.Types.ObjectId.isValid(id);
+    const trimmedId = id.trim();
+    const isObjectId = mongoose.Types.ObjectId.isValid(trimmedId);
     let recording = null;
 
     if (isObjectId) {
-      // Try to delete by MongoDB _id first
-      recording = await Recording.findByIdAndDelete(id);
+      // 1. Try lookup by MongoDB _id first
+      recording = await Recording.findById(trimmedId);
     }
 
-    // If not found (or not a valid ObjectId), attempt lookup by s3Key/public_id
+    // 2. If not found (or not an ObjectId), attempt fallback lookup by s3Key
     if (!recording) {
-      // Look for a document where the stored s3Key matches the supplied id
-      // The public_id field in the API contract may be the s3Key when storageProvider is 's3'
-      recording = await Recording.findOneAndDelete({ s3Key: id });
+      recording = await Recording.findOne({ s3Key: trimmedId });
     }
 
-    // If still not found, respond with 404 per contract
+    // 3. If document does not exist, return documented 404
     if (!recording) {
       return res.status(404).json({ success: false, message: 'Recording document not found' });
     }
 
-    // Clean up the associated media asset if any
-    const targetUrl = recording.recordedVideoUrl || recording.recordingFileUrl || '';
-    if (targetUrl) {
-      if (targetUrl.includes('cloudinary.com')) {
-        await deleteCloudinaryByUrl(targetUrl).catch(() => {});
-      } else if (s3Service.isS3Configured() || targetUrl.includes('amazonaws.com')) {
-        await s3Service.deleteFile(targetUrl).catch(() => {});
+    // 4. Clean up storage asset before removing database record
+    const targetAsset = recording.s3Key || recording.recordedVideoUrl || recording.recordingFileUrl || '';
+    const isS3Storage = recording.storageProvider === 's3' || (recording.s3Key && recording.s3Key.length > 0) || (typeof targetAsset === 'string' && targetAsset.includes('amazonaws.com'));
+
+    if (isS3Storage && s3Service.isS3Configured() && targetAsset) {
+      try {
+        await s3Service.deleteFile(targetAsset);
+      } catch (s3Err) {
+        // If the S3 error indicates the object is already gone (404 / NoSuchKey), proceed with DB deletion
+        const isNotFound = s3Err.name === 'NoSuchKey' || s3Err.name === 'NotFound' || s3Err.$metadata?.httpStatusCode === 404;
+        if (!isNotFound) {
+          console.error('[Delete Recording] S3 asset deletion failed:', s3Err.message);
+          return res.status(500).json({
+            success: false,
+            message: 'Failed to delete S3 video asset. Recording document was not removed.',
+            error: s3Err.message,
+          });
+        }
+      }
+    } else if (targetAsset && (recording.storageProvider === 'cloudinary' || (typeof targetAsset === 'string' && targetAsset.includes('cloudinary.com')))) {
+      try {
+        await deleteCloudinaryByUrl(targetAsset);
+      } catch (cloudErr) {
+        console.warn('[Delete Recording] Cloudinary cleanup warning:', cloudErr.message);
       }
     }
 
+    // 5. Only remove MongoDB record after storage cleanup succeeds or is confirmed non-existent
+    await Recording.findByIdAndDelete(recording._id);
+
     return res.status(200).json({
       success: true,
-      message: 'Recording document and video asset deleted successfully',
+      message: 'Recording deleted successfully',
+      data: {
+        deletedId: recording._id.toString(),
+        s3Key: recording.s3Key || '',
+        storageProvider: recording.storageProvider || '',
+      },
     });
   } catch (error) {
     console.error('Delete Recording Error:', error);

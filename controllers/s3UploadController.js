@@ -18,7 +18,7 @@ const Lesson = require('../models/Lesson.model');
 const Student = require('../models/Student');
 const { getS3Url, getS3KeyFromUrl } = require('../services/s3Service');
 const { verifyStudentCourseAccess } = require('../utils/courseAccessHelper');
-const { normalizeS3Reference } = require('../utils/s3MediaSigner');
+const { normalizeS3Reference, encodeSignedUrl } = require('../utils/s3MediaSigner');
 
 const PART_URL_TTL_SECONDS = 900;
 const MEDIA_URL_TTL_SECONDS = 900;
@@ -211,7 +211,8 @@ const partUrl = async (req, res) => {
   if (!validUploadId(uploadId)) return fail(res, 400, 'Invalid multipart uploadId.');
   if (!Number.isInteger(part) || part < 1 || part > 10000 || String(partNumber).trim() !== String(part)) return fail(res, 400, 'partNumber must be an integer from 1 to 10000.');
   try {
-    const url = await getSignedUrl(s3Client, new UploadPartCommand({ Bucket: bucket, Key: key, UploadId: uploadId, PartNumber: part }), { expiresIn: PART_URL_TTL_SECONDS });
+    const rawUrl = await getSignedUrl(s3Client, new UploadPartCommand({ Bucket: bucket, Key: key, UploadId: uploadId, PartNumber: part }), { expiresIn: PART_URL_TTL_SECONDS });
+    const url = encodeSignedUrl(rawUrl);
     log('part URL issued', { key, partNumber: part, userId: req.user?.id });
     return res.json({ success: true, url, partNumber: part, expiresIn: PART_URL_TTL_SECONDS });
   } catch (error) { return handleS3Error(res, error, 'part-url'); }
@@ -344,7 +345,8 @@ const initiateObjectUpload = async (req, res) => {
 
   try {
     const command = new PutObjectCommand({ Bucket: bucket, Key: key, ContentType: contentType.toLowerCase(), ContentLength: fileSize });
-    const url = await getSignedUrl(s3Client, command, { expiresIn: SINGLE_UPLOAD_URL_TTL_SECONDS });
+    const rawUrl = await getSignedUrl(s3Client, command, { expiresIn: SINGLE_UPLOAD_URL_TTL_SECONDS });
+    const url = encodeSignedUrl(rawUrl);
     const media = makeReference({ key, fileName, contentType: contentType.toLowerCase(), fileSize, uploadStatus: 'pending' });
     console.info('[S3 PRESIGN]', {
       'bucket configured': Boolean(bucket),
@@ -715,11 +717,12 @@ const getMediaAccessUrl = async (req, res) => {
     } else if (prefix === 'pdfs/') {
       contentType = 'application/pdf';
     }
-    const url = await getSignedUrl(s3Client, new GetObjectCommand({
+    const rawUrl = await getSignedUrl(s3Client, new GetObjectCommand({
       Bucket: bucket,
       Key: key,
       ...(contentType ? { ResponseContentType: contentType, ResponseContentDisposition: 'inline' } : {}),
     }), { expiresIn: MEDIA_URL_TTL_SECONDS });
+    const url = encodeSignedUrl(rawUrl);
 
     const mediaOwnerId = resolvedCourse?.courseId || resolvedCourse?._id || recordingDoc?.courseId || recordingDoc?._id || demoVideoDoc?.courseId || 'authorized-media';
     console.info('[S3 media] access URL issued', { courseId: String(mediaOwnerId), prefix, userId: req.user?.id });

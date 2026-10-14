@@ -48,5 +48,49 @@ test('signS3Reference plus-encoding regression', async (t) => {
   assert.equal(queryPart.includes('+'), false, 'Raw plus signs must be removed');
 });
 
+test('s3UploadController.getMediaAccessUrl encodes literal plus signs in signed URL', async (t) => {
+  const controller = require('../controllers/s3UploadController');
+  const Course = require('../models/Course');
+  const { s3Client } = require('../config/s3');
+
+  const origFindOne = Course.findOne;
+  const origSend = s3Client.send;
+
+  Course.findOne = async () => ({
+    _id: new (require('mongoose').Types.ObjectId)(),
+    courseId: 'CRS-TEST',
+    modules: [{
+      lessons: [{
+        videoParts: [{ s3Key: 'videos/test-video.mp4' }]
+      }]
+    }]
+  });
+  s3Client.send = async () => ({ ContentLength: 1024 });
+
+  const req = {
+    query: { s3Key: 'videos/test-video.mp4' },
+    user: { id: 'admin1', role: 'admin' },
+  };
+  let statusCode = 200;
+  let responseData = null;
+  const res = {
+    status(code) { statusCode = code; return this; },
+    json(data) { responseData = data; return this; },
+  };
+
+  try {
+    await controller.getMediaAccessUrl(req, res);
+    assert.strictEqual(statusCode, 200);
+    assert.ok(responseData && responseData.url);
+    assert.ok(responseData.url.includes('%2B'), 'URL should contain %2B');
+    assert.strictEqual(responseData.url.includes('+'), false, 'URL should not contain raw plus');
+  } finally {
+    Course.findOne = origFindOne;
+    s3Client.send = origSend;
+  }
+});
+
 // Restore original implementation after tests.
-presigner.getSignedUrl = originalGetSignedUrl;
+process.on('exit', () => {
+  presigner.getSignedUrl = originalGetSignedUrl;
+});
