@@ -9,6 +9,7 @@ const { extractCleanNameAndExt } = require('../middleware/upload');
 const memoryCache = require('../utils/cache');
 const { signS3Reference, stripS3ReferenceUrls, normalizeS3Reference } = require('../utils/s3MediaSigner');
 const { getS3KeyFromUrl } = require('../services/s3Service');
+const { calculateCourseTotalDurationMinutes } = require('../utils/courseDurationHelper');
 
 
 const ALLOWED_VIDEO_FORMATS = ['mp4', 'mov', 'avi', 'mkv', 'webm', 'flv', 'wmv', 'm4v'];
@@ -765,6 +766,7 @@ const serializeCourse = async (courseDoc, req) => {
   }
 
   obj.totalModules = Array.isArray(obj.modules) ? obj.modules.length : (obj.modules ? obj.modules.length : 0);
+  obj.totalDurationMinutes = calculateCourseTotalDurationMinutes(obj);
 
   return obj;
 };
@@ -847,7 +849,7 @@ exports.getCourses = async (req, res) => {
       [total, courses] = await Promise.all([
         Course.countDocuments(filter),
         courseQuery
-          .select('courseId courseTitle instructor price shortDescription duration status thumbnail thumbnailMedia bannerUrl courseBanner category modules._id createdAt updatedAt')
+          .select('courseId courseTitle instructor price shortDescription duration status thumbnail thumbnailMedia bannerUrl courseBanner category modules._id modules.duration modules.durationMinutes modules.lessons.durationOrPages modules.lessons.videoDuration modules.lessons.duration createdAt updatedAt')
           .sort({ createdAt: -1 })
           .skip(skip)
           .limit(limit)
@@ -887,6 +889,7 @@ exports.getCourses = async (req, res) => {
         absoluteBanner = isMongooseQuery ? optimizeCloudinaryUrl(cloudinaryUrl) : cloudinaryUrl;
       }
       const totalModules = Array.isArray(course.modules) ? course.modules.length : 0;
+      const totalDurationMinutes = calculateCourseTotalDurationMinutes(course);
       // The list endpoint needs a count, never the curriculum array itself.
       const { modules, ...courseListFields } = course;
       return {
@@ -901,6 +904,7 @@ exports.getCourses = async (req, res) => {
         banner: absoluteBanner,
         thumbnailUrl: absoluteBanner,
         totalModules,
+        totalDurationMinutes,
       };
     }));
 

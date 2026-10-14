@@ -1,6 +1,7 @@
 const User = require('../models/User');
 let Student;
 try { Student = require('../models/Student'); } catch (e) { /* optional */ }
+const { calculateCourseTotalDurationMinutes } = require('../utils/courseDurationHelper');
 
 const EMAIL_REGEX = /^\w+([\.-]?\w+)*@\w+([\.-]?\w+)*(\.\w{2,3})+$/;
 
@@ -130,6 +131,7 @@ const buildProfileResponse = async (user, studentDoc = null) => {
         courseTitle: targetCourse.courseTitle || courseTitle || 'Assigned Course',
         thumbnail: targetCourse.thumbnail || targetCourse.bannerUrl || '',
         bannerUrl: targetCourse.bannerUrl || targetCourse.thumbnail || '',
+        totalDurationMinutes: calculateCourseTotalDurationMinutes(targetCourse),
         totalModules: Array.isArray(targetCourse.modules) ? targetCourse.modules.length : 0,
         totalLessons: summary.totalLessons,
         completedLessons: summary.completedLessons,

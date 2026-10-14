@@ -1,5 +1,6 @@
 const mongoose = require('mongoose');
 const Counter = require('./Counter');
+const { calculateCourseTotalDurationMinutes } = require('../utils/courseDurationHelper');
 
 // Shared subdocument schema for any file/resource (video part, PDF note, attachment)
 const resourceSchema = new mongoose.Schema({
@@ -311,6 +312,11 @@ courseSchema.virtual('totalModules').get(function() {
 // Virtual for enrolledCount
 courseSchema.virtual('enrolledCount').get(function() {
   return this.enrolledStudents ? this.enrolledStudents.length : 0;
+});
+
+// Virtual for totalDurationMinutes (configured course duration in minutes derived from modules/lessons)
+courseSchema.virtual('totalDurationMinutes').get(function() {
+  return calculateCourseTotalDurationMinutes(this);
 });
 
 // Auto-generate unique courseId before validation

@@ -6,6 +6,7 @@ const ContentItemProgress = require('../models/ContentItemProgress');
 const { verifyStudentCourseAccess } = require('../utils/courseAccessHelper');
 const { logActivity } = require('../utils/activityLogger');
 const { signS3Reference, normalizeS3Reference } = require('../utils/s3MediaSigner');
+const { calculateCourseTotalDurationMinutes } = require('../utils/courseDurationHelper');
 
 const addSignedS3MediaUrls = async (course) => {
   if (!course || typeof course !== 'object') return course;
@@ -208,6 +209,7 @@ function buildProgressSummary(course, contentProgressDocs, studyTimeSeconds = 0)
   return {
     courseId: course.courseId || (course._id ? course._id.toString() : ''),
     courseObjId: course._id ? course._id.toString() : '',
+    totalDurationMinutes: calculateCourseTotalDurationMinutes(course),
     totalItems,
     totalLessons: totalItems,        // alias kept for backward-compat
     completedItems,
@@ -361,6 +363,8 @@ function formatCourseForStudent(courseDoc) {
     });
   }
 
+  course.totalDurationMinutes = calculateCourseTotalDurationMinutes(course);
+
   return course;
 }
 
@@ -478,6 +482,7 @@ const getMyCourses = async (req, res) => {
         thumbnail: formattedCourse.thumbnail || formattedCourse.bannerUrl,
         bannerUrl: formattedCourse.bannerUrl,
         duration: formattedCourse.duration,
+        totalDurationMinutes: calculateCourseTotalDurationMinutes(formattedCourse),
         modules: formattedCourse.modules || [],
         totalModules: Array.isArray(formattedCourse.modules) ? formattedCourse.modules.length : (c.modules ? c.modules.length : totalModules),
         totalLessons: summary.totalLessons,
@@ -679,11 +684,13 @@ const getMyCourseContent = async (req, res) => {
     formattedCourse.status = summary.status;
     formattedCourse.studyTimeSeconds = summary.studyTimeSeconds;
     formattedCourse.studyTimeHours = summary.studyTimeHours;
+    formattedCourse.totalDurationMinutes = calculateCourseTotalDurationMinutes(formattedCourse);
 
     return res.status(200).json({
       success: true,
       data: {
         course: formattedCourse,
+        totalDurationMinutes: formattedCourse.totalDurationMinutes,
         progress: progressMap,
         summary: summary,
         progressSummary: summary,
@@ -709,6 +716,7 @@ const getMyCourseContent = async (req, res) => {
       progressPercentage: summary.completionPercentage,
       percentage: summary.percentage,
       progress: summary.progress,
+      totalDurationMinutes: formattedCourse.totalDurationMinutes,
       totalLessons: summary.totalLessons,
       completedLessons: summary.completedLessons,
       status: summary.status,
@@ -1140,6 +1148,7 @@ const getMyProgress = async (req, res) => {
       status: summary.status,
       studyTimeSeconds: summary.studyTimeSeconds,
       studyTimeHours: summary.studyTimeHours,
+      totalDurationMinutes: summary.totalDurationMinutes || calculateCourseTotalDurationMinutes(course),
     });
   } catch (error) {
     console.error('getMyProgress Error:', error);
@@ -1309,4 +1318,5 @@ module.exports = {
   buildProgressSummary,
   saveCourseSummary,
   extractDurationSeconds,
+  formatCourseForStudent,
 };
