@@ -849,15 +849,29 @@ exports.uploadRecordingVideo = async (req, res) => {
 exports.deleteRecording = async (req, res) => {
   try {
     const { id } = req.params;
-    if (!mongoose.Types.ObjectId.isValid(id)) {
-      return res.status(400).json({ success: false, message: 'Invalid recording ID format' });
+
+    // Determine whether the supplied identifier is a MongoDB ObjectId or an S3 key/public_id
+    const isObjectId = mongoose.Types.ObjectId.isValid(id);
+    let recording = null;
+
+    if (isObjectId) {
+      // Try to delete by MongoDB _id first
+      recording = await Recording.findByIdAndDelete(id);
     }
 
-    const recording = await Recording.findByIdAndDelete(id);
+    // If not found (or not a valid ObjectId), attempt lookup by s3Key/public_id
+    if (!recording) {
+      // Look for a document where the stored s3Key matches the supplied id
+      // The public_id field in the API contract may be the s3Key when storageProvider is 's3'
+      recording = await Recording.findOneAndDelete({ s3Key: id });
+    }
+
+    // If still not found, respond with 404 per contract
     if (!recording) {
       return res.status(404).json({ success: false, message: 'Recording document not found' });
     }
 
+    // Clean up the associated media asset if any
     const targetUrl = recording.recordedVideoUrl || recording.recordingFileUrl || '';
     if (targetUrl) {
       if (targetUrl.includes('cloudinary.com')) {
