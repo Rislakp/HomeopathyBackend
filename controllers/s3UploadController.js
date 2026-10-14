@@ -18,7 +18,7 @@ const Lesson = require('../models/Lesson.model');
 const Student = require('../models/Student');
 const { getS3Url, getS3KeyFromUrl } = require('../services/s3Service');
 const { verifyStudentCourseAccess } = require('../utils/courseAccessHelper');
-const { normalizeS3Reference, encodeSignedUrl } = require('../utils/s3MediaSigner');
+const { normalizeS3Reference, encodeSignedUrl, resolveMediaRecord, getVerifiedS3KeyForLegacyAsset } = require('../utils/s3MediaSigner');
 
 const PART_URL_TTL_SECONDS = 900;
 const MEDIA_URL_TTL_SECONDS = 900;
@@ -442,6 +442,12 @@ const courseContainsMediaKey = (course, key) => {
   if (getS3KeyFromUrl(getProp(course, 'courseBanner')) === targetKey) return true;
 
   const modules = getProp(course, 'modules') || course.modules || [];
+  const decodedTarget = (() => {
+    try { return decodeURIComponent(targetKey); } catch (_) { return targetKey; }
+  })();
+  const targetBaseName = decodedTarget.split('/').pop().trim().toLowerCase();
+  const verifiedLegacyKey = typeof getVerifiedS3KeyForLegacyAsset === 'function' ? getVerifiedS3KeyForLegacyAsset(targetKey) : null;
+
   for (const moduleItem of modules) {
     const lessons = getProp(moduleItem, 'lessons') || moduleItem.lessons || [];
     for (const lesson of lessons) {
@@ -454,7 +460,7 @@ const courseContainsMediaKey = (course, key) => {
       if (getS3KeyFromUrl(getProp(lesson, 'url')) === targetKey) return true;
       if (getS3KeyFromUrl(getProp(lesson, 'path')) === targetKey) return true;
       const lessonVideoUrl = getProp(lesson, 'videoUrl');
-      if (typeof lessonVideoUrl === 'string' && lessonVideoUrl.includes(targetKey)) return true;
+      if (typeof lessonVideoUrl === 'string' && (lessonVideoUrl.includes(targetKey) || lessonVideoUrl.includes(decodedTarget))) return true;
 
       for (const collection of ['videoParts', 'pdfNotes', 'assignments', 'attachments']) {
         const list = getProp(lesson, collection) || lesson[collection] || [];
@@ -466,9 +472,16 @@ const courseContainsMediaKey = (course, key) => {
             getS3KeyFromUrl(getProp(item, 'fileUrl')) ||
             getS3KeyFromUrl(getProp(item, 'documentUrl')) ||
             getS3KeyFromUrl(getProp(item, 'path'));
-          if (itemKey === targetKey) return true;
+          if (itemKey === targetKey || (verifiedLegacyKey && itemKey === verifiedLegacyKey)) return true;
           const itemUrl = getProp(item, 'url') || getProp(item, 'secure_url') || getProp(item, 'secureUrl');
-          if (typeof itemUrl === 'string' && itemUrl.includes(targetKey)) return true;
+          if (typeof itemUrl === 'string') {
+            if (itemUrl.includes(targetKey) || itemUrl.includes(decodedTarget)) return true;
+            try {
+              if (decodeURIComponent(itemUrl).includes(decodedTarget)) return true;
+            } catch (_) {}
+          }
+          const itemTitle = String(getProp(item, 'title') || getProp(item, 'fileName') || getProp(item, 'originalFileName') || '').trim().toLowerCase();
+          if (targetBaseName && (itemTitle === targetBaseName || itemTitle === targetBaseName.replace(/\s*\(\d+\)\s*/g, ' ').replace(/\s+/g, ' ').trim())) return true;
         }
       }
     }
@@ -483,15 +496,18 @@ const getMediaAccessUrl = async (req, res) => {
   const rawKey = req.query?.s3Key || req.query?.key || req.body?.s3Key || req.body?.key;
   if (typeof rawKey !== 'string' || !rawKey.trim()) return fail(res, 400, 's3Key is required.');
 
-  // Handle legacy Cloudinary or local media URLs seamlessly
+  // Handle external Cloudinary URLs seamlessly
   const trimmedRawKey = rawKey.trim();
-  if (trimmedRawKey.includes('cloudinary.com') || trimmedRawKey.includes('/uploads/')) {
+  if (trimmedRawKey.includes('cloudinary.com')) {
     return res.json({ success: true, url: trimmedRawKey, key: trimmedRawKey, s3Key: trimmedRawKey });
   }
 
+  const isLegacyUpload = trimmedRawKey.includes('/uploads/');
   const key = getS3KeyFromUrl(trimmedRawKey) || trimmedRawKey;
   const prefix = ['videos/', 'images/', 'pdfs/', 'documents/', 'attachments/', 'live_records/', 'grand_mock_questions/', 'reviews/', 'unani_ranks/'].find((item) => typeof key === 'string' && key.startsWith(item));
-  if (!prefix || !validStoredKey(key, prefix.slice(0, -1))) return fail(res, 400, 'Invalid S3 media key.');
+  if (!isLegacyUpload && (!prefix || !validStoredKey(key, prefix.slice(0, -1)))) {
+    return fail(res, 400, 'Invalid S3 media key.');
+  }
 
   try {
     let resolvedCourse = null;
@@ -585,35 +601,56 @@ const getMediaAccessUrl = async (req, res) => {
       if (!foundMedia) {
         return fail(res, 404, 'S3 media was not found in this course.');
       }
-    } else {
-      // 2. No courseId specified: search across Course, Recording, DemoVideo, and Lesson
+      const decodedKey = (() => { try { return decodeURIComponent(key); } catch (_) { return key; } })();
+      const verifiedKey = isLegacyUpload ? getVerifiedS3KeyForLegacyAsset(key) : null;
+      const baseName = decodedKey.split('/').pop().trim();
+
+      const searchConditions = [
+        { 'thumbnailMedia.s3Key': key },
+        { 'thumbnailMedia.url': { $regex: escapeRegex(key) } },
+        { thumbnail: { $regex: escapeRegex(key) } },
+        { bannerUrl: { $regex: escapeRegex(key) } },
+        { courseBanner: { $regex: escapeRegex(key) } },
+        { 'modules.lessons.videoS3Key': key },
+        { 'modules.lessons.s3Key': key },
+        { 'modules.lessons.videoUrl': { $regex: escapeRegex(key) } },
+        { 'modules.lessons.fileUrl': { $regex: escapeRegex(key) } },
+        { 'modules.lessons.pdfUrl': { $regex: escapeRegex(key) } },
+        { 'modules.lessons.documentUrl': { $regex: escapeRegex(key) } },
+        { 'modules.lessons.url': { $regex: escapeRegex(key) } },
+        { 'modules.lessons.path': { $regex: escapeRegex(key) } },
+        { 'modules.lessons.videoParts.s3Key': key },
+        { 'modules.lessons.videoParts.url': { $regex: escapeRegex(key) } },
+        { 'modules.lessons.videoParts.secure_url': { $regex: escapeRegex(key) } },
+        { 'modules.lessons.videoParts.secureUrl': { $regex: escapeRegex(key) } },
+        { 'modules.lessons.pdfNotes.s3Key': key },
+        { 'modules.lessons.pdfNotes.url': { $regex: escapeRegex(key) } },
+        { 'modules.lessons.pdfNotes.secure_url': { $regex: escapeRegex(key) } },
+        { 'modules.lessons.assignments.s3Key': key },
+        { 'modules.lessons.assignments.url': { $regex: escapeRegex(key) } },
+        { 'modules.lessons.attachments.s3Key': key },
+        { 'modules.lessons.attachments.url': { $regex: escapeRegex(key) } },
+      ];
+
+      if (isLegacyUpload) {
+        if (decodedKey !== key) {
+          searchConditions.push({ 'modules.lessons.attachments.url': { $regex: escapeRegex(decodedKey) } });
+          searchConditions.push({ 'modules.lessons.assignments.url': { $regex: escapeRegex(decodedKey) } });
+          searchConditions.push({ 'modules.lessons.pdfNotes.url': { $regex: escapeRegex(decodedKey) } });
+        }
+        if (verifiedKey) {
+          searchConditions.push({ 'modules.lessons.attachments.s3Key': verifiedKey });
+          searchConditions.push({ 'modules.lessons.assignments.s3Key': verifiedKey });
+          searchConditions.push({ 'modules.lessons.pdfNotes.s3Key': verifiedKey });
+        }
+        if (baseName) {
+          searchConditions.push({ 'modules.lessons.attachments.title': { $regex: escapeRegex(baseName), $options: 'i' } });
+          searchConditions.push({ 'modules.lessons.attachments.fileName': { $regex: escapeRegex(baseName), $options: 'i' } });
+        }
+      }
+
       resolvedCourse = await Course.findOne({
-        $or: [
-          { 'thumbnailMedia.s3Key': key },
-          { 'thumbnailMedia.url': { $regex: escapeRegex(key) } },
-          { thumbnail: { $regex: escapeRegex(key) } },
-          { bannerUrl: { $regex: escapeRegex(key) } },
-          { courseBanner: { $regex: escapeRegex(key) } },
-          { 'modules.lessons.videoS3Key': key },
-          { 'modules.lessons.s3Key': key },
-          { 'modules.lessons.videoUrl': { $regex: escapeRegex(key) } },
-          { 'modules.lessons.fileUrl': { $regex: escapeRegex(key) } },
-          { 'modules.lessons.pdfUrl': { $regex: escapeRegex(key) } },
-          { 'modules.lessons.documentUrl': { $regex: escapeRegex(key) } },
-          { 'modules.lessons.url': { $regex: escapeRegex(key) } },
-          { 'modules.lessons.path': { $regex: escapeRegex(key) } },
-          { 'modules.lessons.videoParts.s3Key': key },
-          { 'modules.lessons.videoParts.url': { $regex: escapeRegex(key) } },
-          { 'modules.lessons.videoParts.secure_url': { $regex: escapeRegex(key) } },
-          { 'modules.lessons.videoParts.secureUrl': { $regex: escapeRegex(key) } },
-          { 'modules.lessons.pdfNotes.s3Key': key },
-          { 'modules.lessons.pdfNotes.url': { $regex: escapeRegex(key) } },
-          { 'modules.lessons.pdfNotes.secure_url': { $regex: escapeRegex(key) } },
-          { 'modules.lessons.assignments.s3Key': key },
-          { 'modules.lessons.assignments.url': { $regex: escapeRegex(key) } },
-          { 'modules.lessons.attachments.s3Key': key },
-          { 'modules.lessons.attachments.url': { $regex: escapeRegex(key) } },
-        ],
+        $or: searchConditions,
       });
 
       if (resolvedCourse && courseContainsMediaKey(resolvedCourse, key)) {
@@ -705,6 +742,26 @@ const getMediaAccessUrl = async (req, res) => {
       if (!await verifyStudentCourseAccess(req.user, resolvedCourse.courseId || resolvedCourse._id.toString())) {
         return fail(res, 403, 'You do not have access to this course.');
       }
+    }
+
+    // Handle legacy uploads after course verification and authorization
+    if (isLegacyUpload) {
+      const resolved = await resolveMediaRecord({ url: trimmedRawKey }, { course: resolvedCourse, courseId: resolvedCourse?.courseId || courseId });
+      if (resolved && resolved.url && !resolved.url.includes('/uploads/')) {
+        return res.json({
+          success: true,
+          url: resolved.url,
+          key: resolved.s3Key || trimmedRawKey,
+          s3Key: resolved.s3Key || trimmedRawKey,
+          expiresIn: MEDIA_URL_TTL_SECONDS,
+        });
+      }
+      console.warn('[S3 media] Legacy media resolution failure: unverified record', {
+        url: trimmedRawKey,
+        courseId: resolvedCourse?.courseId || courseId,
+        userId: req.user?.id,
+      });
+      return fail(res, 404, 'This legacy document is no longer available on the server and has no verified S3 backup.');
     }
 
     // 4. Confirm the referenced private object still exists before issuing a URL.

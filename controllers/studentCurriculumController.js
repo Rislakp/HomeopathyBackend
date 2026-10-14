@@ -5,7 +5,7 @@ const CourseProgress = require('../models/CourseProgress');
 const ContentItemProgress = require('../models/ContentItemProgress');
 const { verifyStudentCourseAccess } = require('../utils/courseAccessHelper');
 const { logActivity } = require('../utils/activityLogger');
-const { signS3Reference, normalizeS3Reference } = require('../utils/s3MediaSigner');
+const { signS3Reference, normalizeS3Reference, resolveMediaRecord } = require('../utils/s3MediaSigner');
 const { calculateCourseTotalDurationMinutes } = require('../utils/courseDurationHelper');
 
 const addSignedS3MediaUrls = async (course) => {
@@ -25,7 +25,7 @@ const addSignedS3MediaUrls = async (course) => {
     for (const lesson of moduleItem.lessons || []) {
       for (const [field, type] of [['videoParts', undefined], ['pdfNotes', 'application/pdf'], ['assignments', undefined], ['attachments', undefined]]) {
         if (Array.isArray(lesson[field])) {
-          lesson[field] = await Promise.all(lesson[field].map((resource) => signS3Reference(resource, type)));
+          lesson[field] = await Promise.all(lesson[field].map((resource) => resolveMediaRecord(resource, { responseContentType: type, course })));
         }
       }
       const firstVideo = (lesson.videoParts || []).find((resource) => resource.storageProvider === 's3' && resource.s3Key);

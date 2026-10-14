@@ -7,7 +7,7 @@ const path = require('path');
 const { deleteCloudinaryByUrl, getPublicIdFromUrl, parseCloudinaryUrl, uploadBufferToCloudinary, isCloudinaryConfigured, optimizeCloudinaryUrl } = require('../config/cloudinary');
 const { extractCleanNameAndExt } = require('../middleware/upload');
 const memoryCache = require('../utils/cache');
-const { signS3Reference, stripS3ReferenceUrls, normalizeS3Reference } = require('../utils/s3MediaSigner');
+const { signS3Reference, stripS3ReferenceUrls, normalizeS3Reference, resolveMediaRecord } = require('../utils/s3MediaSigner');
 const { getS3KeyFromUrl } = require('../services/s3Service');
 const { calculateCourseTotalDurationMinutes } = require('../utils/courseDurationHelper');
 
@@ -528,7 +528,23 @@ const serializeLesson = async (lesson, req) => {
         const normalized = toResourceObj(plain);
         if (normalized) plain = { ...plain, ...normalized };
       }
-      const resource = plain;
+      let resource = plain;
+      const rawResUrl = String(resource.url || resource.secure_url || resource.secureUrl || resource.fileUrl || resource.path || '').trim();
+      if (rawResUrl.includes('/uploads/')) {
+        const resolved = await resolveMediaRecord(resource);
+        if (resolved && resolved.storageProvider === 's3' && resolved.s3Key) {
+          plain = {
+            ...plain,
+            storageProvider: 's3',
+            s3Key: resolved.s3Key,
+            fileName: resolved.fileName || plain.fileName,
+          };
+          resource = plain;
+        } else if (resolved && resolved.available === false) {
+          plain.available = false;
+          plain.resolutionError = resolved.resolutionError;
+        }
+      }
       const s3Reference = normalizeS3Reference(resource);
       const media = s3Reference
         ? canSignS3Media
