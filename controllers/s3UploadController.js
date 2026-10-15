@@ -601,6 +601,8 @@ const getMediaAccessUrl = async (req, res) => {
       if (!foundMedia) {
         return fail(res, 404, 'S3 media was not found in this course.');
       }
+    } else {
+      // 2. No courseId specified: search across Course, Recording, DemoVideo, and Lesson
       const decodedKey = (() => { try { return decodeURIComponent(key); } catch (_) { return key; } })();
       const verifiedKey = isLegacyUpload ? getVerifiedS3KeyForLegacyAsset(key) : null;
       const baseName = decodedKey.split('/').pop().trim();

@@ -875,3 +875,81 @@ test('getMediaAccessUrl resolves course by courseId business ID and recognizes l
   assert.equal(unrelated.statusCode, 404);
   assert.equal(unrelated.body.success, false);
 });
+
+test('getMediaAccessUrl allows enrolled student to access COMBO COURSE video without courseId query and denies unauthorized student', async (t) => {
+  const originalFindOne = Course.findOne;
+  const originalStudentFindOne = Student.findOne;
+  const originalStudentFindById = Student.findById;
+  const originalSend = config.s3Client.send;
+
+  const key = 'videos/1791088299310-028d42b0-172e-4243-bdab-8b03e4b8332e-pharmacy-1.mp4';
+  const comboCourseId = 'CRS-000070';
+  const comboCourseDoc = {
+    _id: new mongoose.Types.ObjectId('6ac0ef52bce3dc3b2f5fa37f'),
+    courseId: comboCourseId,
+    courseTitle: 'COMBO COURSE',
+    modules: [{
+      moduleName: 'MODULE 1- PHARMACY',
+      lessons: [{
+        lessonTitle: 'PHARMACY PART 1',
+        videoS3Key: key,
+        s3Key: key,
+        videoParts: [{ s3Key: key }],
+      }],
+    }],
+  };
+
+  const enrolledStudent = {
+    _id: new mongoose.Types.ObjectId('6ac50c6274ca2bc1975b4964'),
+    userId: new mongoose.Types.ObjectId('6ac50c6174ca2bc1975b4961'),
+    name: 'Dr. CHINNU',
+    email: 'thunnarantheweavingbird@gmail.com',
+    status: 'Active',
+    subscriptionStatus: 'Active',
+    courseId: comboCourseId,
+    courseIds: [comboCourseId],
+  };
+
+  Course.findOne = async () => comboCourseDoc;
+  Student.findOne = (query) => {
+    const p = Promise.resolve(query?.email === enrolledStudent.email || String(query?.userId) === String(enrolledStudent.userId) ? enrolledStudent : null);
+    p.lean = async () => await p;
+    return p;
+  };
+  Student.findById = (id) => {
+    const p = Promise.resolve(String(id) === String(enrolledStudent._id) ? enrolledStudent : null);
+    p.lean = async () => await p;
+    return p;
+  };
+  config.s3Client.send = async () => ({ ContentLength: 1000000, ContentType: 'video/mp4' });
+
+  t.after(() => {
+    Course.findOne = originalFindOne;
+    Student.findOne = originalStudentFindOne;
+    Student.findById = originalStudentFindById;
+    config.s3Client.send = originalSend;
+  });
+
+  // 1. Enrolled student accessing video without courseId in query
+  const resEnrolled = await call(
+    controller.getMediaAccessUrl,
+    {},
+    { id: enrolledStudent.userId.toString(), email: enrolledStudent.email, role: 'student' },
+    { s3Key: key }
+  );
+  assert.equal(resEnrolled.statusCode, 200);
+  assert.equal(resEnrolled.body.success, true);
+  assert.equal(resEnrolled.body.s3Key, key);
+  assert.match(resEnrolled.body.url, /X-Amz-Signature=/);
+
+  // 2. Unauthorized student accessing the same video without courseId in query is rejected with 403
+  const resUnauth = await call(
+    controller.getMediaAccessUrl,
+    {},
+    { id: new mongoose.Types.ObjectId().toString(), email: 'stranger@example.com', role: 'student' },
+    { s3Key: key }
+  );
+  assert.equal(resUnauth.statusCode, 403);
+  assert.equal(resUnauth.body.success, false);
+});
+
