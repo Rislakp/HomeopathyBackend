@@ -953,3 +953,111 @@ test('getMediaAccessUrl allows enrolled student to access COMBO COURSE video wit
   assert.equal(resUnauth.body.success, false);
 });
 
+
+test('getMediaAccessUrl allows enrolled student to access shared attachment without courseId query and denies unauthorized student', async (t) => {
+  const originalFindOne = Course.findOne;
+  const originalStudentFindOne = Student.findOne;
+  const originalStudentFindById = Student.findById;
+  const originalSend = config.s3Client.send;
+
+  const key = 'pdfs/1791375394654-55f4eb12-7b22-4f11-b31a-b7e8f63c2f98-Pharmacy-OCT-6.pdf';
+  const comboCourseId = 'CRS-000070';
+  const otherCourseId = 'CRS-000040';
+
+  const comboCourseDoc = {
+    _id: new mongoose.Types.ObjectId('6ac0ef52bce3dc3b2f5fa37f'),
+    courseId: comboCourseId,
+    courseTitle: 'COMBO COURSE',
+    modules: [{
+      moduleName: 'MODULE 1- PHARMACY',
+      lessons: [{
+        lessonTitle: 'PHARMACY PART 1',
+        attachments: [{
+          title: 'Pharmacy OCT 6.docx.pdf',
+          storageProvider: 's3',
+          s3Key: key,
+        }],
+      }],
+    }],
+  };
+
+  const otherCourseDoc = {
+    _id: new mongoose.Types.ObjectId('6aab7ed254d18fda4f673a08'),
+    courseId: otherCourseId,
+    courseTitle: 'AIAPGET',
+    modules: [{
+      moduleName: 'PHARMACY',
+      lessons: [{
+        lessonTitle: 'PHARMACY INTRO',
+        attachments: [{
+          title: 'Pharmacy OCT 6.docx.pdf',
+          storageProvider: 's3',
+          s3Key: key,
+        }],
+      }],
+    }],
+  };
+
+  const enrolledStudent = {
+    _id: new mongoose.Types.ObjectId('6ac50c6274ca2bc1975b4964'),
+    userId: new mongoose.Types.ObjectId('6ac50c6174ca2bc1975b4961'),
+    name: 'Dr. CHINNU',
+    email: 'thunnarantheweavingbird@gmail.com',
+    status: 'Active',
+    subscriptionStatus: 'Active',
+    courseId: comboCourseId,
+    courseIds: [comboCourseId],
+  };
+
+  Course.findOne = async (query) => {
+    // If querying specifically for student's enrolled courses, return comboCourseDoc
+    if (query && query.$and && Array.isArray(query.$and)) {
+      const enrolledOr = query.$and[0]?.$or || [];
+      const matchesEnrolled = enrolledOr.some((item) => item.courseId === comboCourseId || String(item._id) === String(comboCourseDoc._id));
+      if (matchesEnrolled) return comboCourseDoc;
+    }
+    // Default fallback returns other course (which student is NOT enrolled in)
+    return otherCourseDoc;
+  };
+
+  Student.findOne = (query) => {
+    const p = Promise.resolve(query?.email === enrolledStudent.email || String(query?.userId) === String(enrolledStudent.userId) ? enrolledStudent : null);
+    p.lean = async () => await p;
+    return p;
+  };
+  Student.findById = (id) => {
+    const p = Promise.resolve(String(id) === String(enrolledStudent._id) ? enrolledStudent : null);
+    p.lean = async () => await p;
+    return p;
+  };
+  config.s3Client.send = async () => ({ ContentLength: 586976, ContentType: 'application/pdf' });
+
+  t.after(() => {
+    Course.findOne = originalFindOne;
+    Student.findOne = originalStudentFindOne;
+    Student.findById = originalStudentFindById;
+    config.s3Client.send = originalSend;
+  });
+
+  // 1. Enrolled student accessing shared attachment without courseId query succeeds
+  const resEnrolled = await call(
+    controller.getMediaAccessUrl,
+    {},
+    { id: enrolledStudent.userId.toString(), email: enrolledStudent.email, role: 'student' },
+    { s3Key: key }
+  );
+  assert.equal(resEnrolled.statusCode, 200);
+  assert.equal(resEnrolled.body.success, true);
+  assert.equal(resEnrolled.body.s3Key, key);
+  assert.match(resEnrolled.body.url, /X-Amz-Signature=/);
+
+  // 2. Unauthorized student accessing the shared attachment without courseId query is rejected with 403
+  const resUnauth = await call(
+    controller.getMediaAccessUrl,
+    {},
+    { id: new mongoose.Types.ObjectId().toString(), email: 'stranger@example.com', role: 'student' },
+    { s3Key: key }
+  );
+  assert.equal(resUnauth.statusCode, 403);
+  assert.equal(resUnauth.body.success, false);
+});

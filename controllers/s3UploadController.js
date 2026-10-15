@@ -515,11 +515,17 @@ const getMediaAccessUrl = async (req, res) => {
     let recordingDoc = null;
     let demoVideoDoc = null;
 
+    const role = (req.user?.role || '').toLowerCase();
+    const isStaff = ['admin', 'superadmin'].includes(role);
+
     // 1. If courseId is explicitly provided, verify media belongs to this course
     if (courseId) {
-      const courseQuery = mongoose.Types.ObjectId.isValid(courseId)
-        ? Course.findById(courseId)
-        : Course.findOne({ courseId });
+      const courseQuery = Course.findOne({
+        $or: [
+          { courseId: courseId },
+          ...(mongoose.Types.ObjectId.isValid(courseId) ? [{ _id: courseId }] : []),
+        ],
+      });
       resolvedCourse = (courseQuery && typeof courseQuery.lean === 'function')
         ? await courseQuery.lean()
         : await courseQuery;
@@ -651,12 +657,49 @@ const getMediaAccessUrl = async (req, res) => {
         }
       }
 
-      resolvedCourse = await Course.findOne({
-        $or: searchConditions,
-      });
+      // If requester is a student, prioritize matching against courses the student is enrolled in
+      if (!isStaff) {
+        const studentDoc = await findStudentForMedia(req.user || {});
+        const enrolledRawIds = [];
+        if (studentDoc) {
+          if (Array.isArray(studentDoc.courseIds)) {
+            studentDoc.courseIds.forEach((id) => { if (id) enrolledRawIds.push(String(id).trim()); });
+          }
+          if (studentDoc.courseId) enrolledRawIds.push(String(studentDoc.courseId).trim());
+          if (studentDoc.courseRef) enrolledRawIds.push(String(studentDoc.courseRef).trim());
+          if (studentDoc.course) enrolledRawIds.push(String(studentDoc.course).trim());
+        }
+        if (enrolledRawIds.length > 0) {
+          const enrolledOr = [];
+          for (const id of enrolledRawIds) {
+            enrolledOr.push({ courseId: id });
+            enrolledOr.push({ courseTitle: id });
+            if (mongoose.Types.ObjectId.isValid(id)) {
+              enrolledOr.push({ _id: new mongoose.Types.ObjectId(id) });
+            }
+          }
+          if (enrolledOr.length > 0) {
+            resolvedCourse = await Course.findOne({
+              $and: [
+                { $or: enrolledOr },
+                { $or: searchConditions },
+              ],
+            });
+            if (resolvedCourse && courseContainsMediaKey(resolvedCourse, key)) {
+              foundMedia = true;
+            }
+          }
+        }
+      }
 
-      if (resolvedCourse && courseContainsMediaKey(resolvedCourse, key)) {
-        foundMedia = true;
+      if (!foundMedia) {
+        resolvedCourse = await Course.findOne({
+          $or: searchConditions,
+        });
+
+        if (resolvedCourse && courseContainsMediaKey(resolvedCourse, key)) {
+          foundMedia = true;
+        }
       }
 
       if (!foundMedia) {
@@ -729,8 +772,6 @@ const getMediaAccessUrl = async (req, res) => {
     }
 
     // 3. User Authorization
-    const role = (req.user?.role || '').toLowerCase();
-    const isStaff = ['admin', 'superadmin'].includes(role);
     if (!isStaff) {
       if (!resolvedCourse) {
         return fail(res, 403, 'Course access is required to access this media.');
