@@ -27,6 +27,16 @@ router.post('/api/v1/unani-exams/student/:examId/submit', requireCourseAccess('u
 router.get('/api/unani-exams/student/:examId/result', requireCourseAccess('unani'), unaniExamController.getStudentResultByExam);
 router.get('/api/v1/unani-exams/student/:examId/result', requireCourseAccess('unani'), unaniExamController.getStudentResultByExam);
 
+// GET student's own answer key
+router.get('/api/unani-exams/student/:examId/answer-key', requireCourseAccess('unani'), unaniExamController.getAnswerKey);
+router.get('/api/v1/unani-exams/student/:examId/answer-key', requireCourseAccess('unani'), unaniExamController.getAnswerKey);
+
+// GET & POST student watermarked answer key PDF download
+router.get('/api/unani-exams/student/:examId/answer-key/download', requireCourseAccess('unani'), unaniExamController.downloadAnswerKeyPDF);
+router.post('/api/unani-exams/student/:examId/answer-key/download', requireCourseAccess('unani'), unaniExamController.downloadAnswerKeyPDF);
+router.get('/api/v1/unani-exams/student/:examId/answer-key/download', requireCourseAccess('unani'), unaniExamController.downloadAnswerKeyPDF);
+router.post('/api/v1/unani-exams/student/:examId/answer-key/download', requireCourseAccess('unani'), unaniExamController.downloadAnswerKeyPDF);
+
 // ─────────────────────────────────────────────────────────────────────────────
 // 1. ADMIN UNANI TEST HISTORY & RANK (MUST be declared BEFORE /:id dynamic routes)
 // ─────────────────────────────────────────────────────────────────────────────
@@ -121,6 +131,22 @@ router.put('/api/v1/unani-exams/:examId/questions/:questionId', requireAdmin, un
 router.delete('/api/unani-exams/:examId/questions/:questionId', requireAdmin, unaniExamController.deleteQuestion);
 router.delete('/api/v1/unani-exams/:examId/questions/:questionId', requireAdmin, unaniExamController.deleteQuestion);
 
+// Bulk update / manage answer key (Admin)
+router.put('/api/unani-exams/:examId/answer-key', requireAdmin, unaniExamController.updateAnswerKey);
+router.put('/api/v1/unani-exams/:examId/answer-key', requireAdmin, unaniExamController.updateAnswerKey);
+router.patch('/api/unani-exams/:examId/answer-key', requireAdmin, unaniExamController.updateAnswerKey);
+router.patch('/api/v1/unani-exams/:examId/answer-key', requireAdmin, unaniExamController.updateAnswerKey);
+
+// General answer key retrieval (Admin, or Student enrolled in 'unani' with completed attempt)
+router.get('/api/unani-exams/:examId/answer-key', requireCourseAccess('unani'), unaniExamController.getAnswerKey);
+router.get('/api/v1/unani-exams/:examId/answer-key', requireCourseAccess('unani'), unaniExamController.getAnswerKey);
+
+// General watermarked answer key PDF download
+router.get('/api/unani-exams/:examId/answer-key/download', requireCourseAccess('unani'), unaniExamController.downloadAnswerKeyPDF);
+router.post('/api/unani-exams/:examId/answer-key/download', requireCourseAccess('unani'), unaniExamController.downloadAnswerKeyPDF);
+router.get('/api/v1/unani-exams/:examId/answer-key/download', requireCourseAccess('unani'), unaniExamController.downloadAnswerKeyPDF);
+router.post('/api/v1/unani-exams/:examId/answer-key/download', requireCourseAccess('unani'), unaniExamController.downloadAnswerKeyPDF);
+
 // ─────────────────────────────────────────────────────────────────────────────
 // 4. STUDENT EXAM TAKING
 // ─────────────────────────────────────────────────────────────────────────────
@@ -146,6 +172,16 @@ router.get('/api/v1/unani-exams/:examId/results', requireCourseAccess('unani'), 
 // Get specific result by ID
 router.get('/api/unani-exams/:examId/results/:resultId', requireCourseAccess('unani'), unaniExamController.getResultById);
 router.get('/api/v1/unani-exams/:examId/results/:resultId', requireCourseAccess('unani'), unaniExamController.getResultById);
+
+// Result-specific answer key retrieval
+router.get('/api/unani-exams/:examId/results/:resultId/answer-key', requireCourseAccess('unani'), unaniExamController.getAnswerKey);
+router.get('/api/v1/unani-exams/:examId/results/:resultId/answer-key', requireCourseAccess('unani'), unaniExamController.getAnswerKey);
+
+// Result-specific watermarked answer key PDF download
+router.get('/api/unani-exams/:examId/results/:resultId/answer-key/download', requireCourseAccess('unani'), unaniExamController.downloadAnswerKeyPDF);
+router.post('/api/unani-exams/:examId/results/:resultId/answer-key/download', requireCourseAccess('unani'), unaniExamController.downloadAnswerKeyPDF);
+router.get('/api/v1/unani-exams/:examId/results/:resultId/answer-key/download', requireCourseAccess('unani'), unaniExamController.downloadAnswerKeyPDF);
+router.post('/api/v1/unani-exams/:examId/results/:resultId/answer-key/download', requireCourseAccess('unani'), unaniExamController.downloadAnswerKeyPDF);
 
 // Get student exam history
 router.get('/api/unani-exams/:examId/history', requireCourseAccess('unani'), unaniExamController.getHistory);

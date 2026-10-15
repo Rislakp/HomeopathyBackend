@@ -15,7 +15,7 @@ const {
   deleteQuestionFromExam,
 } = require('../controllers/examController');
 const { requireAdmin, requireRole } = require('../middleware/rbac');
-const { downloadAnswerKey } = require('../src/student/answerKey.controller');
+const { downloadAnswerKey, getAnswerKey } = require('../src/student/answerKey.controller');
 
 const requireAuthUser = requireRole('student', 'admin', 'superadmin');
 
@@ -92,11 +92,18 @@ router.put('/api/exams/grand-mock/:id/questions/:questionId', requireAdmin, upda
 router.delete('/api/exams/:id/questions/:questionId', requireAdmin, deleteQuestionFromExam);
 router.delete('/api/exams/grand-mock/:id/questions/:questionId', requireAdmin, deleteQuestionFromExam);
 
+// Endpoints to get answer key JSON
+router.get('/api/exams/:id/answer-key', requireAuthUser, getAnswerKey);
+router.get('/api/exams/grand-mock/:id/answer-key', requireAuthUser, getAnswerKey);
+router.get('/api/exams/:id/results/:resultId/answer-key', requireAuthUser, getAnswerKey);
+
 // Endpoint to download watermarked answer key PDF
 router.get('/api/exams/:id/answer-key/download', requireAuthUser, downloadAnswerKey);
 router.post('/api/exams/:id/answer-key/download', requireAuthUser, downloadAnswerKey);
 router.get('/api/exams/grand-mock/:id/answer-key/download', requireAuthUser, downloadAnswerKey);
 router.post('/api/exams/grand-mock/:id/answer-key/download', requireAuthUser, downloadAnswerKey);
+router.get('/api/exams/:id/results/:resultId/answer-key/download', requireAuthUser, downloadAnswerKey);
+router.post('/api/exams/:id/results/:resultId/answer-key/download', requireAuthUser, downloadAnswerKey);
 
 // Route to delete exam by ID
 router.delete('/api/exams/grand-mock/:id', requireAdmin, deleteGrandMockExam);

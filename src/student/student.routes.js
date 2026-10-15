@@ -8,8 +8,23 @@ const {
   submitExam,
   getStudentResults,
 } = require('./student.controller');
-const { downloadAnswerKey } = require('./answerKey.controller');
+const { downloadAnswerKey, getAnswerKey } = require('./answerKey.controller');
 const requireStudentOrAdmin = requireRole('student', 'admin', 'superadmin');
+
+/**
+ * @route   GET /api/student/exams/:id/answer-key
+ * @route   GET /api/v1/student/exams/:id/answer-key
+ * @route   GET /student/exams/:id/answer-key
+ * @route   GET /api/student/exams/:id/results/:resultId/answer-key
+ * @desc    Fetch exam answer key and evaluation data
+ * @access  Private (Student, Admin, Superadmin)
+ */
+router.get('/api/student/exams/:id/answer-key', requireStudentOrAdmin, getAnswerKey);
+router.get('/api/v1/student/exams/:id/answer-key', requireStudentOrAdmin, getAnswerKey);
+router.get('/student/exams/:id/answer-key', requireStudentOrAdmin, getAnswerKey);
+router.get('/api/student/exams/:id/results/:resultId/answer-key', requireStudentOrAdmin, getAnswerKey);
+router.get('/api/v1/student/exams/:id/results/:resultId/answer-key', requireStudentOrAdmin, getAnswerKey);
+router.get('/student/exams/:id/results/:resultId/answer-key', requireStudentOrAdmin, getAnswerKey);
 
 /**
  * @route   GET /api/student/exams/:id/answer-key/download
@@ -19,6 +34,16 @@ const requireStudentOrAdmin = requireRole('student', 'admin', 'superadmin');
  */
 router.get('/api/student/exams/:id/answer-key/download', requireStudentOrAdmin, downloadAnswerKey);
 router.post('/api/student/exams/:id/answer-key/download', requireStudentOrAdmin, downloadAnswerKey);
+router.get('/api/v1/student/exams/:id/answer-key/download', requireStudentOrAdmin, downloadAnswerKey);
+router.post('/api/v1/student/exams/:id/answer-key/download', requireStudentOrAdmin, downloadAnswerKey);
+router.get('/student/exams/:id/answer-key/download', requireStudentOrAdmin, downloadAnswerKey);
+router.post('/student/exams/:id/answer-key/download', requireStudentOrAdmin, downloadAnswerKey);
+router.get('/api/student/exams/:id/results/:resultId/answer-key/download', requireStudentOrAdmin, downloadAnswerKey);
+router.post('/api/student/exams/:id/results/:resultId/answer-key/download', requireStudentOrAdmin, downloadAnswerKey);
+router.get('/api/v1/student/exams/:id/results/:resultId/answer-key/download', requireStudentOrAdmin, downloadAnswerKey);
+router.post('/api/v1/student/exams/:id/results/:resultId/answer-key/download', requireStudentOrAdmin, downloadAnswerKey);
+router.get('/student/exams/:id/results/:resultId/answer-key/download', requireStudentOrAdmin, downloadAnswerKey);
+router.post('/student/exams/:id/results/:resultId/answer-key/download', requireStudentOrAdmin, downloadAnswerKey);
 
 const demoVideoController = require('../../controllers/demoVideoController');
 

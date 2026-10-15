@@ -1,4 +1,6 @@
 const mongoose = require('mongoose');
+const PDFDocument = require('pdfkit');
+const { buildPdfWatermark } = require('../../../student/answerKey.controller');
 const UnaniExam = require('../models/unaniExam.model');
 const UnaniExamResult = require('../models/unaniExamResult.model');
 let Exam;
@@ -415,15 +417,33 @@ async function getResultById(examId, resultId, reqUser) {
   if (!result) return null;
 
   if (['admin', 'superadmin'].includes(userRole)) {
-    return result;
+    const resultObj = result.toObject ? result.toObject() : { ...result };
+    const exam = await UnaniExam.findById(examId).select('title marksPerQuestion negativeMark negativeMarkPenalty totalQuestions questions').lean();
+    if (exam) {
+      const formatted = formatUnaniAnswerKey(exam, result);
+      resultObj.questions = formatted.questions;
+      resultObj.answers = formatted.questions;
+      resultObj.examTitle = exam.title || '';
+    }
+    return resultObj;
   }
 
   const studentId = await resolveStudentId(reqUser);
-  if (!studentId || result.studentId._id.toString() !== studentId.toString()) {
+  const resultStudentId = result.studentId?._id ? result.studentId._id.toString() : (result.studentId ? result.studentId.toString() : '');
+  if (!studentId || resultStudentId !== studentId.toString()) {
     return { forbidden: true };
   }
 
-  return result;
+  const resultObj = result.toObject ? result.toObject() : { ...result };
+  const exam = await UnaniExam.findById(examId).select('title marksPerQuestion negativeMark negativeMarkPenalty totalQuestions questions').lean();
+  if (exam) {
+    const formatted = formatUnaniAnswerKey(exam, result);
+    resultObj.questions = formatted.questions;
+    resultObj.answers = formatted.questions;
+    resultObj.examTitle = exam.title || '';
+  }
+
+  return resultObj;
 }
 
 /**
@@ -961,15 +981,19 @@ async function getStudentResultByExam(examId, reqUser) {
     return { notFound: true };
   }
 
-  const exam = await UnaniExam.findById(result.examId).select('marksPerQuestion negativeMark negativeMarkPenalty totalQuestions questions').lean();
+  const exam = await UnaniExam.findById(result.examId).select('title marksPerQuestion negativeMark negativeMarkPenalty totalQuestions questions').lean();
 
   const totalQuestions = result.answers ? result.answers.length : (exam ? (exam.totalQuestions || (exam.questions ? exam.questions.length : 0)) : 0);
   const attemptedQuestions = (result.correctAnswers || 0) + (result.wrongAnswers || 0);
+
+  const formattedKey = exam ? formatUnaniAnswerKey(exam, result) : null;
+  const questionsList = formattedKey ? formattedKey.questions : [];
 
   return {
     resultId: result._id.toString(),
     examId: result.examId.toString(),
     studentId: studentId.toString(),
+    examTitle: exam ? exam.title : '',
     score: result.score,
     correct: result.correctAnswers,
     correctAnswers: result.correctAnswers,
@@ -988,7 +1012,589 @@ async function getStudentResultByExam(examId, reqUser) {
     timeTakenSeconds: result.timeTakenSeconds || 0,
     timeTaken: result.timeTakenSeconds || 0,
     submittedAt: result.createdAt,
+    answers: questionsList,
+    questions: questionsList,
   };
+}
+
+/**
+ * Format questions and student's answers into a comprehensive answer key payload
+ */
+function formatUnaniAnswerKey(exam, result = null) {
+  const marksPerQuestion = Number(exam.marksPerQuestion) || 1;
+  const negativeMark = Number(exam.negativeMark !== undefined && exam.negativeMark !== null ? exam.negativeMark : (exam.negativeMarkPenalty ?? 0));
+  const questions = exam.questions || [];
+
+  // Build a lookup map of student answers by questionId and by index
+  const studentAnswersMap = new Map();
+  if (result && Array.isArray(result.answers)) {
+    result.answers.forEach((ans, index) => {
+      if (ans.questionId) {
+        studentAnswersMap.set(ans.questionId.toString(), ans);
+      }
+      studentAnswersMap.set(`idx_${index}`, ans);
+    });
+  }
+
+  const formattedQuestions = questions.map((q, idx) => {
+    const qIdStr = q._id ? q._id.toString() : '';
+    const studentAns = (qIdStr ? studentAnswersMap.get(qIdStr) : null) || studentAnswersMap.get(`idx_${idx}`) || null;
+
+    const options = q.options ? {
+      A: q.options.A || '',
+      B: q.options.B || '',
+      C: q.options.C || '',
+      D: q.options.D || '',
+    } : { A: '', B: '', C: '', D: '' };
+
+    const correctOption = (q.correctOption || '').toString().trim().toUpperCase();
+    const correctAnswer = options[correctOption] || '';
+
+    const selectedOption = studentAns && studentAns.selectedOption
+      ? studentAns.selectedOption.toString().trim().toUpperCase()
+      : null;
+    const selectedAnswer = selectedOption && options[selectedOption] ? options[selectedOption] : null;
+
+    const isAttempted = Boolean(selectedOption && ['A', 'B', 'C', 'D'].includes(selectedOption));
+    let isCorrect = false;
+    let marksAwarded = 0;
+
+    if (studentAns !== null && studentAns !== undefined && studentAns.isCorrect !== undefined) {
+      isCorrect = Boolean(studentAns.isCorrect);
+    } else if (isAttempted) {
+      isCorrect = (selectedOption === correctOption);
+    }
+
+    if (isAttempted) {
+      marksAwarded = isCorrect ? marksPerQuestion : -negativeMark;
+    } else {
+      marksAwarded = 0;
+    }
+
+    return {
+      questionId: q._id ? q._id.toString() : null,
+      questionNumber: idx + 1,
+      questionText: q.questionText || '',
+      passage: q.passage || null,
+      imageUrl: q.imageUrl || null,
+      tableData: q.tableData || null,
+      options: options,
+      correctOption: correctOption,
+      correctAnswer: correctAnswer,
+      selectedOption: selectedOption,
+      studentAnswer: selectedOption,
+      studentSelectedOption: selectedOption,
+      selectedAnswer: selectedAnswer,
+      isCorrect: isCorrect,
+      isAttempted: isAttempted,
+      status: isAttempted ? (isCorrect ? 'correct' : 'wrong') : 'unanswered',
+      marksAwarded: marksAwarded,
+      marks: marksAwarded,
+      explanation: q.explanation || '',
+    };
+  });
+
+  const attemptedQuestions = result ? ((result.correctAnswers || 0) + (result.wrongAnswers || 0)) : 0;
+  const totalQuestions = questions.length || exam.totalQuestions || 0;
+  const totalMarks = result && result.totalMarks !== undefined ? result.totalMarks : (totalQuestions * marksPerQuestion);
+
+  return {
+    exam: {
+      _id: exam._id ? exam._id.toString() : '',
+      title: exam.title || '',
+      courseId: exam.courseId || 'unani',
+      examType: exam.examType || 'grand_mock_test',
+      durationMinutes: exam.durationMinutes || 0,
+      totalQuestions: totalQuestions,
+      marksPerQuestion: marksPerQuestion,
+      negativeMark: negativeMark,
+    },
+    examId: exam._id ? exam._id.toString() : '',
+    examTitle: exam.title || '',
+    resultId: result && result._id ? result._id.toString() : null,
+    studentId: result && result.studentId ? (result.studentId._id ? result.studentId._id.toString() : result.studentId.toString()) : null,
+    status: result ? (result.status || 'Completed') : (exam.status || 'Published'),
+    score: result ? result.score : 0,
+    totalMarks: totalMarks,
+    percentage: result ? result.percentage : 0,
+    correctAnswers: result ? (result.correctAnswers || 0) : 0,
+    wrongAnswers: result ? (result.wrongAnswers || 0) : 0,
+    unanswered: result ? (result.unanswered || 0) : totalQuestions,
+    attemptedQuestions: attemptedQuestions,
+    totalQuestions: totalQuestions,
+    marksPerQuestion: marksPerQuestion,
+    negativeMark: negativeMark,
+    summary: {
+      score: result ? result.score : 0,
+      totalMarks: totalMarks,
+      percentage: result ? result.percentage : 0,
+      correctAnswers: result ? (result.correctAnswers || 0) : 0,
+      wrongAnswers: result ? (result.wrongAnswers || 0) : 0,
+      unanswered: result ? (result.unanswered || 0) : totalQuestions,
+      attemptedQuestions: attemptedQuestions,
+      totalQuestions: totalQuestions,
+      marksPerQuestion: marksPerQuestion,
+      negativeMark: negativeMark,
+      timeTakenSeconds: result ? (result.timeTakenSeconds || 0) : 0,
+      submittedAt: result ? result.createdAt : null,
+    },
+    questions: formattedQuestions,
+    answers: formattedQuestions,
+  };
+}
+
+/**
+ * Retrieve Answer Key for student's completed exam attempt
+ */
+async function getStudentExamAnswerKey(examId, reqUser, resultId = null) {
+  if (!examId || !mongoose.Types.ObjectId.isValid(examId)) {
+    return { notFound: true, message: 'Invalid or missing Exam ID.' };
+  }
+
+  const exam = await UnaniExam.findOne({ _id: examId, courseId: 'unani' }).lean();
+  if (!exam) {
+    return { notFound: true, message: 'Unani exam not found.' };
+  }
+
+  const userRole = String(reqUser?.role || '').toLowerCase().trim();
+  const isAdmin = ['admin', 'superadmin'].includes(userRole);
+
+  let result = null;
+
+  if (resultId && mongoose.Types.ObjectId.isValid(resultId)) {
+    result = await UnaniExamResult.findOne({ _id: resultId, examId: exam._id, courseId: 'unani' }).lean();
+    if (!result) {
+      return { notFound: true, message: 'Unani exam result not found.' };
+    }
+    if (!isAdmin) {
+      const studentId = await resolveStudentId(reqUser);
+      const resStudentId = result.studentId?._id ? result.studentId._id.toString() : (result.studentId ? result.studentId.toString() : '');
+      if (!studentId || resStudentId !== studentId.toString()) {
+        return { forbidden: true, message: "Forbidden: You are not authorized to view another student's answer key." };
+      }
+      if (!['Completed', 'Attempted'].includes(result.status)) {
+        return { forbidden: true, message: 'A completed attempt is required to view this answer key.' };
+      }
+    }
+  } else if (!isAdmin) {
+    const studentId = await resolveStudentId(reqUser);
+    if (!studentId) {
+      return { unauthenticated: true, message: 'Student identity could not be resolved.' };
+    }
+
+    result = await UnaniExamResult.findOne({
+      examId: exam._id,
+      studentId: studentId,
+      courseId: 'unani',
+      status: { $in: ['Completed', 'Attempted'] },
+    }).sort({ createdAt: -1 }).lean();
+
+    if (!result) {
+      return { forbidden: true, message: 'A completed attempt is required to view this answer key.' };
+    }
+  }
+
+  return {
+    success: true,
+    exam,
+    result,
+    data: formatUnaniAnswerKey(exam, result),
+  };
+}
+
+/**
+ * Retrieve Answer Key for Admin (master answer key or specific student evaluation)
+ */
+async function getAdminExamAnswerKey(examId, reqUser, query = {}) {
+  if (!examId || !mongoose.Types.ObjectId.isValid(examId)) {
+    return { notFound: true, message: 'Invalid or missing Exam ID.' };
+  }
+
+  const exam = await UnaniExam.findOne({ _id: examId, courseId: 'unani' }).lean();
+  if (!exam) {
+    return { notFound: true, message: 'Unani exam not found.' };
+  }
+
+  let result = null;
+  const resultId = query.resultId;
+  const studentId = query.studentId;
+
+  if (resultId && mongoose.Types.ObjectId.isValid(resultId)) {
+    result = await UnaniExamResult.findOne({ _id: resultId, examId: exam._id, courseId: 'unani' }).lean();
+  } else if (studentId) {
+    let sObjectId = mongoose.Types.ObjectId.isValid(studentId) ? new mongoose.Types.ObjectId(studentId) : null;
+    result = await UnaniExamResult.findOne({
+      examId: exam._id,
+      studentId: sObjectId || studentId,
+      courseId: 'unani',
+    }).sort({ createdAt: -1 }).lean();
+  }
+
+  return {
+    success: true,
+    exam,
+    result,
+    data: formatUnaniAnswerKey(exam, result),
+  };
+}
+
+/**
+ * Bulk update or set answer key for an Unani exam (Admin only)
+ */
+async function updateExamAnswerKey(examId, keyData) {
+  if (!examId || !mongoose.Types.ObjectId.isValid(examId)) {
+    return { error: 'Invalid Exam ID.', status: 400 };
+  }
+
+  const exam = await UnaniExam.findOne({ _id: examId, courseId: 'unani' });
+  if (!exam) {
+    return { error: 'Unani exam not found.', status: 404 };
+  }
+
+  let items = [];
+  if (Array.isArray(keyData)) {
+    items = keyData;
+  } else if (Array.isArray(keyData?.answerKey)) {
+    items = keyData.answerKey;
+  } else if (Array.isArray(keyData?.questions)) {
+    items = keyData.questions;
+  } else if (keyData?.answers && typeof keyData.answers === 'object') {
+    items = Object.keys(keyData.answers).map((qId) => ({
+      questionId: qId,
+      correctOption: keyData.answers[qId],
+    }));
+  }
+
+  if (items.length === 0) {
+    return { error: 'No answer key items provided.', status: 400 };
+  }
+
+  let updatedCount = 0;
+  for (const item of items) {
+    const qId = item.questionId || item.id || item._id;
+    const rawOption = (item.correctOption || item.answer || item.correctAnswer || '').toString().trim().toUpperCase();
+
+    if (!['A', 'B', 'C', 'D'].includes(rawOption)) {
+      continue;
+    }
+
+    let question = null;
+    if (qId && mongoose.Types.ObjectId.isValid(qId)) {
+      question = exam.questions.id(qId);
+    }
+    if (!question && item.questionNumber && exam.questions[item.questionNumber - 1]) {
+      question = exam.questions[item.questionNumber - 1];
+    }
+
+    if (question) {
+      question.correctOption = rawOption;
+      if (item.explanation !== undefined) {
+        question.explanation = String(item.explanation).trim();
+      }
+      updatedCount++;
+    }
+  }
+
+  await exam.save();
+
+  return {
+    success: true,
+    updatedCount,
+    totalQuestions: exam.questions.length,
+    data: formatUnaniAnswerKey(exam.toObject(), null),
+  };
+}
+
+/**
+ * Generate Watermarked Answer Key PDF for Unani Exam
+ */
+function generateUnaniAnswerKeyPDF(exam, user = {}, result = null) {
+  return new Promise((resolve, reject) => {
+    try {
+      const doc = new PDFDocument({
+        size: 'A4',
+        margins: { top: 40, bottom: 25, left: 40, right: 40 },
+        bufferPages: true,
+      });
+
+      const buffers = [];
+      doc.on('data', (chunk) => buffers.push(chunk));
+      doc.on('end', () => resolve(Buffer.concat(buffers)));
+      doc.on('error', (err) => reject(err));
+
+      doc.font('Helvetica');
+      doc.font('Helvetica-Bold');
+      doc.font('Helvetica-Oblique');
+
+      const PAGE_WIDTH = 595.28;
+      const PAGE_HEIGHT = 841.89;
+      const MARGIN = 40;
+      const CONTENT_WIDTH = PAGE_WIDTH - MARGIN * 2;
+      const BOTTOM_MARGIN_THRESHOLD = PAGE_HEIGHT - 75;
+
+      // Header Section
+      doc.fillColor('#1A365D')
+         .fontSize(22)
+         .font('Helvetica-Bold')
+         .text('WHITE COAT ACADEMY', MARGIN, MARGIN, { align: 'center' });
+
+      doc.moveDown(0.2);
+      doc.fillColor('#2B6CB0')
+         .fontSize(13)
+         .font('Helvetica-Bold')
+         .text('UNANI EXAM - OFFICIAL ANSWER KEY & EVALUATION', { align: 'center' });
+
+      doc.moveDown(0.5);
+
+      // Divider Line
+      doc.strokeColor('#CBD5E0')
+         .lineWidth(1)
+         .moveTo(MARGIN, doc.y)
+         .lineTo(PAGE_WIDTH - MARGIN, doc.y)
+         .stroke();
+
+      doc.moveDown(0.6);
+
+      // Metadata Box
+      const metaStartY = doc.y;
+      const hasResult = Boolean(result);
+      const metaHeight = hasResult ? 88 : 70;
+
+      doc.rect(MARGIN, metaStartY, CONTENT_WIDTH, metaHeight)
+         .fillAndStroke('#EDF2F7', '#CBD5E0');
+
+      doc.fillColor('#2D3748')
+         .fontSize(11)
+         .font('Helvetica-Bold')
+         .text(`Exam Title: ${exam.title || 'Unani Mock Test'}`, MARGIN + 10, metaStartY + 8, { width: CONTENT_WIDTH - 20 });
+
+      const totalQs = (exam.questions && exam.questions.length) || exam.totalQuestions || 0;
+      const marksPerQ = Number(exam.marksPerQuestion) || 1;
+      const negMark = Number(exam.negativeMark !== undefined && exam.negativeMark !== null ? exam.negativeMark : (exam.negativeMarkPenalty ?? 0));
+      const duration = exam.durationMinutes ? `${exam.durationMinutes} mins` : 'N/A';
+
+      doc.fontSize(9)
+         .font('Helvetica')
+         .fillColor('#4A5568')
+         .text(`Total Questions: ${totalQs}   |   Marks per Question: ${marksPerQ}   |   Negative Mark: -${negMark}   |   Duration: ${duration}`, MARGIN + 10, metaStartY + 26);
+
+      const userName = (user && user.name) || 'Student';
+      const userEmail = (user && user.email) || 'N/A';
+      const userId = (user && (user.id || user.userId || user.studentId)) || 'N/A';
+      const issueDate = new Date().toLocaleString('en-US', { timeZone: 'Asia/Kolkata', dateStyle: 'medium', timeStyle: 'short' });
+
+      doc.text(`Issued To: ${userName} (${userEmail})   |   ID: ${userId}   |   Generated: ${issueDate}`, MARGIN + 10, metaStartY + 44);
+
+      if (hasResult) {
+        const score = result.score ?? 0;
+        const totalMarks = result.totalMarks ?? (totalQs * marksPerQ);
+        const pct = result.percentage ?? (totalMarks > 0 ? Math.round((score / totalMarks) * 100) : 0);
+        const correct = result.correctAnswers ?? 0;
+        const wrong = result.wrongAnswers ?? 0;
+        const unanswered = result.unanswered ?? 0;
+
+        doc.fillColor('#1A365D')
+           .font('Helvetica-Bold')
+           .text(`Evaluation Summary: Score: ${score} / ${totalMarks} (${pct}%)   |   Correct: ${correct}   |   Wrong: ${wrong}   |   Unanswered: ${unanswered}`, MARGIN + 10, metaStartY + 64);
+      }
+
+      doc.y = metaStartY + metaHeight + 15;
+
+      // Questions & Answers Section
+      const questions = exam.questions || [];
+
+      // Build student answer lookup
+      const studentAnswersMap = new Map();
+      if (result && Array.isArray(result.answers)) {
+        result.answers.forEach((ans, index) => {
+          if (ans.questionId) {
+            studentAnswersMap.set(ans.questionId.toString(), ans);
+          }
+          studentAnswersMap.set(`idx_${index}`, ans);
+        });
+      }
+
+      if (questions.length === 0) {
+        doc.fillColor('#718096')
+           .fontSize(11)
+           .font('Helvetica-Oblique')
+           .text('No questions found for this exam.', MARGIN, doc.y);
+      } else {
+        questions.forEach((q, index) => {
+          const correctKey = (q.correctOption || '').toString().trim().toUpperCase();
+          const options = q.options || {};
+          const explanation = (q.explanation || '').trim();
+
+          const qIdStr = q._id ? q._id.toString() : '';
+          const studentAns = (qIdStr ? studentAnswersMap.get(qIdStr) : null) || studentAnswersMap.get(`idx_${index}`) || null;
+          const studentOption = studentAns && studentAns.selectedOption ? studentAns.selectedOption.toString().trim().toUpperCase() : null;
+          const isStudentAttempted = Boolean(studentOption && ['A', 'B', 'C', 'D'].includes(studentOption));
+          const isStudentCorrect = studentAns ? Boolean(studentAns.isCorrect) : (isStudentAttempted && studentOption === correctKey);
+
+          // Page break check
+          if (doc.y > BOTTOM_MARGIN_THRESHOLD) {
+            doc.addPage();
+            doc.y = MARGIN + 25;
+          }
+
+          // Question Number & Text
+          doc.fillColor('#1A202C')
+             .fontSize(10)
+             .font('Helvetica-Bold')
+             .text(`Q${index + 1}. ${q.questionText || ''}`, MARGIN, doc.y, { width: CONTENT_WIDTH });
+
+          doc.moveDown(0.2);
+
+          // Optional Passage
+          if (q.passage) {
+            doc.fillColor('#2D3748')
+               .fontSize(9)
+               .font('Helvetica-Oblique')
+               .text(`Passage: ${q.passage}`, MARGIN + 10, doc.y, { width: CONTENT_WIDTH - 10 });
+            doc.moveDown(0.2);
+          }
+
+          // Optional Image URL
+          if (q.imageUrl) {
+            doc.fillColor('#4A5568')
+               .fontSize(8.5)
+               .font('Helvetica')
+               .text(`[Image: ${q.imageUrl}]`, MARGIN + 10, doc.y, { width: CONTENT_WIDTH - 10 });
+            doc.moveDown(0.2);
+          }
+
+          // Optional Table Data
+          if (q.tableData) {
+            const tableStr = typeof q.tableData === 'string' ? q.tableData : JSON.stringify(q.tableData);
+            doc.fillColor('#4A5568')
+               .fontSize(8.5)
+               .font('Helvetica-Bold')
+               .text(`[Table Data]: ${tableStr}`, MARGIN + 10, doc.y, { width: CONTENT_WIDTH - 10 });
+            doc.moveDown(0.2);
+          }
+
+          // Options A, B, C, D
+          ['A', 'B', 'C', 'D'].forEach((key) => {
+            const optionText = options[key];
+            if (optionText !== undefined && optionText !== null && String(optionText).trim() !== '') {
+              const isCorrectOption = (key === correctKey);
+              const isSelectedOption = (studentOption === key);
+
+              if (isCorrectOption && isSelectedOption) {
+                doc.fillColor('#22543D')
+                   .fontSize(9.5)
+                   .font('Helvetica-Bold')
+                   .text(`   [✓] Option ${key}: ${optionText}   (CORRECT - YOUR ANSWER)`, MARGIN + 10, doc.y, { width: CONTENT_WIDTH - 10 });
+              } else if (isCorrectOption) {
+                doc.fillColor('#22543D')
+                   .fontSize(9.5)
+                   .font('Helvetica-Bold')
+                   .text(`   [✓] Option ${key}: ${optionText}   (CORRECT ANSWER)`, MARGIN + 10, doc.y, { width: CONTENT_WIDTH - 10 });
+              } else if (isSelectedOption) {
+                doc.fillColor('#C53030')
+                   .fontSize(9.5)
+                   .font('Helvetica-Bold')
+                   .text(`   [✗] Option ${key}: ${optionText}   (YOUR ANSWER - INCORRECT)`, MARGIN + 10, doc.y, { width: CONTENT_WIDTH - 10 });
+              } else {
+                doc.fillColor('#4A5568')
+                   .fontSize(9.5)
+                   .font('Helvetica')
+                   .text(`   [  ] Option ${key}: ${optionText}`, MARGIN + 10, doc.y, { width: CONTENT_WIDTH - 10 });
+              }
+              doc.moveDown(0.18);
+            }
+          });
+
+          // Result line for this question if result present
+          if (hasResult) {
+            if (isStudentAttempted) {
+              if (isStudentCorrect) {
+                doc.fillColor('#22543D')
+                   .fontSize(8.5)
+                   .font('Helvetica-Bold')
+                   .text(`   Evaluation: Correct (+${marksPerQ} mark${marksPerQ === 1 ? '' : 's'})`, MARGIN + 10, doc.y, { width: CONTENT_WIDTH - 10 });
+              } else {
+                doc.fillColor('#C53030')
+                   .fontSize(8.5)
+                   .font('Helvetica-Bold')
+                   .text(`   Evaluation: Incorrect (-${negMark} mark${negMark === 1 ? '' : 's'})`, MARGIN + 10, doc.y, { width: CONTENT_WIDTH - 10 });
+              }
+            } else {
+              doc.fillColor('#B7791F')
+                 .fontSize(8.5)
+                 .font('Helvetica-Oblique')
+                 .text('   Evaluation: Not Attempted / Skipped (0 marks)', MARGIN + 10, doc.y, { width: CONTENT_WIDTH - 10 });
+            }
+            doc.moveDown(0.15);
+          }
+
+          // Optional Explanation
+          if (explanation) {
+            doc.fillColor('#2B6CB0')
+               .fontSize(8.5)
+               .font('Helvetica-Oblique')
+               .text(`   Explanation: ${explanation}`, MARGIN + 10, doc.y, { width: CONTENT_WIDTH - 10 });
+            doc.moveDown(0.18);
+          }
+
+          // Space between questions
+          if (index < questions.length - 1) {
+            doc.moveDown(0.35);
+          }
+        });
+      }
+
+      // Post-Processing Loop: Headers, Watermarks & Footers on EVERY Page
+      const range = doc.bufferedPageRange();
+      const totalPages = range.count;
+
+      for (let i = range.start; i < range.start + totalPages; i++) {
+        doc.switchToPage(i);
+
+        // 1. Running Header for Page 2+
+        if (i > 0) {
+          doc.save();
+          doc.fillColor('#1A365D')
+             .fontSize(9)
+             .font('Helvetica-Bold')
+             .text('WHITE COAT ACADEMY — UNANI EXAM ANSWER KEY', MARGIN, 20, { width: CONTENT_WIDTH, align: 'left' });
+
+          doc.fillColor('#4A5568')
+             .fontSize(8)
+             .font('Helvetica')
+             .text(`${exam.title || 'Unani Mock Test'}   |   Issued To: ${userName}`, MARGIN, 20, { width: CONTENT_WIDTH, align: 'right' });
+
+          doc.strokeColor('#E2E8F0')
+             .lineWidth(0.75)
+             .moveTo(MARGIN, 34)
+             .lineTo(PAGE_WIDTH - MARGIN, 34)
+             .stroke();
+          doc.restore();
+        }
+
+        // 2. Centered Logo Background Watermark
+        buildPdfWatermark(doc, PAGE_WIDTH, PAGE_HEIGHT);
+
+        // 3. Running Footer on ALL pages
+        doc.save();
+        doc.opacity(0.75);
+        doc.fillColor('#718096');
+        doc.fontSize(8);
+        doc.font('Helvetica');
+        doc.text(
+          `White Coat Academy — Confidential & Watermarked Unani Answer Key   |   Page ${i + 1} of ${totalPages}`,
+          MARGIN,
+          805,
+          { width: CONTENT_WIDTH, align: 'center' }
+        );
+        doc.restore();
+      }
+
+      doc.end();
+    } catch (err) {
+      reject(err);
+    }
+  });
 }
 
 /**
@@ -1107,6 +1713,11 @@ module.exports = {
   getStudentExamById,
   submitStudentExam,
   getStudentResultByExam,
+  formatUnaniAnswerKey,
+  getStudentExamAnswerKey,
+  getAdminExamAnswerKey,
+  updateExamAnswerKey,
+  generateUnaniAnswerKeyPDF,
   updateRankImage,
   deleteRankImage,
 };
