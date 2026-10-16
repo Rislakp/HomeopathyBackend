@@ -21,7 +21,7 @@ const { verifyStudentCourseAccess } = require('../utils/courseAccessHelper');
 const { normalizeS3Reference, encodeSignedUrl, resolveMediaRecord, getVerifiedS3KeyForLegacyAsset } = require('../utils/s3MediaSigner');
 
 const PART_URL_TTL_SECONDS = 900;
-const MEDIA_URL_TTL_SECONDS = 900;
+const MEDIA_URL_TTL_SECONDS = parseInt(process.env.S3_SIGNED_URL_EXPIRES_IN || process.env.S3_MEDIA_URL_TTL_SECONDS, 10) || 7200;
 const SINGLE_UPLOAD_URL_TTL_SECONDS = 900;
 const IMAGE_MAX_BYTES = 25 * 1024 * 1024;
 const PDF_MAX_BYTES = 250 * 1024 * 1024;

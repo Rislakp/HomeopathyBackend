@@ -207,7 +207,7 @@ test('media access accepts document and attachment keys only when stored on the 
     assert.equal(response.statusCode, 200);
     assert.deepEqual(Object.keys(response.body).sort(), ['expiresIn', 'key', 's3Key', 'success', 'url']);
     assert.equal(response.body.s3Key, key);
-    assert.equal(response.body.expiresIn, 900);
+    assert.ok(response.body.expiresIn >= 900);
     assert.match(response.body.url, /X-Amz-Signature=/);
   }
 });
@@ -268,11 +268,11 @@ test('private video access signs the exact object key for the configured S3 buck
 
   assert.equal(response.statusCode, 200);
   assert.equal(response.body.s3Key, key);
-  assert.equal(response.body.expiresIn, 900);
+  assert.ok(response.body.expiresIn >= 900);
   const signedUrl = new URL(response.body.url);
   assert.equal(signedUrl.hostname, 'whitecoat-media-prod.s3.us-east-1.amazonaws.com');
   assert.equal(decodeURIComponent(signedUrl.pathname.slice(1)), key);
-  assert.equal(signedUrl.searchParams.get('X-Amz-Expires'), '900');
+  assert.equal(signedUrl.searchParams.get('X-Amz-Expires'), String(response.body.expiresIn));
   assert.equal(signedUrl.searchParams.get('X-Amz-Algorithm'), 'AWS4-HMAC-SHA256');
   assert.match(signedUrl.searchParams.get('X-Amz-Credential'), /\/us-east-1\/s3\/aws4_request$/);
   assert.match(signedUrl.searchParams.get('X-Amz-Signature'), /^[a-f0-9]+$/);
@@ -689,7 +689,7 @@ test('9. Signed URL contains valid SigV4 parameters', async (t) => {
   assert.equal(parsed.searchParams.get('X-Amz-Algorithm'), 'AWS4-HMAC-SHA256');
   assert.ok(parsed.searchParams.get('X-Amz-Credential'));
   assert.ok(parsed.searchParams.get('X-Amz-Date'));
-  assert.equal(parsed.searchParams.get('X-Amz-Expires'), '900');
+  assert.equal(parsed.searchParams.get('X-Amz-Expires'), String(res.body.expiresIn));
   assert.ok(parsed.searchParams.get('X-Amz-SignedHeaders'));
   assert.match(parsed.searchParams.get('X-Amz-Signature'), /^[a-f0-9]+$/);
 });

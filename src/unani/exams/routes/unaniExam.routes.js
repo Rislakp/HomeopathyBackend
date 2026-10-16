@@ -6,6 +6,7 @@ const { requireAuth, requireAdmin, requireCourseAccess } = require('../../../../
 // All Unani routes in this module require authentication
 router.use('/api/unani-exams', requireAuth);
 router.use('/api/v1/unani-exams', requireAuth);
+router.use('/unani-exams', requireAuth);
 
 // ─────────────────────────────────────────────────────────────────────────────
 // 0. STUDENT UNANI EXAM ROUTES (Declared BEFORE /:id dynamic routes)
@@ -176,12 +177,15 @@ router.get('/api/v1/unani-exams/:examId/results/:resultId', requireCourseAccess(
 // Result-specific answer key retrieval
 router.get('/api/unani-exams/:examId/results/:resultId/answer-key', requireCourseAccess('unani'), unaniExamController.getAnswerKey);
 router.get('/api/v1/unani-exams/:examId/results/:resultId/answer-key', requireCourseAccess('unani'), unaniExamController.getAnswerKey);
+router.get('/unani-exams/:examId/results/:resultId/answer-key', requireCourseAccess('unani'), unaniExamController.getAnswerKey);
 
 // Result-specific watermarked answer key PDF download
 router.get('/api/unani-exams/:examId/results/:resultId/answer-key/download', requireCourseAccess('unani'), unaniExamController.downloadAnswerKeyPDF);
 router.post('/api/unani-exams/:examId/results/:resultId/answer-key/download', requireCourseAccess('unani'), unaniExamController.downloadAnswerKeyPDF);
 router.get('/api/v1/unani-exams/:examId/results/:resultId/answer-key/download', requireCourseAccess('unani'), unaniExamController.downloadAnswerKeyPDF);
 router.post('/api/v1/unani-exams/:examId/results/:resultId/answer-key/download', requireCourseAccess('unani'), unaniExamController.downloadAnswerKeyPDF);
+router.get('/unani-exams/:examId/results/:resultId/answer-key/download', requireCourseAccess('unani'), unaniExamController.downloadAnswerKeyPDF);
+router.post('/unani-exams/:examId/results/:resultId/answer-key/download', requireCourseAccess('unani'), unaniExamController.downloadAnswerKeyPDF);
 
 // Get student exam history
 router.get('/api/unani-exams/:examId/history', requireCourseAccess('unani'), unaniExamController.getHistory);

@@ -45,11 +45,20 @@ const requireAuth = async (req, res, next) => {
 
     let decoded;
     try {
-      decoded = jwt.verify(token, getJwtSecret());
+      decoded = jwt.verify(token, getJwtSecret(), { clockTolerance: 60 });
     } catch (err) {
+      if (err.name === 'TokenExpiredError') {
+        return res.status(401).json({
+          success: false,
+          message: 'Session expired. Please log in or refresh your token.',
+          code: 'TOKEN_EXPIRED',
+          error: err.message,
+        });
+      }
       return res.status(401).json({
         success: false,
         message: 'Invalid or expired authentication token.',
+        code: 'TOKEN_INVALID',
         error: err.message,
       });
     }
@@ -79,7 +88,7 @@ const requireAuth = async (req, res, next) => {
     // ------------------------------------------------------------------
     // 1. Primary User collection lookup (.lean() for speed)
     // ------------------------------------------------------------------
-    let foundUser = await User.findById(userId).select('_id email name role courseId courseRef course preferredCourse').lean();
+    let foundUser = await User.findById(userId).select('_id email name role courseId courseRef course preferredCourse courseIds tokenVersion').lean();
     let normalizedRole = null;
     let modelName = 'User';
 
@@ -106,7 +115,7 @@ const requireAuth = async (req, res, next) => {
     // 3. Fallback: Student collection
     // ------------------------------------------------------------------
     if (!foundUser && Student) {
-      const studentDoc = await Student.findById(userId).select('_id email name role courseId courseRef course').lean();
+      const studentDoc = await Student.findById(userId).select('_id email name role courseId courseRef course courseIds').lean();
       if (studentDoc) {
         foundUser = studentDoc;
         modelName = 'Student';
@@ -131,13 +140,29 @@ const requireAuth = async (req, res, next) => {
             { userId: foundUser._id },
             { email: foundUser.email ? foundUser.email.toLowerCase() : '' },
           ],
-        }).lean();
+        }).select('_id userId email name courseId courseRef course courseIds accountStatus status').lean();
       }
     }
 
     const courseRef = studentDoc?.courseRef || foundUser.courseRef || null;
     const courseId = studentDoc?.courseId || foundUser.courseId || (courseRef ? courseRef.toString() : '');
     const courseTitle = studentDoc?.course || foundUser.course || foundUser.preferredCourse || '';
+
+    // Collect enrolled course IDs from all sources for robust multi-course authorization
+    const seenCourseIds = new Set();
+    const courseIdsArray = [];
+    const addCourseId = (id) => {
+      const s = String(id || '').trim();
+      if (!s || seenCourseIds.has(s.toLowerCase())) return;
+      seenCourseIds.add(s.toLowerCase());
+      courseIdsArray.push(s);
+    };
+
+    if (studentDoc && Array.isArray(studentDoc.courseIds)) studentDoc.courseIds.forEach(addCourseId);
+    if (foundUser && Array.isArray(foundUser.courseIds)) foundUser.courseIds.forEach(addCourseId);
+    if (decoded && Array.isArray(decoded.courseIds)) decoded.courseIds.forEach(addCourseId);
+    if (courseId) addCourseId(courseId);
+    if (courseRef) addCourseId(courseRef.toString());
 
     req.user = {
       id: foundUser._id.toString(),
@@ -149,6 +174,7 @@ const requireAuth = async (req, res, next) => {
       courseId: courseId,
       courseRef: courseRef ? courseRef.toString() : null,
       course: courseTitle,
+      courseIds: courseIdsArray,
     };
 
     memoryCache.set(cacheKey, req.user, 30);

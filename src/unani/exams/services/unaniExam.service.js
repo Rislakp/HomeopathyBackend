@@ -1151,7 +1151,14 @@ async function getStudentExamAnswerKey(examId, reqUser, resultId = null) {
     return { notFound: true, message: 'Invalid or missing Exam ID.' };
   }
 
-  const exam = await UnaniExam.findOne({ _id: examId, courseId: 'unani' }).lean();
+  const exam = await UnaniExam.findOne({
+    _id: examId,
+    $or: [
+      { courseId: { $in: ['unani', 'UNANI', /^unani$/i] } },
+      { courseId: { $exists: false } },
+      { courseId: null },
+    ],
+  }).lean();
   if (!exam) {
     return { notFound: true, message: 'Unani exam not found.' };
   }
@@ -1161,11 +1168,20 @@ async function getStudentExamAnswerKey(examId, reqUser, resultId = null) {
 
   let result = null;
 
-  if (resultId && mongoose.Types.ObjectId.isValid(resultId)) {
-    result = await UnaniExamResult.findOne({ _id: resultId, examId: exam._id, courseId: 'unani' }).lean();
-    if (!result) {
+  if (resultId) {
+    if (!mongoose.Types.ObjectId.isValid(resultId)) {
+      return { notFound: true, message: 'Invalid or missing Result ID.' };
+    }
+    const existingResult = await UnaniExamResult.findById(resultId).lean();
+    if (!existingResult) {
       return { notFound: true, message: 'Unani exam result not found.' };
     }
+    const resultExamId = existingResult.examId ? existingResult.examId.toString() : '';
+    if (resultExamId !== exam._id.toString()) {
+      return { notFound: true, message: 'Unani exam result does not belong to this exam.' };
+    }
+    result = existingResult;
+
     if (!isAdmin) {
       const studentId = await resolveStudentId(reqUser);
       const resStudentId = result.studentId?._id ? result.studentId._id.toString() : (result.studentId ? result.studentId.toString() : '');
@@ -1185,7 +1201,6 @@ async function getStudentExamAnswerKey(examId, reqUser, resultId = null) {
     result = await UnaniExamResult.findOne({
       examId: exam._id,
       studentId: studentId,
-      courseId: 'unani',
       status: { $in: ['Completed', 'Attempted'] },
     }).sort({ createdAt: -1 }).lean();
 
@@ -1210,7 +1225,14 @@ async function getAdminExamAnswerKey(examId, reqUser, query = {}) {
     return { notFound: true, message: 'Invalid or missing Exam ID.' };
   }
 
-  const exam = await UnaniExam.findOne({ _id: examId, courseId: 'unani' }).lean();
+  const exam = await UnaniExam.findOne({
+    _id: examId,
+    $or: [
+      { courseId: { $in: ['unani', 'UNANI', /^unani$/i] } },
+      { courseId: { $exists: false } },
+      { courseId: null },
+    ],
+  }).lean();
   if (!exam) {
     return { notFound: true, message: 'Unani exam not found.' };
   }
@@ -1219,14 +1241,24 @@ async function getAdminExamAnswerKey(examId, reqUser, query = {}) {
   const resultId = query.resultId;
   const studentId = query.studentId;
 
-  if (resultId && mongoose.Types.ObjectId.isValid(resultId)) {
-    result = await UnaniExamResult.findOne({ _id: resultId, examId: exam._id, courseId: 'unani' }).lean();
+  if (resultId) {
+    if (!mongoose.Types.ObjectId.isValid(resultId)) {
+      return { notFound: true, message: 'Invalid or missing Result ID.' };
+    }
+    const existingResult = await UnaniExamResult.findById(resultId).lean();
+    if (!existingResult) {
+      return { notFound: true, message: 'Unani exam result not found.' };
+    }
+    const resultExamId = existingResult.examId ? existingResult.examId.toString() : '';
+    if (resultExamId !== exam._id.toString()) {
+      return { notFound: true, message: 'Unani exam result does not belong to this exam.' };
+    }
+    result = existingResult;
   } else if (studentId) {
     let sObjectId = mongoose.Types.ObjectId.isValid(studentId) ? new mongoose.Types.ObjectId(studentId) : null;
     result = await UnaniExamResult.findOne({
       examId: exam._id,
       studentId: sObjectId || studentId,
-      courseId: 'unani',
     }).sort({ createdAt: -1 }).lean();
   }
 

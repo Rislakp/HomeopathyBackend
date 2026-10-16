@@ -29,6 +29,11 @@ const adminSchema = new mongoose.Schema({
   isActive: {
     type: Boolean,
     default: true
+  },
+
+  tokenVersion: {
+    type: Number,
+    default: 0
   }
 });
 
