@@ -674,3 +674,191 @@ test('15. downloadAnswerKey fallback in answerKey.controller.js serves Unani exa
   assert.ok(Buffer.isBuffer(sentData));
   assert.equal(sentData.slice(0, 5).toString('ascii'), '%PDF-');
 });
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 8. RESULT-SPECIFIC ROUTES & SECURITY REGRESSION TESTS
+// ─────────────────────────────────────────────────────────────────────────────
+
+test('16. controller getAnswerKey with valid examId & resultId returns HTTP 200 with JSON answer key', async (t) => {
+  const origFindOneExam = UnaniExam.findOne;
+  const origFindByIdResult = UnaniExamResult.findById;
+
+  UnaniExam.findOne = () => ({ lean: async () => mockExamData });
+  UnaniExamResult.findById = () => ({ lean: async () => mockResultData });
+
+  t.after(() => {
+    UnaniExam.findOne = origFindOneExam;
+    UnaniExamResult.findById = origFindByIdResult;
+  });
+
+  const req = {
+    params: {
+      examId: mockExamId.toString(),
+      resultId: mockResultId.toString(),
+    },
+    user: {
+      id: mockStudentId.toString(),
+      studentId: mockStudentId.toString(),
+      role: 'student',
+    },
+  };
+
+  let statusCode = 0;
+  let jsonBody = null;
+  const res = {
+    status(code) {
+      statusCode = code;
+      return this;
+    },
+    json(body) {
+      jsonBody = body;
+      return this;
+    },
+  };
+
+  await unaniExamController.getAnswerKey(req, res);
+
+  assert.equal(statusCode, 200);
+  assert.equal(jsonBody.success, true);
+  assert.equal(jsonBody.data.examId, mockExamId.toString());
+  assert.equal(jsonBody.data.resultId, mockResultId.toString());
+  assert.equal(jsonBody.data.questions.length, 3);
+});
+
+test('17. controller downloadAnswerKeyPDF with valid examId & resultId returns HTTP 200 with watermarked PDF', async (t) => {
+  const origFindOneExam = UnaniExam.findOne;
+  const origFindByIdResult = UnaniExamResult.findById;
+
+  UnaniExam.findOne = () => ({ lean: async () => mockExamData });
+  UnaniExamResult.findById = () => ({ lean: async () => mockResultData });
+
+  t.after(() => {
+    UnaniExam.findOne = origFindOneExam;
+    UnaniExamResult.findById = origFindByIdResult;
+  });
+
+  const req = {
+    params: {
+      examId: mockExamId.toString(),
+      resultId: mockResultId.toString(),
+    },
+    user: {
+      id: mockStudentId.toString(),
+      studentId: mockStudentId.toString(),
+      name: 'unanitest',
+      email: 'unanitest@gmail.com',
+      role: 'student',
+    },
+  };
+
+  let statusCode = 0;
+  let headers = {};
+  let sentData = null;
+  const res = {
+    status(code) {
+      statusCode = code;
+      return this;
+    },
+    setHeader(key, val) {
+      headers[key.toLowerCase()] = val;
+    },
+    send(data) {
+      sentData = data;
+      return this;
+    },
+    json(body) {
+      this.body = body;
+      return this;
+    },
+  };
+
+  await unaniExamController.downloadAnswerKeyPDF(req, res);
+
+  assert.equal(statusCode, 200);
+  assert.equal(headers['content-type'], 'application/pdf');
+  assert.ok(Buffer.isBuffer(sentData));
+  assert.equal(sentData.slice(0, 5).toString('ascii'), '%PDF-');
+});
+
+test('18. getStudentExamAnswerKey with invalid examId returns notFound', async () => {
+  const res = await unaniExamService.getStudentExamAnswerKey('invalid-id', { id: mockStudentId.toString(), role: 'student' });
+  assert.equal(res.notFound, true);
+  assert.match(res.message, /Invalid or missing Exam ID/i);
+});
+
+test('19. getStudentExamAnswerKey with invalid or nonexistent resultId returns notFound', async (t) => {
+  const origFindOneExam = UnaniExam.findOne;
+  const origFindByIdResult = UnaniExamResult.findById;
+
+  UnaniExam.findOne = () => ({ lean: async () => mockExamData });
+  UnaniExamResult.findById = () => ({ lean: async () => null });
+
+  t.after(() => {
+    UnaniExam.findOne = origFindOneExam;
+    UnaniExamResult.findById = origFindByIdResult;
+  });
+
+  const res = await unaniExamService.getStudentExamAnswerKey(
+    mockExamId.toString(),
+    { id: mockStudentId.toString(), role: 'student' },
+    new mongoose.Types.ObjectId().toString()
+  );
+  assert.equal(res.notFound, true);
+  assert.match(res.message, /Unani exam result not found/i);
+});
+
+test('20. getStudentExamAnswerKey with mismatched exam and result pair returns notFound with specific mismatch message', async (t) => {
+  const origFindOneExam = UnaniExam.findOne;
+  const origFindByIdResult = UnaniExamResult.findById;
+
+  const differentExamId = new mongoose.Types.ObjectId();
+  const mismatchedResult = {
+    ...mockResultData,
+    examId: differentExamId, // Belongs to a different exam!
+  };
+
+  UnaniExam.findOne = () => ({ lean: async () => mockExamData });
+  UnaniExamResult.findById = () => ({ lean: async () => mismatchedResult });
+
+  t.after(() => {
+    UnaniExam.findOne = origFindOneExam;
+    UnaniExamResult.findById = origFindByIdResult;
+  });
+
+  const res = await unaniExamService.getStudentExamAnswerKey(
+    mockExamId.toString(),
+    { id: mockStudentId.toString(), role: 'student' },
+    mockResultId.toString()
+  );
+  assert.equal(res.notFound, true);
+  assert.match(res.message, /does not belong to this exam/i);
+});
+
+test('21. getStudentExamAnswerKey blocks student from viewing another student resultId (403)', async (t) => {
+  const origFindOneExam = UnaniExam.findOne;
+  const origFindByIdResult = UnaniExamResult.findById;
+
+  UnaniExam.findOne = () => ({ lean: async () => mockExamData });
+  UnaniExamResult.findById = () => ({ lean: async () => mockResultData }); // studentId: mockStudentId
+
+  t.after(() => {
+    UnaniExam.findOne = origFindOneExam;
+    UnaniExamResult.findById = origFindByIdResult;
+  });
+
+  // A different student attempts to view mockStudentId's resultId
+  const attackerUser = {
+    id: mockOtherStudentId.toString(),
+    studentId: mockOtherStudentId.toString(),
+    role: 'student',
+  };
+
+  const res = await unaniExamService.getStudentExamAnswerKey(
+    mockExamId.toString(),
+    attackerUser,
+    mockResultId.toString()
+  );
+  assert.equal(res.forbidden, true);
+  assert.match(res.message, /not authorized to view another student/i);
+});
+
