@@ -1151,7 +1151,7 @@ async function getStudentExamAnswerKey(examId, reqUser, resultId = null) {
     return { notFound: true, message: 'Invalid or missing Exam ID.' };
   }
 
-  const exam = await UnaniExam.findOne({
+  let exam = await UnaniExam.findOne({
     _id: examId,
     $or: [
       { courseId: { $in: ['unani', 'UNANI', /^unani$/i] } },
@@ -1159,6 +1159,15 @@ async function getStudentExamAnswerKey(examId, reqUser, resultId = null) {
       { courseId: null },
     ],
   }).lean();
+
+  if (!exam && mongoose.connection?.readyState === 1) {
+    let Exam;
+    try { Exam = mongoose.models.Exam || require('../../../../models/Exam'); } catch (e) {}
+    if (Exam) {
+      exam = await Exam.findById(examId).lean();
+    }
+  }
+
   if (!exam) {
     return { notFound: true, message: 'Unani exam not found.' };
   }
@@ -1172,7 +1181,14 @@ async function getStudentExamAnswerKey(examId, reqUser, resultId = null) {
     if (!mongoose.Types.ObjectId.isValid(resultId)) {
       return { notFound: true, message: 'Invalid or missing Result ID.' };
     }
-    const existingResult = await UnaniExamResult.findById(resultId).lean();
+    let existingResult = await UnaniExamResult.findById(resultId).lean();
+    if (!existingResult && mongoose.connection?.readyState === 1) {
+      let TestResult;
+      try { TestResult = mongoose.models.TestResult || require('../../../common/models/testResult.model'); } catch (e) {}
+      if (TestResult) {
+        existingResult = await TestResult.findById(resultId).lean();
+      }
+    }
     if (!existingResult) {
       return { notFound: true, message: 'Unani exam result not found.' };
     }
@@ -1184,8 +1200,28 @@ async function getStudentExamAnswerKey(examId, reqUser, resultId = null) {
 
     if (!isAdmin) {
       const studentId = await resolveStudentId(reqUser);
+      let candidateIds = [];
+      if (mongoose.connection?.readyState === 1) {
+        try {
+          const { getStudentCandidateIds } = require('../../../../utils/examAttemptHelper');
+          candidateIds = (await getStudentCandidateIds(reqUser)).map((id) => id.toString());
+        } catch (e) {}
+      }
+      if (studentId && !candidateIds.includes(studentId.toString())) {
+        candidateIds.push(studentId.toString());
+      }
+      if (reqUser?.id && !candidateIds.includes(reqUser.id.toString())) {
+        candidateIds.push(reqUser.id.toString());
+      }
+      if (reqUser?.studentId && !candidateIds.includes(reqUser.studentId.toString())) {
+        candidateIds.push(reqUser.studentId.toString());
+      }
+      if (reqUser?.userId && !candidateIds.includes(reqUser.userId.toString())) {
+        candidateIds.push(reqUser.userId.toString());
+      }
+
       const resStudentId = result.studentId?._id ? result.studentId._id.toString() : (result.studentId ? result.studentId.toString() : '');
-      if (!studentId || resStudentId !== studentId.toString()) {
+      if (!resStudentId || !candidateIds.includes(resStudentId)) {
         return { forbidden: true, message: "Forbidden: You are not authorized to view another student's answer key." };
       }
       if (!['Completed', 'Attempted'].includes(result.status)) {
@@ -1203,6 +1239,18 @@ async function getStudentExamAnswerKey(examId, reqUser, resultId = null) {
       studentId: studentId,
       status: { $in: ['Completed', 'Attempted'] },
     }).sort({ createdAt: -1 }).lean();
+
+    if (!result && mongoose.connection?.readyState === 1) {
+      let TestResult;
+      try { TestResult = mongoose.models.TestResult || require('../../../common/models/testResult.model'); } catch (e) {}
+      if (TestResult) {
+        result = await TestResult.findOne({
+          examId: exam._id,
+          studentId: studentId,
+          status: { $in: ['Completed', 'Attempted'] },
+        }).sort({ createdAt: -1 }).lean();
+      }
+    }
 
     if (!result) {
       return { forbidden: true, message: 'A completed attempt is required to view this answer key.' };
@@ -1225,7 +1273,7 @@ async function getAdminExamAnswerKey(examId, reqUser, query = {}) {
     return { notFound: true, message: 'Invalid or missing Exam ID.' };
   }
 
-  const exam = await UnaniExam.findOne({
+  let exam = await UnaniExam.findOne({
     _id: examId,
     $or: [
       { courseId: { $in: ['unani', 'UNANI', /^unani$/i] } },
@@ -1233,6 +1281,15 @@ async function getAdminExamAnswerKey(examId, reqUser, query = {}) {
       { courseId: null },
     ],
   }).lean();
+
+  if (!exam && mongoose.connection?.readyState === 1) {
+    let Exam;
+    try { Exam = mongoose.models.Exam || require('../../../../models/Exam'); } catch (e) {}
+    if (Exam) {
+      exam = await Exam.findById(examId).lean();
+    }
+  }
+
   if (!exam) {
     return { notFound: true, message: 'Unani exam not found.' };
   }
@@ -1245,7 +1302,14 @@ async function getAdminExamAnswerKey(examId, reqUser, query = {}) {
     if (!mongoose.Types.ObjectId.isValid(resultId)) {
       return { notFound: true, message: 'Invalid or missing Result ID.' };
     }
-    const existingResult = await UnaniExamResult.findById(resultId).lean();
+    let existingResult = await UnaniExamResult.findById(resultId).lean();
+    if (!existingResult && mongoose.connection?.readyState === 1) {
+      let TestResult;
+      try { TestResult = mongoose.models.TestResult || require('../../../common/models/testResult.model'); } catch (e) {}
+      if (TestResult) {
+        existingResult = await TestResult.findById(resultId).lean();
+      }
+    }
     if (!existingResult) {
       return { notFound: true, message: 'Unani exam result not found.' };
     }
@@ -1260,6 +1324,16 @@ async function getAdminExamAnswerKey(examId, reqUser, query = {}) {
       examId: exam._id,
       studentId: sObjectId || studentId,
     }).sort({ createdAt: -1 }).lean();
+    if (!result && mongoose.connection?.readyState === 1) {
+      let TestResult;
+      try { TestResult = mongoose.models.TestResult || require('../../../common/models/testResult.model'); } catch (e) {}
+      if (TestResult) {
+        result = await TestResult.findOne({
+          examId: exam._id,
+          studentId: sObjectId || studentId,
+        }).sort({ createdAt: -1 }).lean();
+      }
+    }
   }
 
   return {

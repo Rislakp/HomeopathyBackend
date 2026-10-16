@@ -782,7 +782,7 @@ async function deleteRankImage(req, res) {
 async function getAnswerKey(req, res) {
   try {
     const examId = req.params.examId || req.params.id;
-    const resultId = req.params.resultId;
+    const resultId = req.params.resultId || req.query?.resultId || req.body?.resultId;
     const userRole = String(req.user?.role || '').toLowerCase().trim();
     const isAdmin = ['admin', 'superadmin'].includes(userRole);
 
@@ -839,7 +839,7 @@ async function getAnswerKey(req, res) {
 async function downloadAnswerKeyPDF(req, res) {
   try {
     const examId = req.params.examId || req.params.id;
-    const resultId = req.params.resultId;
+    const resultId = req.params.resultId || req.query?.resultId || req.body?.resultId;
     const userRole = String(req.user?.role || '').toLowerCase().trim();
     const isAdmin = ['admin', 'superadmin'].includes(userRole);
 

@@ -862,3 +862,233 @@ test('21. getStudentExamAnswerKey blocks student from viewing another student re
   assert.match(res.message, /not authorized to view another student/i);
 });
 
+test('22. downloadAnswerKeyPDF with valid examId & resultId in query returns 200 and application/pdf headers', async (t) => {
+  const origFindOneExam = UnaniExam.findOne;
+  const origFindByIdResult = UnaniExamResult.findById;
+
+  UnaniExam.findOne = () => ({ lean: async () => mockExamData });
+  UnaniExamResult.findById = () => ({ lean: async () => mockResultData });
+
+  t.after(() => {
+    UnaniExam.findOne = origFindOneExam;
+    UnaniExamResult.findById = origFindByIdResult;
+  });
+
+  const req = {
+    params: { examId: mockExamId.toString() },
+    query: { resultId: mockResultId.toString() },
+    user: {
+      id: mockStudentId.toString(),
+      studentId: mockStudentId.toString(),
+      name: 'unanitest',
+      email: 'unanitest@gmail.com',
+      role: 'student',
+    },
+  };
+
+  let statusCode = 0;
+  let headers = {};
+  let sentData = null;
+  const res = {
+    status(code) {
+      statusCode = code;
+      return this;
+    },
+    setHeader(key, val) {
+      headers[key.toLowerCase()] = val;
+    },
+    send(data) {
+      sentData = data;
+      return this;
+    },
+    json(body) {
+      this.body = body;
+      return this;
+    },
+  };
+
+  await unaniExamController.downloadAnswerKeyPDF(req, res);
+
+  assert.equal(statusCode, 200);
+  assert.equal(headers['content-type'], 'application/pdf');
+  assert.match(headers['content-disposition'], /attachment; filename="unani-.*-answer-key\.pdf"/);
+  assert.ok(Buffer.isBuffer(sentData));
+  assert.equal(sentData.slice(0, 5).toString('ascii'), '%PDF-');
+});
+
+test('23. downloadAnswerKeyPDF returns 404 when source exam does not exist', async (t) => {
+  const origFindOneExam = UnaniExam.findOne;
+  UnaniExam.findOne = () => ({ lean: async () => null });
+
+  t.after(() => {
+    UnaniExam.findOne = origFindOneExam;
+  });
+
+  const req = {
+    params: {
+      examId: new mongoose.Types.ObjectId().toString(),
+      resultId: mockResultId.toString(),
+    },
+    user: {
+      id: mockStudentId.toString(),
+      role: 'student',
+    },
+  };
+
+  let statusCode = 0;
+  let jsonBody = null;
+  const res = {
+    status(code) {
+      statusCode = code;
+      return this;
+    },
+    json(body) {
+      jsonBody = body;
+      return this;
+    },
+  };
+
+  await unaniExamController.downloadAnswerKeyPDF(req, res);
+
+  assert.equal(statusCode, 404);
+  assert.equal(jsonBody.success, false);
+  assert.match(jsonBody.message, /Unani exam not found/i);
+});
+
+test('24. downloadAnswerKeyPDF returns 404 when result does not belong to the requested exam', async (t) => {
+  const origFindOneExam = UnaniExam.findOne;
+  const origFindByIdResult = UnaniExamResult.findById;
+
+  const differentExamId = new mongoose.Types.ObjectId();
+  const mismatchedResult = {
+    ...mockResultData,
+    examId: differentExamId,
+  };
+
+  UnaniExam.findOne = () => ({ lean: async () => mockExamData });
+  UnaniExamResult.findById = () => ({ lean: async () => mismatchedResult });
+
+  t.after(() => {
+    UnaniExam.findOne = origFindOneExam;
+    UnaniExamResult.findById = origFindByIdResult;
+  });
+
+  const req = {
+    params: {
+      examId: mockExamId.toString(),
+      resultId: mockResultId.toString(),
+    },
+    user: {
+      id: mockStudentId.toString(),
+      role: 'student',
+    },
+  };
+
+  let statusCode = 0;
+  let jsonBody = null;
+  const res = {
+    status(code) {
+      statusCode = code;
+      return this;
+    },
+    json(body) {
+      jsonBody = body;
+      return this;
+    },
+  };
+
+  await unaniExamController.downloadAnswerKeyPDF(req, res);
+
+  assert.equal(statusCode, 404);
+  assert.equal(jsonBody.success, false);
+  assert.match(jsonBody.message, /does not belong to this exam/i);
+});
+
+test('25. downloadAnswerKeyPDF returns 403 when student tries to download another student answer key', async (t) => {
+  const origFindOneExam = UnaniExam.findOne;
+  const origFindByIdResult = UnaniExamResult.findById;
+
+  UnaniExam.findOne = () => ({ lean: async () => mockExamData });
+  UnaniExamResult.findById = () => ({ lean: async () => mockResultData }); // studentId: mockStudentId
+
+  t.after(() => {
+    UnaniExam.findOne = origFindOneExam;
+    UnaniExamResult.findById = origFindByIdResult;
+  });
+
+  const req = {
+    params: {
+      examId: mockExamId.toString(),
+      resultId: mockResultId.toString(),
+    },
+    user: {
+      id: mockOtherStudentId.toString(),
+      studentId: mockOtherStudentId.toString(),
+      role: 'student',
+    },
+  };
+
+  let statusCode = 0;
+  let jsonBody = null;
+  const res = {
+    status(code) {
+      statusCode = code;
+      return this;
+    },
+    json(body) {
+      jsonBody = body;
+      return this;
+    },
+  };
+
+  await unaniExamController.downloadAnswerKeyPDF(req, res);
+
+  assert.equal(statusCode, 403);
+  assert.equal(jsonBody.success, false);
+  assert.match(jsonBody.message, /not authorized to view another student/i);
+});
+
+test('26. downloadAnswerKeyPDF returns 404 when requested resultId is not found', async (t) => {
+  const origFindOneExam = UnaniExam.findOne;
+  const origFindByIdResult = UnaniExamResult.findById;
+
+  UnaniExam.findOne = () => ({ lean: async () => mockExamData });
+  UnaniExamResult.findById = () => ({ lean: async () => null });
+
+  t.after(() => {
+    UnaniExam.findOne = origFindOneExam;
+    UnaniExamResult.findById = origFindByIdResult;
+  });
+
+  const req = {
+    params: {
+      examId: mockExamId.toString(),
+      resultId: new mongoose.Types.ObjectId().toString(),
+    },
+    user: {
+      id: mockStudentId.toString(),
+      role: 'student',
+    },
+  };
+
+  let statusCode = 0;
+  let jsonBody = null;
+  const res = {
+    status(code) {
+      statusCode = code;
+      return this;
+    },
+    json(body) {
+      jsonBody = body;
+      return this;
+    },
+  };
+
+  await unaniExamController.downloadAnswerKeyPDF(req, res);
+
+  assert.equal(statusCode, 404);
+  assert.equal(jsonBody.success, false);
+  assert.match(jsonBody.message, /Unani exam result not found/i);
+});
+
+
