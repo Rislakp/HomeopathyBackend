@@ -11,6 +11,36 @@ try {
 
 const EMAIL_REGEX = /^\w+([\.-]?\w+)*@\w+([\.-]?\w+)*(\.\w{2,3})+$/;
 
+const getJwtRefreshSecret = () => {
+  const secret = process.env.JWT_REFRESH_SECRET || (process.env.JWT_SECRET ? process.env.JWT_SECRET + '_refresh' : undefined) || (process.env.NODE_ENV !== 'production' ? 'white_coat_academy_secret_jwt_refresh_key_2026_super_secure' : undefined);
+  if (!secret) throw new Error('JWT_REFRESH_SECRET or JWT_SECRET is not configured');
+  return secret;
+};
+
+/**
+ * Generate cryptographically signed refresh token with explicit configurable expiry
+ */
+const generateRefreshToken = (user) => {
+  const secret = getJwtRefreshSecret();
+  const userId = user._id ? user._id.toString() : (user.id || user.userId);
+  const role = (user.role || 'student').toLowerCase().trim();
+  const tokenVersion = user.tokenVersion !== undefined ? user.tokenVersion : 0;
+
+  return jwt.sign(
+    {
+      id: userId,
+      userId: userId,
+      tokenVersion: tokenVersion,
+      role: role,
+      type: 'refresh',
+    },
+    secret,
+    {
+      expiresIn: process.env.JWT_REFRESH_EXPIRES_IN || '30d',
+    }
+  );
+};
+
 /**
  * Generate JWT token containing user id, email, and role from database
  */
@@ -35,8 +65,8 @@ const generateToken = (user, studentDoc = null) => {
   const courseIdsArray = [];
   const addCId = (id) => {
     const s = String(id || '').trim();
-    if (!s || seenIds.has(s)) return;
-    seenIds.add(s);
+    if (!s || seenIds.has(s.toLowerCase())) return;
+    seenIds.add(s.toLowerCase());
     courseIdsArray.push(s);
   };
   // From studentDoc (authoritative source)
@@ -65,7 +95,7 @@ const generateToken = (user, studentDoc = null) => {
     },
     secret,
     {
-      expiresIn: process.env.JWT_EXPIRES_IN || '30d',
+      expiresIn: process.env.JWT_EXPIRES_IN || '15m',
     }
   );
 };
@@ -630,11 +660,15 @@ const universalLogin = async (req, res) => {
     }
 
     const token = generateToken(user, studentDocForResponse);
+    const refreshToken = generateRefreshToken(user);
 
     return res.status(200).json({
       success: true,
       message: 'Login successful',
       token,
+      accessToken: token,
+      refreshToken,
+      expiresIn: process.env.JWT_EXPIRES_IN || '15m',
       role: userRole,
       user: await buildUserResponse(user, studentDocForResponse, { isLogin: true }),
     });
@@ -731,11 +765,15 @@ const studentLogin = async (req, res) => {
 
     // 2. Generate standard JWT token with full course identity
     const token = generateToken(user, studentDocFound);
+    const refreshToken = generateRefreshToken(user);
 
     return res.status(200).json({
       success: true,
       message: 'Login successful',
       token,
+      accessToken: token,
+      refreshToken,
+      expiresIn: process.env.JWT_EXPIRES_IN || '15m',
       role: 'student',
       user: await buildUserResponse(user, studentDocFound, { isLogin: true }),
     });
@@ -867,13 +905,17 @@ const adminLogin = async (req, res) => {
         role: userObj.role,
       },
       secret,
-      { expiresIn: process.env.JWT_EXPIRES_IN || '30d' }
+      { expiresIn: process.env.JWT_EXPIRES_IN || '15m' }
     );
+    const refreshToken = generateRefreshToken(userObj);
 
     return res.status(200).json({
       success: true,
       message: 'Admin login successful',
       token,
+      accessToken: token,
+      refreshToken,
+      expiresIn: process.env.JWT_EXPIRES_IN || '15m',
       role: userObj.role,
       user: userObj,
     });
@@ -1173,17 +1215,231 @@ const updatePassword = async (req, res) => {
 
     if (user) {
       user.password = newPassword;
+      user.tokenVersion = (user.tokenVersion || 0) + 1;
       await user.save();
     }
     if (admin) {
       const bcrypt = require('bcryptjs');
       admin.password = await bcrypt.hash(newPassword, 10);
+      admin.tokenVersion = (admin.tokenVersion || 0) + 1;
       await admin.save();
     }
 
     return res.status(200).json({ success: true, message: 'Password updated successfully' });
   } catch (error) {
     return res.status(500).json({ success: false, message: 'Server error', error: error.message });
+  }
+};
+
+/**
+ * @route   POST /api/auth/refresh
+ * @route   POST /api/auth/refresh-token
+ * @desc    Exchange a valid refresh token for a fresh access token & rotated refresh token
+ * @access  Public
+ */
+const refreshTokenHandler = async (req, res) => {
+  try {
+    const rawRefreshToken =
+      (req.body && (req.body.refreshToken || req.body.token)) ||
+      req.headers['x-refresh-token'] ||
+      (req.headers.authorization && req.headers.authorization.startsWith('Bearer ')
+        ? req.headers.authorization.split(' ')[1]
+        : null);
+
+    if (!rawRefreshToken || typeof rawRefreshToken !== 'string' || !rawRefreshToken.trim()) {
+      return res.status(400).json({
+        success: false,
+        message: 'Refresh token is required',
+        code: 'REFRESH_TOKEN_REQUIRED',
+      });
+    }
+
+    const refreshToken = rawRefreshToken.trim();
+
+    let decoded;
+    try {
+      decoded = jwt.verify(refreshToken, getJwtRefreshSecret(), { clockTolerance: 60 });
+    } catch (err) {
+      if (err.name === 'TokenExpiredError') {
+        return res.status(401).json({
+          success: false,
+          message: 'Refresh token has expired. Please log in again.',
+          code: 'REFRESH_TOKEN_EXPIRED',
+          error: err.message,
+        });
+      }
+      return res.status(401).json({
+        success: false,
+        message: 'Invalid refresh token.',
+        code: 'REFRESH_TOKEN_INVALID',
+        error: err.message,
+      });
+    }
+
+    // Verify token type to prevent re-using access token as refresh token
+    if (decoded.type && decoded.type !== 'refresh') {
+      return res.status(401).json({
+        success: false,
+        message: 'Provided token is not a valid refresh token.',
+        code: 'INVALID_TOKEN_TYPE',
+      });
+    }
+
+    const userId = decoded.userId || decoded.id;
+    if (!userId) {
+      return res.status(401).json({
+        success: false,
+        message: 'Invalid refresh token payload.',
+        code: 'INVALID_TOKEN_PAYLOAD',
+      });
+    }
+
+    // Lookup user in primary User collection first
+    let user = await User.findById(userId);
+    let admin = null;
+    let userRole = decoded.role || 'student';
+
+    if (!user) {
+      try {
+        const Admin = require('../models/admin.model');
+        admin = await Admin.findById(userId);
+      } catch (e) {}
+    }
+
+    if (!user && !admin) {
+      return res.status(401).json({
+        success: false,
+        message: 'User associated with this token no longer exists.',
+        code: 'USER_NOT_FOUND',
+      });
+    }
+
+    const targetUser = user || admin;
+    userRole = (targetUser.role || userRole).toString().toLowerCase().trim();
+
+    // Revocation check: verify tokenVersion matches user's current tokenVersion
+    const currentVersion = targetUser.tokenVersion !== undefined ? targetUser.tokenVersion : 0;
+    const decodedVersion = decoded.tokenVersion !== undefined ? decoded.tokenVersion : 0;
+    if (decodedVersion !== currentVersion) {
+      return res.status(401).json({
+        success: false,
+        message: 'Session has been revoked or invalidated. Please log in again.',
+        code: 'SESSION_REVOKED',
+      });
+    }
+
+    // Enforce student approval and account status on refresh (cannot bypass)
+    let studentDoc = null;
+    if (userRole === 'student') {
+      if (Student) {
+        studentDoc = await Student.findOne({
+          $or: [
+            { userId: targetUser._id },
+            { email: targetUser.email ? targetUser.email.toLowerCase() : '' },
+          ],
+        });
+      }
+
+      const accountStatus = studentDoc ? studentDoc.accountStatus : targetUser.accountStatus;
+      const status = studentDoc ? studentDoc.status : targetUser.status;
+
+      // Block rejected or inactive
+      if (accountStatus === 'Rejected' || status === 'Inactive') {
+        return res.status(403).json({
+          success: false,
+          message: 'Your account has been rejected or deactivated. Session ended.',
+          code: 'ACCOUNT_DEACTIVATED',
+        });
+      }
+
+      // Require Approved or Active
+      if (accountStatus !== 'Approved' && status !== 'Active') {
+        return res.status(403).json({
+          success: false,
+          message: 'Your account is pending admin approval. Cannot refresh session.',
+          code: 'ACCOUNT_PENDING_APPROVAL',
+        });
+      }
+    }
+
+    // Generate fresh access token (with up-to-date course enrollment claims)
+    let newAccessToken;
+    if (admin && !user) {
+      const secret = process.env.JWT_SECRET || (process.env.NODE_ENV !== 'production' ? 'white_coat_academy_secret_jwt_key_2026_super_secure' : undefined);
+      newAccessToken = jwt.sign(
+        {
+          id: admin._id.toString(),
+          userId: admin._id.toString(),
+          adminId: admin._id.toString(),
+          email: admin.email,
+          role: userRole,
+        },
+        secret,
+        { expiresIn: process.env.JWT_EXPIRES_IN || '15m' }
+      );
+    } else {
+      newAccessToken = generateToken(user, studentDoc);
+    }
+
+    // Rotate refresh token
+    const newRefreshToken = generateRefreshToken(targetUser);
+
+    const userResponse = user
+      ? await buildUserResponse(user, studentDoc, { isLogin: true })
+      : {
+          id: admin._id.toString(),
+          _id: admin._id.toString(),
+          name: admin.name,
+          email: admin.email,
+          role: userRole,
+        };
+
+    return res.status(200).json({
+      success: true,
+      message: 'Token refreshed successfully',
+      token: newAccessToken,
+      accessToken: newAccessToken,
+      refreshToken: newRefreshToken,
+      expiresIn: process.env.JWT_EXPIRES_IN || '15m',
+      role: userRole,
+      user: userResponse,
+    });
+  } catch (error) {
+    console.error('Refresh Token Error:', error);
+    return res.status(500).json({
+      success: false,
+      message: 'Internal server error during token refresh',
+      error: error.message,
+    });
+  }
+};
+
+/**
+ * @route   POST /api/auth/logout
+ * @desc    Revoke all active refresh sessions for the user by incrementing tokenVersion
+ * @access  Private (requireAuth)
+ */
+const logoutHandler = async (req, res) => {
+  try {
+    const userId = req.user?.id || req.user?.userId;
+    if (userId) {
+      await User.findByIdAndUpdate(userId, { $inc: { tokenVersion: 1 } });
+      try {
+        const Admin = require('../models/admin.model');
+        await Admin.findByIdAndUpdate(userId, { $inc: { tokenVersion: 1 } });
+      } catch (e) {}
+    }
+    return res.status(200).json({
+      success: true,
+      message: 'Logged out successfully. All sessions revoked.',
+    });
+  } catch (error) {
+    console.error('Logout Error:', error);
+    return res.status(500).json({
+      success: false,
+      message: 'Internal server error during logout',
+      error: error.message,
+    });
   }
 };
 
@@ -1203,5 +1459,11 @@ module.exports = {
   updatePasswordDirect: updatePassword,
   resetPasswordDirect: resetPassword,
   generateToken,
+  generateRefreshToken,
+  getJwtRefreshSecret,
+  refreshToken: refreshTokenHandler,
+  refreshTokenHandler,
+  logout: logoutHandler,
+  logoutHandler,
   buildUserResponse,
 };

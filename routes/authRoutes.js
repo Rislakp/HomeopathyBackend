@@ -11,9 +11,20 @@ const {
   resetPassword,
   forgotPassword,
   updatePassword,
+  refreshTokenHandler,
+  logoutHandler,
 } = require('../controllers/authController');
 
 const { requireAuth, requireAdmin } = require('../middleware/rbac');
+
+// -----------------------------
+// TOKEN REFRESH & SESSION MANAGEMENT
+// -----------------------------
+router.post('/refresh', refreshTokenHandler);
+router.post('/refresh-token', refreshTokenHandler);
+router.post('/student/refresh', refreshTokenHandler);
+router.post('/student/refresh-token', refreshTokenHandler);
+router.post('/logout', requireAuth, logoutHandler);
 
 // -----------------------------
 // STUDENT REGISTRATION ENDPOINTS

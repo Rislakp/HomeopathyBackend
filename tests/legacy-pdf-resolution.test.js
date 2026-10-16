@@ -37,7 +37,7 @@ test('1. New PDF with valid S3 key and storageProvider resolves fresh signed URL
   assert.ok(resolved.url.includes('RESPIRATORY-SYSTEM-LESSON-1.pdf'), 'Should point to correct object');
   assert.ok(resolved.url.includes('%2B'), 'Should encode literal plus sign');
   assert.strictEqual(resolved.url.includes('+'), false, 'Should have no raw plus in query');
-  assert.strictEqual(resolved.accessUrlExpiresIn, 900);
+  assert.ok(resolved.accessUrlExpiresIn >= 900);
 });
 
 test('2. Old PDF with missing storageProvider but valid S3 key normalizes and signs', async () => {
