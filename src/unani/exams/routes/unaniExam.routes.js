@@ -37,6 +37,19 @@ router.get('/api/unani-exams/student/:examId/answer-key/download', requireCourse
 router.post('/api/unani-exams/student/:examId/answer-key/download', requireCourseAccess('unani'), unaniExamController.downloadAnswerKeyPDF);
 router.get('/api/v1/unani-exams/student/:examId/answer-key/download', requireCourseAccess('unani'), unaniExamController.downloadAnswerKeyPDF);
 router.post('/api/v1/unani-exams/student/:examId/answer-key/download', requireCourseAccess('unani'), unaniExamController.downloadAnswerKeyPDF);
+router.get('/unani-exams/student/:examId/answer-key/download', requireCourseAccess('unani'), unaniExamController.downloadAnswerKeyPDF);
+router.post('/unani-exams/student/:examId/answer-key/download', requireCourseAccess('unani'), unaniExamController.downloadAnswerKeyPDF);
+
+// GET student results-specific answer key and watermarked PDF download
+router.get('/api/unani-exams/student/:examId/results/:resultId/answer-key', requireCourseAccess('unani'), unaniExamController.getAnswerKey);
+router.get('/api/v1/unani-exams/student/:examId/results/:resultId/answer-key', requireCourseAccess('unani'), unaniExamController.getAnswerKey);
+router.get('/unani-exams/student/:examId/results/:resultId/answer-key', requireCourseAccess('unani'), unaniExamController.getAnswerKey);
+router.get('/api/unani-exams/student/:examId/results/:resultId/answer-key/download', requireCourseAccess('unani'), unaniExamController.downloadAnswerKeyPDF);
+router.post('/api/unani-exams/student/:examId/results/:resultId/answer-key/download', requireCourseAccess('unani'), unaniExamController.downloadAnswerKeyPDF);
+router.get('/api/v1/unani-exams/student/:examId/results/:resultId/answer-key/download', requireCourseAccess('unani'), unaniExamController.downloadAnswerKeyPDF);
+router.post('/api/v1/unani-exams/student/:examId/results/:resultId/answer-key/download', requireCourseAccess('unani'), unaniExamController.downloadAnswerKeyPDF);
+router.get('/unani-exams/student/:examId/results/:resultId/answer-key/download', requireCourseAccess('unani'), unaniExamController.downloadAnswerKeyPDF);
+router.post('/unani-exams/student/:examId/results/:resultId/answer-key/download', requireCourseAccess('unani'), unaniExamController.downloadAnswerKeyPDF);
 
 // ─────────────────────────────────────────────────────────────────────────────
 // 1. ADMIN UNANI TEST HISTORY & RANK (MUST be declared BEFORE /:id dynamic routes)
