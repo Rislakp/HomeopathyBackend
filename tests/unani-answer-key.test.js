@@ -1091,4 +1091,151 @@ test('26. downloadAnswerKeyPDF returns 404 when requested resultId is not found'
   assert.match(jsonBody.message, /Unani exam result not found/i);
 });
 
+test('27. unaniExam.routes dispatches GET /api/unani-exams/:examId/results/:resultId/answer-key to controller', async (t) => {
+  const jwt = require('jsonwebtoken');
+  const memoryCache = require('../utils/cache');
+  const jwtSecret = process.env.JWT_SECRET || 'white_coat_academy_secret_jwt_key_2026_super_secure';
+  const testToken = jwt.sign({ userId: mockStudentId.toString(), role: 'student' }, jwtSecret);
+  memoryCache.set(`user_auth_${mockStudentId}`, {
+    _id: mockStudentId,
+    id: mockStudentId.toString(),
+    studentId: mockStudentId.toString(),
+    name: 'Dr. Zaid Khan',
+    email: 'zaid@example.com',
+    role: 'student',
+    courseId: 'unani',
+    courseIds: ['unani'],
+    enrolledCourses: ['unani'],
+  });
+
+  const origFindOneExam = UnaniExam.findOne;
+  const origFindByIdResult = UnaniExamResult.findById;
+
+  UnaniExam.findOne = () => ({ lean: async () => mockExamData });
+  UnaniExamResult.findById = () => ({ lean: async () => mockResultData });
+
+  t.after(() => {
+    UnaniExam.findOne = origFindOneExam;
+    UnaniExamResult.findById = origFindByIdResult;
+  });
+
+  const unaniRoutes = require('../src/unani/exams/routes/unaniExam.routes');
+  const express = require('express');
+  const app = express();
+  app.use(unaniRoutes);
+
+  const server = app.listen(0);
+  const port = server.address().port;
+
+  t.after(() => server.close());
+
+  const res = await fetch(`http://127.0.0.1:${port}/api/unani-exams/${mockExamId}/results/${mockResultId}/answer-key`, {
+    headers: { authorization: `Bearer ${testToken}` },
+  });
+  assert.equal(res.status, 200);
+  const data = await res.json();
+  assert.equal(data.success, true);
+  assert.equal(data.data.examId, mockExamId.toString());
+  assert.equal(data.data.resultId, mockResultId.toString());
+});
+
+test('28. unaniExam.routes dispatches GET /api/unani-exams/:examId/results/:resultId/answer-key/download and returns valid PDF', async (t) => {
+  const jwt = require('jsonwebtoken');
+  const memoryCache = require('../utils/cache');
+  const jwtSecret = process.env.JWT_SECRET || 'white_coat_academy_secret_jwt_key_2026_super_secure';
+  const testToken = jwt.sign({ userId: mockStudentId.toString(), role: 'student' }, jwtSecret);
+  memoryCache.set(`user_auth_${mockStudentId}`, {
+    _id: mockStudentId,
+    id: mockStudentId.toString(),
+    studentId: mockStudentId.toString(),
+    name: 'Dr. Zaid Khan',
+    email: 'zaid@example.com',
+    role: 'student',
+    courseId: 'unani',
+    courseIds: ['unani'],
+    enrolledCourses: ['unani'],
+  });
+
+  const origFindOneExam = UnaniExam.findOne;
+  const origFindByIdResult = UnaniExamResult.findById;
+
+  UnaniExam.findOne = () => ({ lean: async () => mockExamData });
+  UnaniExamResult.findById = () => ({ lean: async () => mockResultData });
+
+  t.after(() => {
+    UnaniExam.findOne = origFindOneExam;
+    UnaniExamResult.findById = origFindByIdResult;
+  });
+
+  const unaniRoutes = require('../src/unani/exams/routes/unaniExam.routes');
+  const express = require('express');
+  const app = express();
+  app.use(unaniRoutes);
+
+  const server = app.listen(0);
+  const port = server.address().port;
+
+  t.after(() => server.close());
+
+  const res = await fetch(`http://127.0.0.1:${port}/api/unani-exams/${mockExamId}/results/${mockResultId}/answer-key/download`, {
+    headers: { authorization: `Bearer ${testToken}` },
+  });
+  assert.equal(res.status, 200);
+  assert.equal(res.headers.get('content-type'), 'application/pdf');
+  assert.match(res.headers.get('content-disposition'), /attachment; filename="unani-.*-answer-key\.pdf"/);
+  const buf = Buffer.from(await res.arrayBuffer());
+  assert.ok(buf.length > 500);
+  assert.equal(buf.slice(0, 5).toString('ascii'), '%PDF-');
+});
+
+test('29. unaniExam.routes dispatches student route GET /api/unani-exams/student/:examId/results/:resultId/answer-key/download', async (t) => {
+  const jwt = require('jsonwebtoken');
+  const memoryCache = require('../utils/cache');
+  const jwtSecret = process.env.JWT_SECRET || 'white_coat_academy_secret_jwt_key_2026_super_secure';
+  const testToken = jwt.sign({ userId: mockStudentId.toString(), role: 'student' }, jwtSecret);
+  memoryCache.set(`user_auth_${mockStudentId}`, {
+    _id: mockStudentId,
+    id: mockStudentId.toString(),
+    studentId: mockStudentId.toString(),
+    name: 'Dr. Zaid Khan',
+    email: 'zaid@example.com',
+    role: 'student',
+    courseId: 'unani',
+    courseIds: ['unani'],
+    enrolledCourses: ['unani'],
+  });
+
+  const origFindOneExam = UnaniExam.findOne;
+  const origFindByIdResult = UnaniExamResult.findById;
+
+  UnaniExam.findOne = () => ({ lean: async () => mockExamData });
+  UnaniExamResult.findById = () => ({ lean: async () => mockResultData });
+
+  t.after(() => {
+    UnaniExam.findOne = origFindOneExam;
+    UnaniExamResult.findById = origFindByIdResult;
+  });
+
+  const unaniRoutes = require('../src/unani/exams/routes/unaniExam.routes');
+  const express = require('express');
+  const app = express();
+  app.use(unaniRoutes);
+
+  const server = app.listen(0);
+  const port = server.address().port;
+
+  t.after(() => server.close());
+
+  const res = await fetch(`http://127.0.0.1:${port}/api/unani-exams/student/${mockExamId}/results/${mockResultId}/answer-key/download`, {
+    headers: { authorization: `Bearer ${testToken}` },
+  });
+  assert.equal(res.status, 200);
+  assert.equal(res.headers.get('content-type'), 'application/pdf');
+  const buf = Buffer.from(await res.arrayBuffer());
+  assert.ok(buf.length > 500);
+  assert.equal(buf.slice(0, 5).toString('ascii'), '%PDF-');
+});
+
+
+
 
