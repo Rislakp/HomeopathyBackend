@@ -6,7 +6,7 @@ const { s3Client, bucket } = require('../config/s3');
 const { GetObjectCommand } = require('@aws-sdk/client-s3');
 const { getSignedUrl } = require('@aws-sdk/s3-request-presigner');
 const { deleteCloudinaryByUrl } = require('../config/cloudinary');
-const { encodeSignedUrl } = require('../utils/s3MediaSigner');
+const { encodeSignedUrl, S3_MEDIA_URL_TTL_SECONDS } = require('../utils/s3MediaSigner');
 
 // Helper to sign S3 demo video for direct playback
 const signDemoVideo = async (doc) => {
@@ -15,10 +15,13 @@ const signDemoVideo = async (doc) => {
   const key = obj.s3Key || s3Service.getS3KeyFromUrl(obj.videoUrl);
   if (key && (obj.storageProvider === 's3' || obj.videoUrl?.includes('amazonaws.com') || key.startsWith('videos/'))) {
     try {
+      const contentType = key.toLowerCase().endsWith('.webm') ? 'video/webm' : (key.toLowerCase().endsWith('.mov') ? 'video/quicktime' : 'video/mp4');
       const rawSigned = await getSignedUrl(s3Client, new GetObjectCommand({
         Bucket: bucket,
         Key: key,
-      }), { expiresIn: 900 });
+        ResponseContentType: contentType,
+        ResponseContentDisposition: 'inline',
+      }), { expiresIn: S3_MEDIA_URL_TTL_SECONDS });
       const signed = encodeSignedUrl(rawSigned);
       obj.videoUrl = signed;
       obj.signedVideoUrl = signed;

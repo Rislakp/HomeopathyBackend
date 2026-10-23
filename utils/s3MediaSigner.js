@@ -108,13 +108,32 @@ const signS3Reference = async (reference, responseContentType) => {
     return stripS3ReferenceUrls(normalized);
   }
 
+  // Determine appropriate ResponseContentType for inline playback and seeking
+  let effectiveContentType = responseContentType || normalized.contentType;
+  if (!effectiveContentType || effectiveContentType === 'application/octet-stream') {
+    const lowerKey = key.toLowerCase();
+    if (lowerKey.endsWith('.mp4') || key.startsWith('videos/') || key.startsWith('live_records/')) {
+      effectiveContentType = lowerKey.endsWith('.webm') ? 'video/webm' : (lowerKey.endsWith('.mov') ? 'video/quicktime' : 'video/mp4');
+    } else if (lowerKey.endsWith('.webm')) {
+      effectiveContentType = 'video/webm';
+    } else if (lowerKey.endsWith('.pdf') || key.startsWith('pdfs/')) {
+      effectiveContentType = 'application/pdf';
+    } else if (lowerKey.endsWith('.png')) {
+      effectiveContentType = 'image/png';
+    } else if (lowerKey.endsWith('.jpg') || lowerKey.endsWith('.jpeg')) {
+      effectiveContentType = 'image/jpeg';
+    } else if (lowerKey.endsWith('.webp')) {
+      effectiveContentType = 'image/webp';
+    }
+  }
+
   try {
     const url = await getSignedUrl(
       s3Client,
       new GetObjectCommand({
         Bucket: bucket,
         Key: key,
-        ...(responseContentType ? { ResponseContentType: responseContentType, ResponseContentDisposition: 'inline' } : {}),
+        ...(effectiveContentType ? { ResponseContentType: effectiveContentType, ResponseContentDisposition: 'inline' } : {}),
       }),
       { expiresIn: S3_MEDIA_URL_TTL_SECONDS }
     );
@@ -225,8 +244,12 @@ const resolveMediaRecord = async (reference, options = {}) => {
   if (!reference) return null;
   const source = typeof reference === 'string' ? { url: reference } : { ...reference };
   const rawUrl = String(source.url || source.secure_url || source.secureUrl || source.fileUrl || source.path || source.mediaUrl || source.s3Key || '').trim();
+  const lowerTarget = String(source.title || source.fileName || source.s3Key || rawUrl || '').toLowerCase();
+  const isVideo = lowerTarget.endsWith('.mp4') || lowerTarget.endsWith('.webm') || lowerTarget.endsWith('.mov') || String(source.s3Key || '').startsWith('videos/') || String(source.s3Key || '').startsWith('live_records/');
+  const isPdf = lowerTarget.endsWith('.pdf') || String(source.s3Key || '').startsWith('pdfs/');
+  const defaultMediaMime = isVideo ? (lowerTarget.endsWith('.webm') ? 'video/webm' : 'video/mp4') : (isPdf ? 'application/pdf' : undefined);
   const responseContentType = options.responseContentType ||
-    (source.contentType || (String(source.title || source.fileName || source.s3Key || rawUrl || '').toLowerCase().endsWith('.pdf') ? 'application/pdf' : undefined));
+    (source.contentType && source.contentType !== 'application/octet-stream' ? source.contentType : defaultMediaMime);
 
   // 1 & 2. Check for valid S3 reference (with or without explicit storageProvider)
   const normalized = normalizeS3Reference(source);

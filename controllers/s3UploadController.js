@@ -192,7 +192,12 @@ const initiateMultipartUpload = async (req, res) => {
   if (req.body?.fileSize !== undefined && !validSize(req.body.fileSize, VIDEO_MAX_BYTES)) return fail(res, 400, 'fileSize must be a positive safe integer no greater than 2 TiB.');
   const key = `videos/${Date.now()}-${randomUUID()}-${safeName}`;
   try {
-    const result = await s3Client.send(new CreateMultipartUploadCommand({ Bucket: bucket, Key: key, ContentType: contentType }));
+    const result = await s3Client.send(new CreateMultipartUploadCommand({
+      Bucket: bucket,
+      Key: key,
+      ContentType: contentType,
+      CacheControl: 'public, max-age=31536000',
+    }));
     if (!result.UploadId) throw new Error('S3 did not return an upload ID');
     log('initiated', { key, userId: req.user?.id });
     return res.status(201).json({
@@ -813,7 +818,7 @@ const getMediaAccessUrl = async (req, res) => {
     // 5. Generate SigV4 signed URL
     let contentType = undefined;
     if (prefix === 'videos/' || prefix === 'live_records/') {
-      contentType = key.endsWith('.webm') ? 'video/webm' : 'video/mp4';
+      contentType = key.endsWith('.webm') ? 'video/webm' : (key.endsWith('.mov') ? 'video/quicktime' : 'video/mp4');
     } else if (prefix === 'pdfs/') {
       contentType = 'application/pdf';
     }

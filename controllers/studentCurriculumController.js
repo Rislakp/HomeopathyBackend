@@ -23,7 +23,7 @@ const addSignedS3MediaUrls = async (course) => {
   }
   for (const moduleItem of course.modules || []) {
     for (const lesson of moduleItem.lessons || []) {
-      for (const [field, type] of [['videoParts', undefined], ['pdfNotes', 'application/pdf'], ['assignments', undefined], ['attachments', undefined]]) {
+      for (const [field, type] of [['videoParts', 'video/mp4'], ['pdfNotes', 'application/pdf'], ['assignments', undefined], ['attachments', undefined]]) {
         if (Array.isArray(lesson[field])) {
           lesson[field] = await Promise.all(lesson[field].map((resource) => resolveMediaRecord(resource, { responseContentType: type, course })));
         }
@@ -39,7 +39,8 @@ const addSignedS3MediaUrls = async (course) => {
           videoUrl: lesson.videoUrl,
         });
         if (s3Ref && s3Ref.s3Key) {
-          const signed = await signS3Reference(s3Ref);
+          const videoType = (s3Ref.s3Key || '').toLowerCase().endsWith('.webm') ? 'video/webm' : 'video/mp4';
+          const signed = await signS3Reference(s3Ref, videoType);
           if (signed?.url) {
             lesson.videoUrl = signed.url;
           }

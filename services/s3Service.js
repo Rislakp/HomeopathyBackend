@@ -107,12 +107,32 @@ const uploadBufferToS3 = async (buffer, options = {}) => {
   }
 
   const originalname = options.originalname || options.filename || 'file';
-  const mimetype = options.mimetype || options.contentType || 'application/octet-stream';
   const folder = (options.folder || options.prefix || 'media').replace(/^\/+|\/+$/g, '');
-
   const ext = path.extname(originalname).toLowerCase().replace('.', '') || 'bin';
   const baseName = cleanFileName(path.basename(originalname, path.extname(originalname)));
   const sanitizedFullName = ext ? `${baseName}.${ext}` : baseName;
+
+  let mimetype = options.mimetype || options.contentType;
+  if (!mimetype || mimetype === 'application/octet-stream') {
+    let detected = null;
+    try {
+      const mime = require('mime-types');
+      detected = mime.lookup(sanitizedFullName) || mime.lookup(ext);
+    } catch (_) {}
+    if (detected) {
+      mimetype = detected;
+    } else if (ext === 'mp4') {
+      mimetype = 'video/mp4';
+    } else if (ext === 'webm') {
+      mimetype = 'video/webm';
+    } else if (ext === 'mov') {
+      mimetype = 'video/quicktime';
+    } else if (ext === 'pdf') {
+      mimetype = 'application/pdf';
+    } else {
+      mimetype = mimetype || 'application/octet-stream';
+    }
+  }
 
   const key = options.customKey || `${folder}/${Date.now()}-${randomUUID().slice(0, 8)}-${sanitizedFullName}`;
 
