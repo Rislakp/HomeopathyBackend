@@ -22,6 +22,9 @@ const resourceSchema = new mongoose.Schema({
   bytes:         { type: Number, default: 0 },
   storageProvider: { type: String, trim: true, default: '' },
   s3Key:         { type: String, trim: true, default: '' },
+  // Optional, explicitly attached H.264/AAC rendition for WebM playback fallback.
+  mp4S3Key:      { type: String, trim: true, default: '' },
+  mp4StorageProvider: { type: String, trim: true, default: '' },
   resourceType:  { type: String, trim: true, default: '' },
   fileName:      { type: String, trim: true, default: '' },
   originalFileName: { type: String, trim: true, default: '' },

@@ -204,6 +204,12 @@ const toResourceObj = (item) => {
     if (!isSupportedS3ResourceKey(s3Key)) s3Key = '';
     const storageProvider = String(item.storageProvider || item.storage_provider || (s3Key ? 's3' : '')).trim().toLowerCase();
     const isS3Resource = storageProvider === 's3' && !!s3Key;
+    const candidateMp4Key = String(item.mp4S3Key || '').trim();
+    const mp4S3Key = storageProvider === 's3' &&
+      /^videos\/[a-zA-Z0-9][a-zA-Z0-9._/-]*\.mp4$/i.test(candidateMp4Key) &&
+      !candidateMp4Key.includes('..') && !candidateMp4Key.includes('//') && !/[\\\r\n]/.test(candidateMp4Key)
+      ? candidateMp4Key
+      : '';
     const rawId = item._id || item.id;
     const resolvedId = rawId ? rawId.toString() : undefined;
     const cloudUrl = ((item.secure_url || item.secureUrl) && (item.secure_url || item.secureUrl).startsWith('http'))
@@ -289,6 +295,8 @@ const toResourceObj = (item) => {
           : (typeof item.size === 'number' && item.size > 0 ? item.size : (Number(item.bytes || item.fileSize || item.size) || 0))),
       storageProvider,
       s3Key: isS3Resource ? s3Key : '',
+      mp4S3Key,
+      mp4StorageProvider: mp4S3Key ? 's3' : '',
       resourceType: String(item.resourceType || resType || '').trim(),
       fileName: String(item.fileName || item.originalFileName || item.originalname || item.filename || title || '').trim(),
       originalFileName: String(item.originalFileName || item.originalname || item.fileName || item.filename || title || '').trim(),

@@ -3,10 +3,66 @@ const Student = require('../models/Student');
 const LessonProgress = require('../models/LessonProgress');
 const CourseProgress = require('../models/CourseProgress');
 const ContentItemProgress = require('../models/ContentItemProgress');
+const { HeadObjectCommand } = require('@aws-sdk/client-s3');
+const { s3Client, bucket } = require('../config/s3');
 const { verifyStudentCourseAccess } = require('../utils/courseAccessHelper');
 const { logActivity } = require('../utils/activityLogger');
 const { signS3Reference, normalizeS3Reference, resolveMediaRecord } = require('../utils/s3MediaSigner');
 const { calculateCourseTotalDurationMinutes } = require('../utils/courseDurationHelper');
+
+const isWebmMedia = (resource) => {
+  const reference = resource?.s3Key || resource?.url || resource?.secure_url || resource?.fileUrl || '';
+  try {
+    return new URL(reference, 'https://media.invalid').pathname.toLowerCase().endsWith('.webm');
+  } catch (_) {
+    return String(reference).split(/[?#]/)[0].toLowerCase().endsWith('.webm');
+  }
+};
+
+const hasSafeMp4Key = (key) => typeof key === 'string' &&
+  /^videos\/[a-zA-Z0-9][a-zA-Z0-9._/-]*\.mp4$/i.test(key) &&
+  !key.includes('..') && !key.includes('//') && !/[\\\r\n]/.test(key);
+
+const attachVerifiedMp4Fallback = async (resource) => {
+  if (!resource || typeof resource !== 'object') return resource;
+  const output = { ...resource };
+  // Never pass through stale or caller-supplied fallback URLs. A fallback is
+  // returned only after verifying the explicitly stored S3 object exists.
+  for (const field of ['mp4Url', 'fallbackMp4Url', 'fallbackVideoUrl', 'fallbackMp4S3Key', 'fallbackS3Key', 'mp4S3Key', 'mp4StorageProvider']) delete output[field];
+  if (!isWebmMedia(resource)) {
+    delete output.mp4S3Key;
+    delete output.mp4StorageProvider;
+    return output;
+  }
+
+  const key = String(resource.mp4S3Key || '').trim();
+  if (resource.mp4StorageProvider !== 's3' || !hasSafeMp4Key(key)) {
+    delete output.mp4S3Key;
+    delete output.mp4StorageProvider;
+    return output;
+  }
+
+  try {
+    const metadata = await s3Client.send(new HeadObjectCommand({ Bucket: bucket, Key: key }));
+    if (!(Number(metadata?.ContentLength) > 0) || String(metadata?.ContentType || '').toLowerCase() !== 'video/mp4') return output;
+    const fallback = await signS3Reference({
+      storageProvider: 's3',
+      s3Key: key,
+      contentType: 'video/mp4',
+      resourceType: 'video',
+      title: resource.title || resource.fileName || '',
+    }, 'video/mp4');
+    if (!fallback?.url) return output;
+    output.mp4S3Key = key;
+    output.mp4StorageProvider = 's3';
+    output.mp4Url = fallback.url;
+    output.fallbackVideoUrl = fallback.url;
+  } catch (error) {
+    // A missing/unavailable rendition must not break the existing WebM item.
+    return output;
+  }
+  return output;
+};
 
 const addSignedS3MediaUrls = async (course) => {
   if (!course || typeof course !== 'object') return course;
@@ -23,9 +79,15 @@ const addSignedS3MediaUrls = async (course) => {
   }
   for (const moduleItem of course.modules || []) {
     for (const lesson of moduleItem.lessons || []) {
-      for (const [field, type] of [['videoParts', 'video/mp4'], ['pdfNotes', 'application/pdf'], ['assignments', undefined], ['attachments', undefined]]) {
+      for (const [field, type] of [['videoParts', undefined], ['pdfNotes', 'application/pdf'], ['assignments', undefined], ['attachments', undefined]]) {
         if (Array.isArray(lesson[field])) {
-          lesson[field] = await Promise.all(lesson[field].map((resource) => resolveMediaRecord(resource, { responseContentType: type, course })));
+          lesson[field] = await Promise.all(lesson[field].map(async (resource) => {
+            const mediaType = field === 'videoParts'
+              ? (isWebmMedia(resource) ? 'video/webm' : 'video/mp4')
+              : type;
+            const resolved = await resolveMediaRecord(resource, { responseContentType: mediaType, course });
+            return field === 'videoParts' ? attachVerifiedMp4Fallback(resolved) : resolved;
+          }));
         }
       }
       const firstVideo = (lesson.videoParts || []).find((resource) => resource.storageProvider === 's3' && resource.s3Key);
@@ -1320,4 +1382,5 @@ module.exports = {
   saveCourseSummary,
   extractDurationSeconds,
   formatCourseForStudent,
+  attachVerifiedMp4Fallback,
 };
