@@ -91,8 +91,21 @@ const addSignedS3MediaUrls = async (course) => {
         }
       }
       const firstVideo = (lesson.videoParts || []).find((resource) => resource.storageProvider === 's3' && resource.s3Key);
-      if (firstVideo && !lesson.videoUrl) {
-        lesson.videoUrl = firstVideo.url;
+      if (firstVideo) {
+        if (firstVideo.mp4Url) {
+          lesson.mp4Url = firstVideo.mp4Url;
+          lesson.fallbackVideoUrl = firstVideo.fallbackVideoUrl || firstVideo.mp4Url;
+          lesson.fallbackMp4Url = firstVideo.fallbackVideoUrl || firstVideo.mp4Url;
+          lesson.mp4S3Key = firstVideo.mp4S3Key;
+          lesson.mp4StorageProvider = firstVideo.mp4StorageProvider;
+        }
+        const isLessonUrlLiveVideo = lesson.videoUrl &&
+          !lesson.videoUrl.includes('meet.google.com') &&
+          !lesson.videoUrl.includes('tel.meet') &&
+          (lesson.videoUrl.includes('X-Amz-Signature') || lesson.videoUrl.includes('cloudinary.com'));
+        if (!isLessonUrlLiveVideo) {
+          lesson.videoUrl = firstVideo.url;
+        }
       } else if (!firstVideo && (lesson.videoS3Key || lesson.s3Key || lesson.storageProvider === 's3' || (lesson.videoUrl && (lesson.videoUrl.includes('.amazonaws.com/') || lesson.videoUrl.startsWith('videos/'))))) {
         const candidateKey = lesson.videoS3Key || lesson.s3Key || (lesson.videoUrl && lesson.videoUrl.startsWith('videos/') ? lesson.videoUrl : undefined);
         const s3Ref = normalizeS3Reference({
@@ -105,6 +118,18 @@ const addSignedS3MediaUrls = async (course) => {
           const signed = await signS3Reference(s3Ref, videoType);
           if (signed?.url) {
             lesson.videoUrl = signed.url;
+          }
+          if (videoType === 'video/webm' && lesson.mp4S3Key) {
+            const fallbackRef = await attachVerifiedMp4Fallback({
+              ...s3Ref,
+              mp4S3Key: lesson.mp4S3Key,
+              mp4StorageProvider: lesson.mp4StorageProvider || 's3',
+            });
+            if (fallbackRef?.mp4Url) {
+              lesson.mp4Url = fallbackRef.mp4Url;
+              lesson.fallbackVideoUrl = fallbackRef.fallbackVideoUrl;
+              lesson.fallbackMp4Url = fallbackRef.mp4Url;
+            }
           }
         }
       }
@@ -370,6 +395,7 @@ async function resolveStudent(reqUser) {
 function ensureAbsoluteUrl(url) {
   if (!url) return '';
   if (url.startsWith('http://') || url.startsWith('https://')) return url;
+  if (/^(?:meet\.google\.com|tel\.meet|zoom\.us|teams\.microsoft\.com)/i.test(url)) return `https://${url}`;
   const baseUrl = process.env.BASE_URL || 'https://homeopathybackend-1.onrender.com';
   const cleanUrl = url.startsWith('/') ? url : `/${url}`;
   return `${baseUrl}${cleanUrl}`;
@@ -389,7 +415,12 @@ function formatCourseForStudent(courseDoc) {
     course.modules = course.modules.map((mod) => {
       if (Array.isArray(mod.lessons)) {
         mod.lessons = mod.lessons.map((les) => {
-          if (les.videoUrl) les.videoUrl = ensureAbsoluteUrl(les.videoUrl);
+          if (les.videoUrl) {
+            les.videoUrl = ensureAbsoluteUrl(les.videoUrl);
+            if (/meet\.google\.com|tel\.meet/i.test(les.videoUrl) && !les.meetingUrl) {
+              les.meetingUrl = les.videoUrl;
+            }
+          }
           if (les.meetingUrl) les.meetingUrl = ensureAbsoluteUrl(les.meetingUrl);
 
           ['videoParts', 'pdfNotes', 'assignments', 'attachments'].forEach((resKey) => {

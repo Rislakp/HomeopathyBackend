@@ -198,12 +198,16 @@ const formatRecordingDocument = async (rec) => {
   const streamUrl = (rec.streamUrl || rec.liveClassUrl || '').trim();
   // Ensure recordedVideoUrl is strictly clean public URL or empty string "" if pending
   const storedVideoUrl = sanitizeVideoUrl(rec.recordedVideoUrl || rec.recordingFileUrl || '');
+  const recS3Key = (rec.s3Key || '').toLowerCase();
+  const inferredMime = recS3Key.endsWith('.webm') || rec.format === 'webm'
+    ? 'video/webm'
+    : (recS3Key.endsWith('.mov') || rec.format === 'mov' ? 'video/quicktime' : 'video/mp4');
   const s3RefCandidate = (rec.storageProvider === 's3' && rec.s3Key)
-    ? { storageProvider: 's3', s3Key: rec.s3Key, contentType: 'video/mp4' }
+    ? { storageProvider: 's3', s3Key: rec.s3Key, contentType: inferredMime }
     : storedVideoUrl;
   const s3VideoReference = normalizeS3Reference(s3RefCandidate);
   const signedResult = s3VideoReference
-    ? await signS3Reference(s3VideoReference, s3VideoReference.contentType || 'video/mp4')
+    ? await signS3Reference(s3VideoReference, s3VideoReference.contentType || inferredMime)
     : null;
   const recordedVideoUrl = signedResult?.url || storedVideoUrl;
 

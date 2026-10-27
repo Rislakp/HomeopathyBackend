@@ -312,3 +312,39 @@ test('7. Access Control: Unauthorized access to private recordings is blocked wi
   assert.equal(res.body.success, false);
   assert.ok(res.body.message.includes('not authorized'), 'Reason for rejection returned');
 });
+
+test('8. Recording MIME type: WebM recording reference signs with video/webm', async (t) => {
+  const origFindById = Recording.findById;
+  t.after(() => {
+    Recording.findById = origFindById;
+  });
+
+  const recId = new mongoose.Types.ObjectId();
+  const mockRec = {
+    _id: recId,
+    courseName: 'Test Course',
+    lessonTitle: 'WebM Lecture',
+    s3Key: 'videos/recording-101.webm',
+    storageProvider: 's3',
+    format: 'webm',
+    status: 'completed',
+    duration: '15:00',
+    bytes: 50000000,
+  };
+
+  Recording.findById = () => ({
+    populate: async () => mockRec,
+  });
+
+  const req = {
+    params: { id: recId.toString() },
+    user: { id: 'admin1', role: 'admin' },
+  };
+  const res = makeResponse();
+
+  await recordingController.getRecordingById(req, res);
+
+  assert.equal(res.statusCode, 200);
+  assert.ok(res.body.data.recordedVideoUrl.includes('response-content-type=video%2Fwebm'), 'WebM recording URL must enforce video/webm');
+});
+

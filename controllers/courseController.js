@@ -10,6 +10,7 @@ const memoryCache = require('../utils/cache');
 const { signS3Reference, stripS3ReferenceUrls, normalizeS3Reference, resolveMediaRecord } = require('../utils/s3MediaSigner');
 const { getS3KeyFromUrl } = require('../services/s3Service');
 const { calculateCourseTotalDurationMinutes } = require('../utils/courseDurationHelper');
+const { attachVerifiedMp4Fallback } = require('./studentCurriculumController');
 
 
 const ALLOWED_VIDEO_FORMATS = ['mp4', 'mov', 'avi', 'mkv', 'webm', 'flv', 'wmv', 'm4v'];
@@ -620,8 +621,12 @@ const result = {
     sanitizeResource(lesson.attachments),
   ]);
 
+  const verifiedVideoParts = canSignS3Media
+    ? await Promise.all((rawVideoParts || []).map((vp) => attachVerifiedMp4Fallback(vp)))
+    : (rawVideoParts || []);
+
   const isolated = {
-    videoParts: rawVideoParts || [],
+    videoParts: verifiedVideoParts,
     pdfNotes: rawPdfNotes || [],
     assignments: rawAssignments || [],
     attachments: rawAttachments || [],
@@ -739,6 +744,11 @@ const result = {
     storageProvider: effectiveStorage,
     s3Key: effectiveS3Key,
     videoS3Key: effectiveS3Key,
+    mp4Url: firstVideo?.mp4Url,
+    fallbackVideoUrl: firstVideo?.fallbackVideoUrl || firstVideo?.mp4Url,
+    fallbackMp4Url: firstVideo?.fallbackVideoUrl || firstVideo?.mp4Url,
+    mp4S3Key: firstVideo?.mp4S3Key || lessonObj.mp4S3Key || lesson.mp4S3Key || '',
+    mp4StorageProvider: firstVideo?.mp4StorageProvider || lessonObj.mp4StorageProvider || lesson.mp4StorageProvider || '',
     createdAt: lessonObj.createdAt || lesson.createdAt,
     updatedAt: lessonObj.updatedAt || lesson.updatedAt,
   };
