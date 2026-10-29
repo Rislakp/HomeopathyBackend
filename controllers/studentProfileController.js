@@ -406,6 +406,7 @@ const updateProfile = async (req, res) => {
       'dob',
       'qualification',
       'collegeName',
+      'college_name',
       'college',
       'preferredCourse',
       'course',
@@ -446,8 +447,8 @@ const updateProfile = async (req, res) => {
       updates.qualification = req.body.qualification.toString().trim();
     }
 
-    if (req.body.collegeName !== undefined || req.body.college !== undefined) {
-      const collegeVal = (req.body.collegeName !== undefined ? req.body.collegeName : req.body.college || '').toString().trim();
+    if (req.body.collegeName !== undefined || req.body.college_name !== undefined || req.body.college !== undefined) {
+      const collegeVal = (req.body.collegeName !== undefined ? req.body.collegeName : (req.body.college_name !== undefined ? req.body.college_name : req.body.college || '')).toString().trim();
       updates.collegeName = collegeVal;
     }
 

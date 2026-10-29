@@ -202,6 +202,8 @@ const studentSchema = new mongoose.Schema({
   toJSON: {
     transform: function (doc, ret) {
       ret.id = ret._id.toString();
+      ret.college_name = ret.collegeName || '';
+      ret.college = ret.collegeName || '';
       delete ret._id;
       delete ret.__v;
       return ret;
@@ -210,6 +212,8 @@ const studentSchema = new mongoose.Schema({
   toObject: {
     transform: function (doc, ret) {
       ret.id = ret._id.toString();
+      ret.college_name = ret.collegeName || '';
+      ret.college = ret.collegeName || '';
       delete ret._id;
       delete ret.__v;
       return ret;

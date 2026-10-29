@@ -385,3 +385,104 @@ test('8. Admin Students Export — CSV contains College Name header and row data
   assert.ok(resCsv.body.includes('College Name'), 'CSV header must include College Name');
   assert.ok(resCsv.body.includes('Updated College by Admin'), 'CSV body must include the updated college name');
 });
+
+test('9. Snake_case "college_name" support across registration, admin create, admin update, and self update', async () => {
+  const adminDoc = await Admin.findOne({ isActive: true });
+  const adminToken = generateAdminToken(adminDoc);
+
+  // 9a. Registration with snake_case college_name
+  const regEmail = `test.snake.reg.${Date.now()}@example.com`;
+  createdEmails.add(regEmail);
+
+  const regRes = await simulateRequest({
+    method: 'POST',
+    url: '/api/auth/register',
+    body: {
+      name: 'Snake Case Student',
+      email: regEmail,
+      password: 'SecurePassword123!',
+      phone: `911${Math.floor(1000000 + Math.random() * 9000000)}`,
+      qualification: 'BHMS',
+      dateOfBirth: '2000-01-01',
+      courses: ['Homeopathy'],
+      college_name: 'Government Homeopathic Medical College, Trivandrum',
+    },
+  });
+
+  assert.strictEqual(regRes.statusCode, 201);
+  assert.strictEqual(regRes.body?.user?.collegeName, 'Government Homeopathic Medical College, Trivandrum');
+  assert.strictEqual(regRes.body?.user?.college_name, 'Government Homeopathic Medical College, Trivandrum');
+
+  const regStudentToken = regRes.body?.token;
+  const regStudentId = regRes.body?.user?.id || regRes.body?.user?._id;
+
+  const savedUser = await User.findOne({ email: regEmail }).lean();
+  assert.strictEqual(savedUser.collegeName, 'Government Homeopathic Medical College, Trivandrum');
+
+  // 9b. Student self update profile with snake_case college_name
+  const selfUpdateRes = await simulateRequest({
+    method: 'PUT',
+    url: '/api/students/profile',
+    headers: { authorization: `Bearer ${regStudentToken}` },
+    body: { college_name: 'Self-Updated Trivandrum College' },
+  });
+  assert.strictEqual(selfUpdateRes.statusCode, 200);
+  assert.strictEqual(selfUpdateRes.body?.profile?.collegeName, 'Self-Updated Trivandrum College');
+
+  // 9c. Admin create student with snake_case college_name
+  const adminStudentEmailSnake = `test.admin.snake.${Date.now()}@example.com`;
+  createdEmails.add(adminStudentEmailSnake);
+
+  const adminCreateRes = await simulateRequest({
+    method: 'POST',
+    url: '/api/admin/students',
+    headers: { authorization: `Bearer ${adminToken}` },
+    body: {
+      name: 'Admin Snake Student',
+      email: adminStudentEmailSnake,
+      password: 'TemporaryPassword123!',
+      phoneNumber: `913${Math.floor(1000000 + Math.random() * 9000000)}`,
+      college_name: 'ANSS Homoeopathic Medical College, Kottayam',
+      qualification: 'MD (Hom)',
+    },
+  });
+  assert.strictEqual(adminCreateRes.statusCode, 201);
+  assert.strictEqual(adminCreateRes.body?.data?.collegeName, 'ANSS Homoeopathic Medical College, Kottayam');
+
+  const snakeAdminStudentId = adminCreateRes.body?.data?.id || adminCreateRes.body?.data?._id;
+
+  // 9d. Admin update student with snake_case college_name
+  const adminUpdateRes = await simulateRequest({
+    method: 'PUT',
+    url: `/api/admin/students/${snakeAdminStudentId}`,
+    headers: { authorization: `Bearer ${adminToken}` },
+    body: { college_name: 'Updated Kottayam College by Admin' },
+  });
+  assert.strictEqual(adminUpdateRes.statusCode, 200);
+
+  const updatedStudentDoc = await Student.findById(snakeAdminStudentId).lean();
+  assert.strictEqual(updatedStudentDoc.collegeName, 'Updated Kottayam College by Admin');
+});
+
+test('10. Mongoose Model toJSON / toObject serialization aliases', async () => {
+  const user = new User({
+    name: 'Serialization Test',
+    email: `test.serialize.${Date.now()}@example.com`,
+    password: 'password123',
+    collegeName: 'JSPS Govt Homoeopathic Medical College',
+  });
+  const userJson = user.toJSON();
+  assert.strictEqual(userJson.collegeName, 'JSPS Govt Homoeopathic Medical College');
+  assert.strictEqual(userJson.college_name, 'JSPS Govt Homoeopathic Medical College');
+  assert.strictEqual(userJson.college, 'JSPS Govt Homoeopathic Medical College');
+
+  const student = new Student({
+    name: 'Serialization Student',
+    email: user.email,
+    collegeName: 'JSPS Govt Homoeopathic Medical College',
+  });
+  const studentJson = student.toJSON();
+  assert.strictEqual(studentJson.collegeName, 'JSPS Govt Homoeopathic Medical College');
+  assert.strictEqual(studentJson.college_name, 'JSPS Govt Homoeopathic Medical College');
+  assert.strictEqual(studentJson.college, 'JSPS Govt Homoeopathic Medical College');
+});

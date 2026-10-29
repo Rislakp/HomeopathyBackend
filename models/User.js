@@ -115,6 +115,8 @@ const userSchema = new mongoose.Schema(
     toJSON: {
       transform: function (doc, ret) {
         ret.id = ret._id ? ret._id.toString() : ret.id;
+        ret.college_name = ret.collegeName || '';
+        ret.college = ret.collegeName || '';
         delete ret._id;
         delete ret.__v;
         delete ret.password;
@@ -124,6 +126,8 @@ const userSchema = new mongoose.Schema(
     toObject: {
       transform: function (doc, ret) {
         ret.id = ret._id ? ret._id.toString() : ret.id;
+        ret.college_name = ret.collegeName || '';
+        ret.college = ret.collegeName || '';
         delete ret._id;
         delete ret.__v;
         delete ret.password;

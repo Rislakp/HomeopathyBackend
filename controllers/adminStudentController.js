@@ -376,9 +376,9 @@ async function getAdminStudents(req, res) {
         contact_number: s.contactNumber || s.phone || userObj?.contactNumber || userObj?.phone || '',
         date_of_birth: s.dateOfBirth || userObj?.dateOfBirth || '',
         qualification: s.qualification || userObj?.qualification || '',
-        college_name: s.collegeName || userObj?.collegeName || '',
-        collegeName: s.collegeName || userObj?.collegeName || '',
-        college: s.collegeName || userObj?.collegeName || '',
+        college_name: s.collegeName || s.college_name || s.college || userObj?.collegeName || userObj?.college_name || userObj?.college || '',
+        collegeName: s.collegeName || s.college_name || s.college || userObj?.collegeName || userObj?.college_name || userObj?.college || '',
+        college: s.collegeName || s.college_name || s.college || userObj?.collegeName || userObj?.college_name || userObj?.college || '',
         profile_image: profileImage,
         avatar: profileImage,
         enrolled_course: {
@@ -1505,7 +1505,9 @@ async function updateAdminStudent(req, res) {
       updateFields.qualification = String(req.body.qualification).trim();
     }
 
-    const collegeVal = req.body.collegeName !== undefined ? req.body.collegeName : req.body.college;
+    const collegeVal = req.body.collegeName !== undefined
+      ? req.body.collegeName
+      : (req.body.college_name !== undefined ? req.body.college_name : req.body.college);
     if (collegeVal !== undefined && collegeVal !== null) {
       updateFields.collegeName = String(collegeVal).trim();
     }
@@ -1702,6 +1704,7 @@ async function createAdminStudent(req, res) {
       dateOfBirth,
       qualification,
       collegeName,
+      college_name,
       college,
       course,
       courseId,
@@ -1712,7 +1715,7 @@ async function createAdminStudent(req, res) {
 
     const finalCollege = (collegeName !== undefined && collegeName !== null)
       ? String(collegeName).trim()
-      : ((college !== undefined && college !== null) ? String(college).trim() : '');
+      : ((college_name !== undefined && college_name !== null) ? String(college_name).trim() : ((college !== undefined && college !== null) ? String(college).trim() : ''));
 
     if (!name || !email) {
       return res.status(400).json({

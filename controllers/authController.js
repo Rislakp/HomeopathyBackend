@@ -342,6 +342,7 @@ const registerStudent = async (req, res) => {
       contactNumber,
       qualification,
       collegeName,
+      college_name,
       college,
       course,
       selectedCourse,
@@ -351,7 +352,7 @@ const registerStudent = async (req, res) => {
     const finalDob = (dateOfBirth || dob || '').toString().trim();
     const finalPhone = (contactNumber || phone || '').toString().trim();
     const finalQualification = (qualification || '').toString().trim();
-    const finalCollegeName = (collegeName || college || '').toString().trim();
+    const finalCollegeName = (collegeName || req.body.college_name || college || '').toString().trim();
     const finalName = (name || '').toString().trim();
 
     // ── Multi-course: resolve selected course IDs ─────────────────────────────
