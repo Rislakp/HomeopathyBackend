@@ -26,6 +26,9 @@ router.get('/student/exams/:id/answer-key', requireStudentOrAdmin, getAnswerKey)
 router.get('/api/student/exams/:id/results/:resultId/answer-key', requireStudentOrAdmin, getAnswerKey);
 router.get('/api/v1/student/exams/:id/results/:resultId/answer-key', requireStudentOrAdmin, getAnswerKey);
 router.get('/student/exams/:id/results/:resultId/answer-key', requireStudentOrAdmin, getAnswerKey);
+router.get('/api/student/exams/:examId/results/:resultId/answer-key', requireStudentOrAdmin, getAnswerKey);
+router.get('/api/v1/student/exams/:examId/results/:resultId/answer-key', requireStudentOrAdmin, getAnswerKey);
+router.get('/student/exams/:examId/results/:resultId/answer-key', requireStudentOrAdmin, getAnswerKey);
 
 /**
  * @route   GET /api/student/exams/:id/answer-key/download
@@ -45,6 +48,12 @@ router.get('/api/v1/student/exams/:id/results/:resultId/answer-key/download', re
 router.post('/api/v1/student/exams/:id/results/:resultId/answer-key/download', requireStudentOrAdmin, downloadAnswerKey);
 router.get('/student/exams/:id/results/:resultId/answer-key/download', requireStudentOrAdmin, downloadAnswerKey);
 router.post('/student/exams/:id/results/:resultId/answer-key/download', requireStudentOrAdmin, downloadAnswerKey);
+router.get('/api/student/exams/:examId/results/:resultId/answer-key/download', requireStudentOrAdmin, downloadAnswerKey);
+router.post('/api/student/exams/:examId/results/:resultId/answer-key/download', requireStudentOrAdmin, downloadAnswerKey);
+router.get('/api/v1/student/exams/:examId/results/:resultId/answer-key/download', requireStudentOrAdmin, downloadAnswerKey);
+router.post('/api/v1/student/exams/:examId/results/:resultId/answer-key/download', requireStudentOrAdmin, downloadAnswerKey);
+router.get('/student/exams/:examId/results/:resultId/answer-key/download', requireStudentOrAdmin, downloadAnswerKey);
+router.post('/student/exams/:examId/results/:resultId/answer-key/download', requireStudentOrAdmin, downloadAnswerKey);
 
 const demoVideoController = require('../../controllers/demoVideoController');
 

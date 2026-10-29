@@ -6,7 +6,7 @@ const Exam = require('../../models/Exam');
 const User = require('../../models/User');
 const Student = require('../../models/Student');
 const TestResult = require('../common/models/testResult.model');
-const { getStudentCandidateIds } = require('../../utils/examAttemptHelper');
+const examAttemptHelper = require('../../utils/examAttemptHelper');
 const { verifyStudentCourseAccessAny } = require('../../utils/courseAccessHelper');
 const { getExamAssignedCourseIds } = require('../../utils/examCourseAssignment');
 
@@ -201,6 +201,9 @@ function formatNormalAnswerKey(exam, result = null) {
       unansweredQuestions: result.unansweredQuestions ?? 0,
       percentage: result.percentage ?? (totalMaxMarks > 0 ? Math.round(((result.score ?? 0) / totalMaxMarks) * 100) : 0),
       status: result.status || 'Completed',
+      attemptNumber: result.attemptNumber || 1,
+      resultId: result._id ? result._id.toString() : null,
+      submittedAt: result.createdAt || null,
     } : null,
     questions: mappedQuestions
   };
@@ -304,9 +307,10 @@ function generateWatermarkedAnswerKeyPDF(exam, user = {}, result = null) {
         const wrong = result.totalWrong ?? 0;
         const unanswered = result.unansweredQuestions ?? 0;
 
+        const attemptPrefix = result.attemptNumber ? `Attempt #${result.attemptNumber}   |   ` : '';
         doc.fillColor('#1A365D')
            .font('Helvetica-Bold')
-           .text(`Evaluation Summary: Score: ${score} / ${totalMarks} (${pct}%)   |   Correct: ${correct}   |   Wrong: ${wrong}   |   Unanswered: ${unanswered}`, MARGIN + 10, metaStartY + 64);
+           .text(`Evaluation Summary: ${attemptPrefix}Score: ${score} / ${totalMarks} (${pct}%)   |   Correct: ${correct}   |   Wrong: ${wrong}   |   Unanswered: ${unanswered}`, MARGIN + 10, metaStartY + 64);
       }
 
       doc.y = metaStartY + metaHeight + 15;
@@ -537,7 +541,8 @@ async function getAnswerKey(req, res) {
     const params = req?.params || {};
     const query = req?.query || {};
     const id = params.examId || params.id;
-    const resultId = params.resultId || query.resultId;
+    const rawResultId = params.resultId || query.resultId || req?.body?.resultId;
+    const resultId = (typeof rawResultId === 'string' && rawResultId.trim()) ? rawResultId.trim() : (rawResultId || null);
 
     if (!mongoose.Types.ObjectId.isValid(id)) {
       return res.status(400).json({
@@ -619,7 +624,7 @@ async function getAnswerKey(req, res) {
         }
       }
 
-      const candidateIds = await getStudentCandidateIds(req.user);
+      const candidateIds = await examAttemptHelper.getStudentCandidateIds(req.user);
       if (candidateIds.length === 0) {
         return res.status(401).json({ success: false, message: 'Student identity could not be resolved.' });
       }
@@ -628,38 +633,48 @@ async function getAnswerKey(req, res) {
         if (!mongoose.Types.ObjectId.isValid(resultId)) {
           return res.status(400).json({ success: false, message: 'Invalid Result ID format.' });
         }
-        normalResult = await TestResult.findOne({
-          _id: resultId,
-          examId: exam._id,
-          studentId: { $in: candidateIds },
-          status: { $in: ['Completed', 'Attempted'] },
-        }).lean();
+        const attempt = await TestResult.findById(resultId).lean();
+        if (!attempt) {
+          return res.status(404).json({ success: false, message: 'Test result not found.' });
+        }
+        if (attempt.examId.toString() !== exam._id.toString()) {
+          return res.status(400).json({ success: false, message: 'Result does not belong to the specified exam.' });
+        }
+        const resultStudentId = attempt.studentId?._id ? attempt.studentId._id.toString() : (attempt.studentId ? attempt.studentId.toString() : '');
+        if (!resultStudentId || !candidateIds.some((cid) => cid.toString() === resultStudentId)) {
+          return res.status(403).json({ success: false, message: "You are not authorized to access another student's result." });
+        }
+        if (!['Completed', 'Attempted'].includes(attempt.status)) {
+          return res.status(403).json({ success: false, message: 'A completed attempt is required to view this answer key.' });
+        }
+        normalResult = attempt;
       } else {
         normalResult = await TestResult.findOne({
           studentId: { $in: candidateIds },
           examId: exam._id,
           status: { $in: ['Completed', 'Attempted'] },
-        }).sort({ createdAt: -1 }).lean();
-      }
+        }).sort({ attemptNumber: -1, createdAt: -1 }).lean();
 
-      if (!normalResult) {
-        return res.status(403).json({
-          success: false,
-          message: 'A completed attempt is required to view this answer key.',
-        });
+        if (!normalResult) {
+          return res.status(403).json({
+            success: false,
+            message: 'A completed attempt is required to view this answer key.',
+          });
+        }
       }
     } else if (isAdmin) {
       if (resultId) {
         if (!mongoose.Types.ObjectId.isValid(resultId)) {
           return res.status(400).json({ success: false, message: 'Invalid Result ID format.' });
         }
-        normalResult = await TestResult.findOne({
-          _id: resultId,
-          examId: exam._id,
-        }).lean();
-        if (!normalResult) {
+        const attempt = await TestResult.findById(resultId).lean();
+        if (!attempt) {
           return res.status(404).json({ success: false, message: 'Test result not found.' });
         }
+        if (attempt.examId.toString() !== exam._id.toString()) {
+          return res.status(400).json({ success: false, message: 'Result does not belong to the specified exam.' });
+        }
+        normalResult = attempt;
       }
     }
 
@@ -688,7 +703,8 @@ async function downloadAnswerKey(req, res) {
     const params = req?.params || {};
     const query = req?.query || {};
     const id = params.examId || params.id;
-    const resultId = params.resultId || query.resultId;
+    const rawResultId = params.resultId || query.resultId || req?.body?.resultId;
+    const resultId = (typeof rawResultId === 'string' && rawResultId.trim()) ? rawResultId.trim() : (rawResultId || null);
 
     // 1. Validate Exam ID format
     if (!mongoose.Types.ObjectId.isValid(id)) {
@@ -767,27 +783,45 @@ async function downloadAnswerKey(req, res) {
           return res.status(403).json({ success: false, message: 'You are not authorized to access this exam.' });
         }
 
-        const candidateIds = await getStudentCandidateIds(req.user);
+        const candidateIds = await examAttemptHelper.getStudentCandidateIds(req.user);
         if (candidateIds.length === 0) {
           return res.status(401).json({ success: false, message: 'Student identity could not be resolved.' });
         }
 
         let UnaniExamResult;
         try { UnaniExamResult = require('../unani/exams/models/unaniExamResult.model'); } catch (e) {}
-        if (UnaniExamResult) {
-          const resultFilter = {
-            studentId: { $in: candidateIds },
-            examId: exam._id,
-            status: { $in: ['Completed', 'Attempted'] },
-          };
-          if (resultId && mongoose.Types.ObjectId.isValid(resultId)) {
-            resultFilter._id = resultId;
-          }
-          unaniResult = await UnaniExamResult.findOne(resultFilter).sort({ createdAt: -1 }).lean();
-        }
 
-        if (!unaniResult) {
-          return res.status(403).json({ success: false, message: 'A completed attempt is required to download this answer key.' });
+        if (resultId) {
+          if (!mongoose.Types.ObjectId.isValid(resultId)) {
+            return res.status(400).json({ success: false, message: 'Invalid Result ID format.' });
+          }
+          const attempt = UnaniExamResult ? await UnaniExamResult.findById(resultId).lean() : null;
+          if (!attempt) {
+            return res.status(404).json({ success: false, message: 'Unani exam result not found.' });
+          }
+          if (attempt.examId.toString() !== exam._id.toString()) {
+            return res.status(400).json({ success: false, message: 'Result does not belong to the specified exam.' });
+          }
+          const resStudentId = attempt.studentId?._id ? attempt.studentId._id.toString() : (attempt.studentId ? attempt.studentId.toString() : '');
+          if (!resStudentId || !candidateIds.some((cid) => cid.toString() === resStudentId)) {
+            return res.status(403).json({ success: false, message: "You are not authorized to access another student's result." });
+          }
+          if (!['Completed', 'Attempted'].includes(attempt.status)) {
+            return res.status(403).json({ success: false, message: 'A completed attempt is required to download this answer key.' });
+          }
+          unaniResult = attempt;
+        } else {
+          if (UnaniExamResult) {
+            unaniResult = await UnaniExamResult.findOne({
+              studentId: { $in: candidateIds },
+              examId: exam._id,
+              status: { $in: ['Completed', 'Attempted'] },
+            }).sort({ attemptNumber: -1, createdAt: -1 }).lean();
+          }
+
+          if (!unaniResult) {
+            return res.status(403).json({ success: false, message: 'A completed attempt is required to download this answer key.' });
+          }
         }
       } else {
         const examStatus = exam.status === undefined || exam.status === null || String(exam.status).trim() === ''
@@ -809,7 +843,7 @@ async function downloadAnswerKey(req, res) {
           }
         }
 
-        const candidateIds = await getStudentCandidateIds(req.user);
+        const candidateIds = await examAttemptHelper.getStudentCandidateIds(req.user);
         if (candidateIds.length === 0) {
           return res.status(401).json({ success: false, message: 'Student identity could not be resolved.' });
         }
@@ -818,30 +852,59 @@ async function downloadAnswerKey(req, res) {
           if (!mongoose.Types.ObjectId.isValid(resultId)) {
             return res.status(400).json({ success: false, message: 'Invalid Result ID format.' });
           }
-          normalResult = await TestResult.findOne({
-            _id: resultId,
-            examId: exam._id,
-            studentId: { $in: candidateIds },
-            status: { $in: ['Completed', 'Attempted'] },
-          }).lean();
+          const attempt = await TestResult.findById(resultId).lean();
+          if (!attempt) {
+            return res.status(404).json({ success: false, message: 'Test result not found.' });
+          }
+          if (attempt.examId.toString() !== exam._id.toString()) {
+            return res.status(400).json({ success: false, message: 'Result does not belong to the specified exam.' });
+          }
+          const resStudentId = attempt.studentId?._id ? attempt.studentId._id.toString() : (attempt.studentId ? attempt.studentId.toString() : '');
+          if (!resStudentId || !candidateIds.some((cid) => cid.toString() === resStudentId)) {
+            return res.status(403).json({ success: false, message: "You are not authorized to access another student's result." });
+          }
+          if (!['Completed', 'Attempted'].includes(attempt.status)) {
+            return res.status(403).json({ success: false, message: 'A completed attempt is required to download this answer key.' });
+          }
+          normalResult = attempt;
         } else {
           normalResult = await TestResult.findOne({
             studentId: { $in: candidateIds },
             examId: exam._id,
             status: { $in: ['Completed', 'Attempted'] },
-          }).sort({ createdAt: -1 }).lean();
-        }
+          }).sort({ attemptNumber: -1, createdAt: -1 }).lean();
 
-        if (!normalResult) {
-          return res.status(403).json({ success: false, message: 'A completed attempt is required to download this answer key.' });
+          if (!normalResult) {
+            return res.status(403).json({ success: false, message: 'A completed attempt is required to download this answer key.' });
+          }
         }
       }
     } else if (isAdmin) {
-      if (!isUnani && resultId && mongoose.Types.ObjectId.isValid(resultId)) {
-        normalResult = await TestResult.findOne({
-          _id: resultId,
-          examId: exam._id,
-        }).lean();
+      if (resultId) {
+        if (!mongoose.Types.ObjectId.isValid(resultId)) {
+          return res.status(400).json({ success: false, message: 'Invalid Result ID format.' });
+        }
+        if (isUnani) {
+          let UnaniExamResult;
+          try { UnaniExamResult = require('../unani/exams/models/unaniExamResult.model'); } catch (e) {}
+          const attempt = UnaniExamResult ? await UnaniExamResult.findById(resultId).lean() : null;
+          if (!attempt) {
+            return res.status(404).json({ success: false, message: 'Unani exam result not found.' });
+          }
+          if (attempt.examId.toString() !== exam._id.toString()) {
+            return res.status(400).json({ success: false, message: 'Result does not belong to the specified exam.' });
+          }
+          unaniResult = attempt;
+        } else {
+          const attempt = await TestResult.findById(resultId).lean();
+          if (!attempt) {
+            return res.status(404).json({ success: false, message: 'Test result not found.' });
+          }
+          if (attempt.examId.toString() !== exam._id.toString()) {
+            return res.status(400).json({ success: false, message: 'Result does not belong to the specified exam.' });
+          }
+          normalResult = attempt;
+        }
       }
     }
 

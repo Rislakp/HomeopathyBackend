@@ -28,6 +28,24 @@ router.get('/api/v1/unani-exams/student/:examId', requireCourseAccess('unani'), 
 router.post('/api/unani-exams/student/:examId/submit', requireCourseAccess('unani'), unaniExamController.submitStudentExam);
 router.post('/api/v1/unani-exams/student/:examId/submit', requireCourseAccess('unani'), unaniExamController.submitStudentExam);
 
+// Dedicated Authenticated Unani Student Result History APIs
+router.get('/api/unani-exams/student/results', requireCourseAccess('unani'), unaniExamController.getStudentResultHistory);
+router.get('/api/v1/unani-exams/student/results', requireCourseAccess('unani'), unaniExamController.getStudentResultHistory);
+router.get('/unani-exams/student/results', requireCourseAccess('unani'), unaniExamController.getStudentResultHistory);
+
+router.get('/api/unani-exams/student/:examId/results', requireCourseAccess('unani'), unaniExamController.getStudentResultHistory);
+router.get('/api/v1/unani-exams/student/:examId/results', requireCourseAccess('unani'), unaniExamController.getStudentResultHistory);
+router.get('/unani-exams/student/:examId/results', requireCourseAccess('unani'), unaniExamController.getStudentResultHistory);
+
+router.get('/api/unani-exams/student/:examId/history', requireCourseAccess('unani'), unaniExamController.getStudentResultHistory);
+router.get('/api/v1/unani-exams/student/:examId/history', requireCourseAccess('unani'), unaniExamController.getStudentResultHistory);
+router.get('/unani-exams/student/:examId/history', requireCourseAccess('unani'), unaniExamController.getStudentResultHistory);
+
+// Attempt-specific result lookup
+router.get('/api/unani-exams/student/:examId/results/:resultId', requireCourseAccess('unani'), unaniExamController.getResultById);
+router.get('/api/v1/unani-exams/student/:examId/results/:resultId', requireCourseAccess('unani'), unaniExamController.getResultById);
+router.get('/unani-exams/student/:examId/results/:resultId', requireCourseAccess('unani'), unaniExamController.getResultById);
+
 // GET student's own exam result
 router.get('/api/unani-exams/student/:examId/result', requireCourseAccess('unani'), unaniExamController.getStudentResultByExam);
 router.get('/api/v1/unani-exams/student/:examId/result', requireCourseAccess('unani'), unaniExamController.getStudentResultByExam);

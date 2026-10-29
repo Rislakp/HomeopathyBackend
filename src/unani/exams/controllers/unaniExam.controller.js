@@ -446,6 +446,13 @@ async function getResultById(req, res) {
       });
     }
 
+    if (result.mismatchedExam) {
+      return res.status(400).json({
+        success: false,
+        message: result.message || 'Result does not belong to the specified exam.',
+      });
+    }
+
     if (result.forbidden) {
       return res.status(403).json({
         success: false,
@@ -689,7 +696,8 @@ async function submitStudentExam(req, res) {
  */
 async function getStudentResultByExam(req, res) {
   try {
-    const result = await unaniExamService.getStudentResultByExam(req.params.examId, req.user);
+    const resultId = req.query?.resultId || req.params?.resultId;
+    const result = await unaniExamService.getStudentResultByExam(req.params.examId, req.user, resultId);
     if (result.notFound) {
       return res.status(404).json({
         success: false,
@@ -1009,6 +1017,46 @@ async function checkReattemptEligibility(req, res) {
   }
 }
 
+
+/**
+ * GET /api/unani-exams/student/results
+ * GET /api/unani-exams/student/:examId/results
+ * GET /api/unani-exams/student/:examId/history
+ * Fetch student Unani result history (all attempts)
+ */
+async function getStudentResultHistory(req, res) {
+  try {
+    const examId = req.params.examId || req.query.examId;
+    const result = await unaniExamService.getStudentResultHistory(req.user, { examId });
+
+    if (result.unauthenticated) {
+      return res.status(401).json({
+        success: false,
+        message: result.message || 'Authentication required.',
+      });
+    }
+
+    if (result.notFound) {
+      return res.status(404).json({
+        success: false,
+        message: result.message || 'Unani exam not found.',
+      });
+    }
+
+    return res.status(200).json({
+      success: true,
+      count: result.count,
+      data: result.data,
+    });
+  } catch (error) {
+    return res.status(500).json({
+      success: false,
+      message: 'Failed to fetch Unani result history.',
+      error: error.message,
+    });
+  }
+}
+
 module.exports = {
   createExam,
   getAllExams,
@@ -1034,6 +1082,7 @@ module.exports = {
   getStudentExamById,
   submitStudentExam,
   getStudentResultByExam,
+  getStudentResultHistory,
   updateRankImage,
   deleteRankImage,
   getAnswerKey,

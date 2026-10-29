@@ -1082,11 +1082,14 @@ async function submitExam(req, res) {
     }
 
     // Fetch all completed attempts for student to calculate latestScore and bestScore
-    const allCompletedForExam = await TestResult.find({
+    const completedQuery = TestResult.find({
       studentId: { $in: candidateIds },
       examId: exam._id,
       status: { $in: ['Completed', 'Attempted'] }
-    }).sort({ createdAt: -1 }).lean();
+    }).sort({ createdAt: -1 });
+    const allCompletedForExam = (completedQuery && typeof completedQuery.lean === 'function')
+      ? await completedQuery.lean()
+      : ((await completedQuery) || []);
 
     const studentTotalAttempts = allCompletedForExam.length;
     const latestScore = allCompletedForExam[0]?.score ?? finalScore;

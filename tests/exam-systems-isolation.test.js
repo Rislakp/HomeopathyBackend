@@ -79,6 +79,7 @@ User.find = () => mockQuery([{ _id: mockNormalStudentId, name: 'Admin Test', ema
 
 TestResult.find = () => mockQuery([]);
 TestResult.exists = () => mockQuery(true);
+TestResult.findById = (id) => mockQuery(String(id) === String(mockNormalResultId) ? mockNormalResult : null);
 
 UnaniExam.findById = (id) => mockQuery(String(id) === String(mockUnaniExamId) ? mockUnaniExam : null);
 UnaniExam.findOne = (query) => {
@@ -440,13 +441,14 @@ test('5. Correct question-to-answer mapping for both systems', () => {
 test('6. Authorization and student result ownership: blocks student from accessing another student result', async () => {
   // Normal Exam: Attacker tries to access Normal Student's resultId
   Exam.findById = (id) => mockQuery(String(id) === String(mockNormalExamId) ? mockNormalExam : null);
+  TestResult.findById = (id) => mockQuery(String(id) === String(mockNormalResultId) ? mockNormalResult : null);
   TestResult.findOne = (query) => {
     // If studentId matches query, return result; attacker ID won't match
     const studentFilter = query?.studentId?.$in || [];
     if (studentFilter.some((id) => id.toString() === mockAttackerStudentId.toString())) {
       return mockQuery(null); // Attacker has no attempt
     }
-    return mockQuery(null);
+    return mockQuery(mockNormalResult);
   };
 
   const normalReq = {
