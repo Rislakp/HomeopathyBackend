@@ -592,6 +592,14 @@ async function getAvailableExams(req, res) {
         totalAttempts: metrics.totalAttempts,
         attempts: metrics.attempts,
         total_attempts: metrics.totalAttempts,
+        canReattempt: metrics.canReattempt,
+        isReattemptEligible: metrics.isReattemptEligible,
+        allowReattempt: metrics.allowReattempt,
+        reattemptEligible: metrics.reattemptEligible,
+        maxAttempts: metrics.maxAttempts,
+        attemptsRemaining: metrics.attemptsRemaining,
+        hasInProgressAttempt: metrics.hasInProgressAttempt,
+        inProgressAttemptId: metrics.inProgressAttemptId,
         latestScore: metrics.latestScore,
         bestScore: metrics.bestScore,
         previousScore: metrics.previousScore,
@@ -703,6 +711,24 @@ async function startExam(req, res) {
             status: 'In Progress'
           }).sort({ createdAt: -1 });
 
+          const isExplicitReattempt = req.query?.reattempt === 'true' ||
+            req.query?.isReattempt === 'true' ||
+            req.body?.isReattempt === true ||
+            req.body?.reattempt === true;
+
+          const durationMs = ((Number(exam.durationMinutes) || 60) + 15) * 60 * 1000;
+          const isStale = existingInProgress &&
+            (Date.now() - new Date(existingInProgress.createdAt || existingInProgress.updatedAt || 0).getTime() > durationMs);
+
+          if (existingInProgress && (isExplicitReattempt || isStale)) {
+            try {
+              await TestResult.findByIdAndUpdate(existingInProgress._id, {
+                $set: { status: 'Abandoned', updatedAt: new Date() }
+              });
+            } catch (e) {}
+            existingInProgress = null;
+          }
+
           if (!existingInProgress) {
             const primaryStudentId = (req.user.id && mongoose.Types.ObjectId.isValid(req.user.id))
               ? new mongoose.Types.ObjectId(req.user.id)
@@ -764,6 +790,10 @@ async function startExam(req, res) {
         attemptNumber: currentAttemptNumber,
         totalAttempts: studentTotalCompletedAttempts,
         isReattempt,
+        canReattempt: isReattempt || (Number(exam.maxAttempts || exam.attemptLimit || 0) === 0 || studentTotalCompletedAttempts < Number(exam.maxAttempts || exam.attemptLimit || 0)),
+        isReattemptEligible: isReattempt || (Number(exam.maxAttempts || exam.attemptLimit || 0) === 0 || studentTotalCompletedAttempts < Number(exam.maxAttempts || exam.attemptLimit || 0)),
+        maxAttempts: Number(exam.maxAttempts || exam.attemptLimit || 0) > 0 ? Number(exam.maxAttempts || exam.attemptLimit || 0) : null,
+        attemptsRemaining: Number(exam.maxAttempts || exam.attemptLimit || 0) > 0 ? Math.max(0, Number(exam.maxAttempts || exam.attemptLimit || 0) - studentTotalCompletedAttempts) : null,
         questions: sanitizedQuestions
       }
     });

@@ -323,6 +323,10 @@ async function startExam(examId, reqUser) {
     attemptNumber: completedCount + 1,
     totalAttempts: completedCount,
     isReattempt: completedCount > 0,
+    canReattempt: completedCount > 0 || (maxAttempts === 0 || completedCount < maxAttempts),
+    isReattemptEligible: completedCount > 0 || (maxAttempts === 0 || completedCount < maxAttempts),
+    maxAttempts: maxAttempts > 0 ? maxAttempts : null,
+    attemptsRemaining: maxAttempts > 0 ? Math.max(0, maxAttempts - completedCount) : null,
     questions: sanitizedQuestions,
   };
 }
@@ -835,6 +839,9 @@ async function getStudentAvailableExams(reqUser) {
       const latestScore = latestAttempt ? latestAttempt.score : null;
       const isCompleted = totalAttempts > 0;
       const scoreValue = latestScore !== null ? latestScore : (bestScore ?? null);
+      const maxAttempts = Number(exam.maxAttempts || exam.attemptLimit) || 0;
+      const canReattempt = isCompleted && (maxAttempts === 0 || totalAttempts < maxAttempts);
+      const attemptsRemaining = maxAttempts > 0 ? Math.max(0, maxAttempts - totalAttempts) : null;
 
       results.push({
         _id: idStr,
@@ -855,6 +862,12 @@ async function getStudentAvailableExams(reqUser) {
         totalAttempts: totalAttempts,
         attempts: totalAttempts,
         total_attempts: totalAttempts,
+        canReattempt,
+        isReattemptEligible: canReattempt,
+        allowReattempt: canReattempt,
+        reattemptEligible: canReattempt,
+        maxAttempts: maxAttempts > 0 ? maxAttempts : null,
+        attemptsRemaining,
         latestScore: latestScore,
         bestScore: bestScore,
         previousScore: scoreValue,
@@ -928,6 +941,8 @@ async function getStudentExamById(examId, reqUser) {
     } catch (e) {}
   }
 
+  const maxAttempts = Number(exam.maxAttempts || exam.attemptLimit) || 0;
+
   return {
     exam: {
       _id: exam._id.toString(),
@@ -948,6 +963,10 @@ async function getStudentExamById(examId, reqUser) {
     attemptNumber: completedCount + 1,
     totalAttempts: completedCount,
     isReattempt: completedCount > 0,
+    canReattempt: completedCount > 0 || (maxAttempts === 0 || completedCount < maxAttempts),
+    isReattemptEligible: completedCount > 0 || (maxAttempts === 0 || completedCount < maxAttempts),
+    maxAttempts: maxAttempts > 0 ? maxAttempts : null,
+    attemptsRemaining: maxAttempts > 0 ? Math.max(0, maxAttempts - completedCount) : null,
     questions: sanitizedQuestions,
   };
 }

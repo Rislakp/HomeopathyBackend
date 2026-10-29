@@ -166,6 +166,10 @@ function computeExamAttemptMetrics(exam, resultsForExam = []) {
   const primaryResult = latestCompletedResult || inProgressAttempt || resultsForExam[0] || null;
   const scoreValue = latestScore !== null ? latestScore : (bestScore ?? null);
 
+  const maxAttempts = Number(exam.maxAttempts || exam.attemptLimit) || 0;
+  const canReattempt = isCompleted && (maxAttempts === 0 || totalAttempts < maxAttempts);
+  const attemptsRemaining = maxAttempts > 0 ? Math.max(0, maxAttempts - totalAttempts) : null;
+
   return {
     status,
     attemptStatus,
@@ -175,6 +179,14 @@ function computeExamAttemptMetrics(exam, resultsForExam = []) {
     totalAttempts,
     attempts: totalAttempts,
     total_attempts: totalAttempts,
+    canReattempt,
+    isReattemptEligible: canReattempt,
+    allowReattempt: canReattempt,
+    reattemptEligible: canReattempt,
+    maxAttempts: maxAttempts > 0 ? maxAttempts : null,
+    attemptsRemaining,
+    hasInProgressAttempt: !!inProgressAttempt,
+    inProgressAttemptId: inProgressAttempt?._id || null,
     latestScore,
     bestScore,
     previousScore: scoreValue,

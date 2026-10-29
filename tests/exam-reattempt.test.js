@@ -11,6 +11,7 @@ const UnaniExam = require('../src/unani/exams/models/unaniExam.model');
 const UnaniExamResult = require('../src/unani/exams/models/unaniExamResult.model');
 
 const {
+  getAvailableExams,
   startExam,
   submitExam,
   checkReattemptEligibility,
@@ -971,5 +972,272 @@ test('15. getStudentAvailableExams for Unani returns student attempt status, sco
     UnaniExamResult.find = original.unaniExamResultFind;
     Student.findById = original.studentFindById;
     Student.findOne = original.studentFindOne;
+  }
+});
+
+test('16. getAvailableExams returns canReattempt: true and attempt metrics for completed Grand Mock Tests', async () => {
+  const original = {
+    examCount: Exam.countDocuments,
+    examFind: Exam.find,
+    resultFind: TestResult.find,
+    studentFind: Student.find,
+    studentFindOne: Student.findOne,
+    studentFindById: Student.findById,
+    userFind: User.find,
+    userFindOne: User.findOne,
+    courseFind: Course.find,
+  };
+
+  const studentId = new mongoose.Types.ObjectId();
+  const userId = new mongoose.Types.ObjectId();
+  const exam1Id = new mongoose.Types.ObjectId();
+  const exam2Id = new mongoose.Types.ObjectId();
+
+  const mockExams = [
+    {
+      _id: exam1Id,
+      title: 'Grand Mock Test 1 (Unlimited Attempts)',
+      testType: 'grand_mock',
+      status: 'Published',
+      marksPerQuestion: 4,
+      totalQuestions: 25,
+      durationMinutes: 60,
+    },
+    {
+      _id: exam2Id,
+      title: 'Grand Mock Test 2 (Max 1 Attempt Limit)',
+      testType: 'grand_mock',
+      status: 'Published',
+      maxAttempts: 1,
+      marksPerQuestion: 4,
+      totalQuestions: 25,
+      durationMinutes: 60,
+    }
+  ];
+
+  const mockStudent = { _id: studentId, userId, role: 'student', accountStatus: 'Approved', isApproved: true };
+  const user = { id: userId.toString(), studentId: studentId.toString(), role: 'student' };
+
+  // Student has completed 1 attempt on Exam 1 (score: 80) and 1 attempt on Exam 2 (score: 90)
+  const storedResults = [
+    {
+      _id: new mongoose.Types.ObjectId(),
+      studentId,
+      examId: exam1Id,
+      attemptNumber: 1,
+      score: 80,
+      totalMarks: 100,
+      status: 'Completed',
+      createdAt: new Date('2026-10-28T10:00:00Z'),
+    },
+    {
+      _id: new mongoose.Types.ObjectId(),
+      studentId,
+      examId: exam2Id,
+      attemptNumber: 1,
+      score: 90,
+      totalMarks: 100,
+      status: 'Completed',
+      createdAt: new Date('2026-10-28T11:00:00Z'),
+    }
+  ];
+
+  try {
+    Exam.countDocuments = async () => mockExams.length;
+    Exam.find = () => queryWith(mockExams);
+    TestResult.find = (filter = {}) => {
+      let filtered = [...storedResults];
+      if (filter.examId && filter.examId.$in) {
+        const idStrings = filter.examId.$in.map(id => id.toString());
+        filtered = filtered.filter(r => idStrings.includes(r.examId.toString()));
+      }
+      return queryWith(filtered);
+    };
+    Student.find = () => queryWith([mockStudent]);
+    Student.findOne = () => queryWith(mockStudent);
+    Student.findById = () => queryWith(mockStudent);
+    User.find = () => queryWith([]);
+    User.findOne = () => queryWith(null);
+    Course.find = () => queryWith([]);
+
+    const res = responseRecorder();
+    await getAvailableExams({ user, query: { testType: 'grand_mock' } }, res);
+
+    assert.equal(res.statusCode, 200);
+    assert.equal(res.body.success, true);
+    assert.equal(res.body.data.length, 2);
+
+    const test1 = res.body.data.find(e => e._id.toString() === exam1Id.toString());
+    assert.equal(test1.isCompleted, true);
+    assert.equal(test1.attemptStatus, 'completed');
+    assert.equal(test1.totalAttempts, 1);
+    assert.equal(test1.latestScore, 80);
+    assert.equal(test1.bestScore, 80);
+    assert.equal(test1.canReattempt, true);
+    assert.equal(test1.isReattemptEligible, true);
+    assert.equal(test1.allowReattempt, true);
+    assert.equal(test1.maxAttempts, null);
+    assert.equal(test1.attemptsRemaining, null);
+
+    const test2 = res.body.data.find(e => e._id.toString() === exam2Id.toString());
+    assert.equal(test2.isCompleted, true);
+    assert.equal(test2.totalAttempts, 1);
+    assert.equal(test2.maxAttempts, 1);
+    assert.equal(test2.attemptsRemaining, 0);
+    assert.equal(test2.canReattempt, false);
+    assert.equal(test2.isReattemptEligible, false);
+  } finally {
+    Exam.countDocuments = original.examCount;
+    Exam.find = original.examFind;
+    TestResult.find = original.resultFind;
+    Student.find = original.studentFind;
+    Student.findOne = original.studentFindOne;
+    Student.findById = original.studentFindById;
+    User.find = original.userFind;
+    User.findOne = original.userFindOne;
+    Course.find = original.courseFind;
+  }
+});
+
+test('17. startExam marks stale/abandoned in-progress attempt as Abandoned and creates clean attempt', async () => {
+  const original = {
+    resultCount: TestResult.countDocuments,
+    resultFind: TestResult.find,
+    resultFindOne: TestResult.findOne,
+    resultFindById: TestResult.findById,
+    resultFindByIdAndUpdate: TestResult.findByIdAndUpdate,
+    resultCreate: TestResult.create,
+    studentFind: Student.find,
+    studentFindOne: Student.findOne,
+    studentFindById: Student.findById,
+    userFind: User.find,
+    userFindOne: User.findOne,
+    courseFind: Course.find,
+    courseFindOne: Course.findOne,
+    examFindById: Exam.findById,
+  };
+
+  const studentId = new mongoose.Types.ObjectId();
+  const userId = new mongoose.Types.ObjectId();
+  const examId = new mongoose.Types.ObjectId();
+
+  const mockExam = {
+    _id: examId,
+    title: 'Stale Reattempt Grand Mock',
+    testType: 'grand_mock',
+    marksPerQuestion: 2,
+    durationMinutes: 30, // 30 mins
+    totalQuestions: 1,
+    questions: [
+      { _id: new mongoose.Types.ObjectId(), questionText: 'Q1', options: { A: 'A', B: 'B' }, correctOption: 'A' }
+    ]
+  };
+
+  const mockStudent = { _id: studentId, userId, role: 'student', accountStatus: 'Approved', isApproved: true };
+  const user = { id: userId.toString(), studentId: studentId.toString(), role: 'student' };
+
+  // Attempt 1 was completed yesterday
+  const attempt1 = {
+    _id: new mongoose.Types.ObjectId(),
+    studentId,
+    examId,
+    attemptNumber: 1,
+    status: 'Completed',
+    score: 2,
+    createdAt: new Date(Date.now() - 86400000),
+  };
+
+  // Attempt 2 was started 3 hours ago (stale, duration is 30 mins) and left In Progress
+  const staleAttempt2 = {
+    _id: new mongoose.Types.ObjectId(),
+    studentId,
+    examId,
+    attemptNumber: 2,
+    status: 'In Progress',
+    answers: [{ questionId: mockExam.questions[0]._id, selectedOption: 'B' }],
+    createdAt: new Date(Date.now() - 3 * 3600000),
+    updatedAt: new Date(Date.now() - 3 * 3600000),
+  };
+
+  let storedResults = [attempt1, staleAttempt2];
+
+  try {
+    Student.find = () => queryWith([mockStudent]);
+    Student.findOne = () => queryWith(mockStudent);
+    Student.findById = () => queryWith(mockStudent);
+    User.find = () => queryWith([]);
+    User.findOne = () => queryWith(null);
+    Course.find = () => queryWith([]);
+    Course.findOne = () => queryWith(null);
+    Exam.findById = () => queryWith(mockExam);
+
+    TestResult.countDocuments = async (filter = {}) => {
+      if (filter.status) {
+        return storedResults.filter(r => ['Completed', 'Attempted'].includes(r.status)).length;
+      }
+      return storedResults.length;
+    };
+
+    TestResult.findOne = (filter = {}) => {
+      let filtered = [...storedResults];
+      if (filter.status === 'In Progress') {
+        filtered = filtered.filter(r => r.status === 'In Progress');
+      }
+      return queryWith(filtered[0] || null);
+    };
+
+    TestResult.findByIdAndUpdate = async (id, update) => {
+      const target = storedResults.find(r => r._id.toString() === id.toString());
+      if (target && update.$set) {
+        Object.assign(target, update.$set);
+      }
+      return target;
+    };
+
+    TestResult.create = async (doc) => {
+      const created = {
+        _id: new mongoose.Types.ObjectId(),
+        ...doc,
+        createdAt: new Date(),
+        updatedAt: new Date(),
+      };
+      storedResults.push(created);
+      return created;
+    };
+
+    // Starting exam should detect that attempt 2 is stale (> 30 mins)
+    // and transition it to 'Abandoned', then create a fresh attempt with attemptNumber: 2
+    const startRes = responseRecorder();
+    await startExam({ user, params: { id: examId.toString() }, query: {} }, startRes);
+
+    assert.equal(startRes.statusCode, 200);
+    assert.equal(startRes.body.data.attemptNumber, 2);
+    assert.equal(startRes.body.data.isReattempt, true);
+    assert.equal(startRes.body.data.canReattempt, true);
+
+    // Stale attempt was marked Abandoned
+    assert.equal(staleAttempt2.status, 'Abandoned');
+
+    // Fresh in-progress attempt was created
+    const freshAttempt = storedResults.find(r => r.status === 'In Progress');
+    assert.ok(freshAttempt);
+    assert.notEqual(freshAttempt._id.toString(), staleAttempt2._id.toString());
+    assert.equal(freshAttempt.attemptNumber, 2);
+    assert.deepEqual(freshAttempt.answers, []);
+  } finally {
+    TestResult.countDocuments = original.resultCount;
+    TestResult.find = original.resultFind;
+    TestResult.findOne = original.resultFindOne;
+    TestResult.findById = original.resultFindById;
+    TestResult.findByIdAndUpdate = original.resultFindByIdAndUpdate;
+    TestResult.create = original.resultCreate;
+    Student.find = original.studentFind;
+    Student.findOne = original.studentFindOne;
+    Student.findById = original.studentFindById;
+    User.find = original.userFind;
+    User.findOne = original.userFindOne;
+    Course.find = original.courseFind;
+    Course.findOne = original.courseFindOne;
+    Exam.findById = original.examFindById;
   }
 });
