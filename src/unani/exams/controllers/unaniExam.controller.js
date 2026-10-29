@@ -362,6 +362,13 @@ async function startExam(req, res) {
       });
     }
 
+    if (testData.error) {
+      return res.status(403).json({
+        success: false,
+        message: testData.error,
+      });
+    }
+
     return res.status(200).json({
       success: true,
       message: 'Unani exam started successfully.',
@@ -963,6 +970,45 @@ async function updateAnswerKey(req, res) {
   }
 }
 
+
+/**
+ * GET /api/unani-exams/student/:examId/eligibility
+ * Check reattempt eligibility for an Unani exam
+ */
+async function checkReattemptEligibility(req, res) {
+  try {
+    const result = await unaniExamService.checkReattemptEligibility(req.params.examId, req.user);
+    if (result.notFound) {
+      return res.status(404).json({
+        success: false,
+        eligible: false,
+        message: result.message || 'Unani exam not found',
+        reason: result.message || 'Unani exam not found',
+      });
+    }
+    if (result.unauthorized) {
+      return res.status(401).json({
+        success: false,
+        eligible: false,
+        message: result.message || 'Unauthorized',
+        reason: result.message || 'Unauthorized',
+      });
+    }
+
+    return res.status(200).json({
+      success: true,
+      ...result,
+    });
+  } catch (error) {
+    return res.status(500).json({
+      success: false,
+      eligible: false,
+      message: 'Failed to check Unani exam eligibility.',
+      reason: error.message,
+    });
+  }
+}
+
 module.exports = {
   createExam,
   getAllExams,
@@ -993,4 +1039,5 @@ module.exports = {
   getAnswerKey,
   downloadAnswerKeyPDF,
   updateAnswerKey,
+  checkReattemptEligibility,
 };

@@ -17,6 +17,10 @@ router.get('/api/unani-exams/student', requireCourseAccess('unani'), unaniExamCo
 router.get('/api/v1/unani-exams/student', requireCourseAccess('unani'), unaniExamController.getStudentAvailableExams);
 
 // GET specific Unani exam details & questions (NO answer keys) for student
+router.get('/api/unani-exams/student/:examId/eligibility', requireCourseAccess('unani'), unaniExamController.checkReattemptEligibility);
+router.get('/api/v1/unani-exams/student/:examId/eligibility', requireCourseAccess('unani'), unaniExamController.checkReattemptEligibility);
+router.get('/api/unani-exams/student/:examId/reattempt-eligibility', requireCourseAccess('unani'), unaniExamController.checkReattemptEligibility);
+router.get('/api/v1/unani-exams/student/:examId/reattempt-eligibility', requireCourseAccess('unani'), unaniExamController.checkReattemptEligibility);
 router.get('/api/unani-exams/student/:examId', requireCourseAccess('unani'), unaniExamController.getStudentExamById);
 router.get('/api/v1/unani-exams/student/:examId', requireCourseAccess('unani'), unaniExamController.getStudentExamById);
 

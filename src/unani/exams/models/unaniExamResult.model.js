@@ -85,6 +85,11 @@ const unaniExamResultSchema = new mongoose.Schema(
       enum: ['Completed', 'In Progress', 'Attempted'],
       default: 'Completed',
     },
+    attemptNumber: {
+      type: Number,
+      required: false,
+      default: 1,
+    },
     timeTakenSeconds: {
       type: Number,
       default: 0,
@@ -120,6 +125,7 @@ const unaniExamResultSchema = new mongoose.Schema(
 
 unaniExamResultSchema.index({ studentId: 1, createdAt: -1 });
 unaniExamResultSchema.index({ studentId: 1, examId: 1 });
+unaniExamResultSchema.index({ studentId: 1, examId: 1, attemptNumber: 1 });
 unaniExamResultSchema.index({ examId: 1, courseId: 1, examType: 1, score: -1, percentage: -1 });
 unaniExamResultSchema.index({ examId: 1, score: -1, percentage: -1, timeTakenSeconds: 1, createdAt: 1 });
 

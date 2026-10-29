@@ -49,6 +49,11 @@ const userSchema = new mongoose.Schema(
       type: String,
       trim: true,
     },
+    collegeName: {
+      type: String,
+      trim: true,
+      default: '',
+    },
     profileImage: {
       type: String,
       trim: true,

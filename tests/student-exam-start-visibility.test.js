@@ -60,6 +60,7 @@ test('listed exam _id starts successfully; invalid, unpublished, and unauthorize
     userFind: User.find,
     resultFind: TestResult.find,
     resultFindOne: TestResult.findOne,
+    resultCount: TestResult.countDocuments,
     resultCreate: TestResult.create,
   };
   const student = {
@@ -97,6 +98,7 @@ test('listed exam _id starts successfully; invalid, unpublished, and unauthorize
     };
     TestResult.find = () => queryWith([]);
     TestResult.findOne = () => queryWith(null);
+    TestResult.countDocuments = async () => 0;
     TestResult.create = async () => ({ _id: new mongoose.Types.ObjectId() });
 
     const user = {
@@ -200,6 +202,7 @@ test('listed exam _id starts successfully; invalid, unpublished, and unauthorize
     User.find = original.userFind;
     TestResult.find = original.resultFind;
     TestResult.findOne = original.resultFindOne;
+    TestResult.countDocuments = original.resultCount;
     TestResult.create = original.resultCreate;
   }
 });

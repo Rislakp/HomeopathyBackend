@@ -7,6 +7,7 @@ const {
   startExam,
   submitExam,
   getStudentResults,
+  checkReattemptEligibility,
 } = require('./student.controller');
 const { downloadAnswerKey, getAnswerKey } = require('./answerKey.controller');
 const requireStudentOrAdmin = requireRole('student', 'admin', 'superadmin');
@@ -81,6 +82,17 @@ router.get('/student/demo-videos', demoVideoController.getDemoVideos);
 router.get('/api/student/exams', getAvailableExams);
 router.get('/api/v1/student/exams', getAvailableExams);
 router.get('/student/exams', getAvailableExams);
+
+/**
+ * @route   GET /api/student/exams/:id/eligibility
+ * @desc    Check reattempt and attempt eligibility
+ */
+router.get('/api/student/exams/:id/eligibility', checkReattemptEligibility);
+router.get('/api/v1/student/exams/:id/eligibility', checkReattemptEligibility);
+router.get('/student/exams/:id/eligibility', checkReattemptEligibility);
+router.get('/api/student/exams/:id/reattempt-eligibility', checkReattemptEligibility);
+router.get('/api/v1/student/exams/:id/reattempt-eligibility', checkReattemptEligibility);
+router.get('/student/exams/:id/reattempt-eligibility', checkReattemptEligibility);
 
 /**
  * @route   GET /api/student/exams/:id/start

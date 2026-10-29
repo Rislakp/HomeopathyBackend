@@ -285,6 +285,24 @@ async function startExam(examId, reqUser) {
   const exam = await UnaniExam.findOne({ _id: examId, courseId: 'unani' });
   if (!exam) return null;
 
+  let completedCount = 0;
+  if (reqUser) {
+    try {
+      const studentId = await resolveStudentId(reqUser);
+      if (studentId) {
+        completedCount = await UnaniExamResult.countDocuments({
+          examId: exam._id,
+          studentId: studentId,
+        });
+      }
+    } catch (e) {}
+  }
+
+  const maxAttempts = Number(exam.maxAttempts || exam.attemptLimit) || 0;
+  if (maxAttempts > 0 && completedCount >= maxAttempts) {
+    return { error: `Maximum attempts (${maxAttempts}) reached for this exam.` };
+  }
+
   const sanitizedQuestions = exam.questions.map((q) => {
     const qObj = q.toObject ? q.toObject() : { ...q };
     delete qObj.correctOption;
@@ -302,6 +320,9 @@ async function startExam(examId, reqUser) {
     totalQuestions: exam.questions.length,
     marksPerQuestion: exam.marksPerQuestion,
     negativeMark: exam.negativeMark,
+    attemptNumber: completedCount + 1,
+    totalAttempts: completedCount,
+    isReattempt: completedCount > 0,
     questions: sanitizedQuestions,
   };
 }
@@ -363,11 +384,38 @@ async function submitExam(examId, reqUser, submissionData) {
   const percentage = totalMarks > 0 ? Math.max(0, Math.round((score / totalMarks) * 100 * 100) / 100) : 0;
   const timeTakenSeconds = Number(submissionData.timeTakenSeconds || submissionData.timeTaken || 0);
 
+  const previousResults = await UnaniExamResult.find({
+    examId: exam._id,
+    studentId: studentId,
+  }).sort({ createdAt: -1 });
+
+  // Idempotency: if rapid duplicate submission within 3 seconds, return existing result
+  if (previousResults.length > 0) {
+    const latestAttempt = previousResults[0];
+    const diffMs = Date.now() - new Date(latestAttempt.createdAt || latestAttempt.updatedAt).getTime();
+    if (diffMs < 3000) {
+      const bScore = previousResults.reduce((max, r) => (r.score > max ? r.score : max), latestAttempt.score);
+      const resObj = latestAttempt.toObject ? latestAttempt.toObject() : latestAttempt;
+      return {
+        ...resObj,
+        attemptNumber: latestAttempt.attemptNumber || previousResults.length,
+        totalAttempts: previousResults.length,
+        attempts: previousResults.length,
+        latestScore: latestAttempt.score,
+        bestScore: bScore,
+      };
+    }
+  }
+
+  const attemptNumber = previousResults.length + 1;
+  const bestScore = previousResults.reduce((max, r) => (r.score > max ? r.score : max), score);
+
   const result = new UnaniExamResult({
     studentId: studentId,
     examId: exam._id,
     courseId: 'unani',
     examType: 'grand_mock_test',
+    attemptNumber: attemptNumber,
     score: score,
     totalMarks: totalMarks,
     percentage: percentage,
@@ -380,7 +428,15 @@ async function submitExam(examId, reqUser, submissionData) {
   });
 
   await result.save();
-  return result;
+  const resObj = result.toObject ? result.toObject() : { ...result._doc };
+  return {
+    ...resObj,
+    attemptNumber: attemptNumber,
+    totalAttempts: attemptNumber,
+    attempts: attemptNumber,
+    latestScore: score,
+    bestScore: bestScore,
+  };
 }
 
 /**
@@ -724,8 +780,57 @@ async function getStudentAvailableExams(reqUser) {
       .sort({ createdAt: -1 })
       .lean();
 
+    let studentId = null;
+    if (reqUser) {
+      try {
+        studentId = await resolveStudentId(reqUser);
+      } catch (e) {}
+    }
+
+    const attemptMap = new Map();
+    if (studentId) {
+      try {
+        const studentResults = await UnaniExamResult.find({
+          studentId: studentId,
+          courseId: 'unani'
+        }).sort({ createdAt: -1 }).lean();
+
+        for (const res of studentResults) {
+          if (!res.examId) continue;
+          const eIdStr = res.examId.toString();
+          if (!attemptMap.has(eIdStr)) {
+            attemptMap.set(eIdStr, []);
+          }
+          attemptMap.get(eIdStr).push(res);
+        }
+      } catch (resErr) {
+        console.warn('Error fetching Unani student results:', resErr.message);
+      }
+    }
+
     for (const exam of unaniExams) {
       const idStr = exam._id.toString();
+      const examResults = (attemptMap.get(idStr) || []).sort((a, b) => {
+        const aNum = typeof a.attemptNumber === 'number' ? a.attemptNumber : 0;
+        const bNum = typeof b.attemptNumber === 'number' ? b.attemptNumber : 0;
+        if (bNum !== aNum) return bNum - aNum;
+        const bTime = new Date(b.createdAt || 0).getTime();
+        const aTime = new Date(a.createdAt || 0).getTime();
+        return bTime - aTime;
+      });
+
+      const totalAttempts = examResults.length;
+      const latestAttempt = examResults[0] || null;
+      let bestScore = null;
+      let bestResult = null;
+      if (totalAttempts > 0) {
+        bestScore = Math.max(...examResults.map(r => (typeof r.score === 'number' ? r.score : 0)));
+        bestResult = examResults.find(r => r.score === bestScore) || examResults[0];
+      }
+      const latestScore = latestAttempt ? latestAttempt.score : null;
+      const isCompleted = totalAttempts > 0;
+      const scoreValue = latestScore !== null ? latestScore : (bestScore ?? null);
+
       results.push({
         _id: idStr,
         id: idStr,
@@ -738,7 +843,21 @@ async function getStudentAvailableExams(reqUser) {
         durationMinutes: exam.durationMinutes || exam.duration || 0,
         marksPerQuestion: exam.marksPerQuestion || 1,
         negativeMark: exam.negativeMark || exam.negativeMarkPenalty || 0,
-        status: exam.status || 'Published',
+        status: isCompleted ? 'Completed' : (exam.status || 'Published'),
+        attemptStatus: isCompleted ? 'completed' : 'not_started',
+        hasAttempted: isCompleted,
+        isCompleted: isCompleted,
+        totalAttempts: totalAttempts,
+        attempts: totalAttempts,
+        total_attempts: totalAttempts,
+        latestScore: latestScore,
+        bestScore: bestScore,
+        previousScore: scoreValue,
+        score: scoreValue,
+        resultId: latestAttempt ? latestAttempt._id : null,
+        latestResultId: latestAttempt ? latestAttempt._id : null,
+        bestResultId: bestResult ? bestResult._id : null,
+        submittedAt: latestAttempt ? latestAttempt.createdAt : null,
         createdAt: exam.createdAt,
         updatedAt: exam.updatedAt,
       });
@@ -791,6 +910,19 @@ async function getStudentExamById(examId, reqUser) {
     };
   });
 
+  let completedCount = 0;
+  if (reqUser) {
+    try {
+      const sId = await resolveStudentId(reqUser);
+      if (sId) {
+        completedCount = await UnaniExamResult.countDocuments({
+          examId: exam._id,
+          studentId: sId,
+        });
+      }
+    } catch (e) {}
+  }
+
   return {
     exam: {
       _id: exam._id.toString(),
@@ -804,7 +936,13 @@ async function getStudentExamById(examId, reqUser) {
       durationMinutes: exam.durationMinutes || exam.duration || 0,
       marksPerQuestion: exam.marksPerQuestion || 1,
       negativeMark: exam.negativeMark || exam.negativeMarkPenalty || 0,
+      attemptNumber: completedCount + 1,
+      totalAttempts: completedCount,
+      isReattempt: completedCount > 0,
     },
+    attemptNumber: completedCount + 1,
+    totalAttempts: completedCount,
+    isReattempt: completedCount > 0,
     questions: sanitizedQuestions,
   };
 }
@@ -828,15 +966,50 @@ async function submitStudentExam(examId, reqUser, submissionData = {}) {
     return { unauthenticated: true };
   }
 
-  // Prevent duplicate submission in UnaniExamResult
-  const existingResult = await UnaniExamResult.findOne({
+  // Fetch previous submissions for student
+  const previousResults = await UnaniExamResult.find({
     examId: exam._id,
     studentId: studentId,
-  });
+  }).sort({ createdAt: -1 });
 
-  if (existingResult) {
-    return { conflict: true };
+  // Idempotency: if rapid duplicate submission within 3 seconds, return the existing result
+  if (previousResults.length > 0) {
+    const latestAttempt = previousResults[0];
+    const diffMs = Date.now() - new Date(latestAttempt.createdAt || latestAttempt.updatedAt).getTime();
+    if (diffMs < 3000) {
+      const bestScore = previousResults.reduce((max, r) => (r.score > max ? r.score : max), latestAttempt.score);
+      return {
+        resultId: latestAttempt._id.toString(),
+        examId: exam._id.toString(),
+        studentId: studentId.toString(),
+        score: latestAttempt.score,
+        correct: latestAttempt.correctAnswers,
+        correctAnswers: latestAttempt.correctAnswers,
+        wrong: latestAttempt.wrongAnswers,
+        wrongAnswers: latestAttempt.wrongAnswers,
+        unanswered: latestAttempt.unanswered,
+        unansweredQuestions: latestAttempt.unanswered,
+        attemptedQuestions: latestAttempt.correctAnswers + latestAttempt.wrongAnswers,
+        totalMarks: latestAttempt.totalMarks,
+        maximumScore: latestAttempt.totalMarks,
+        percentage: latestAttempt.percentage,
+        marksPerQuestion: Number(exam.marksPerQuestion) || 1,
+        negativeMark: Number(exam.negativeMark || exam.negativeMarkPenalty || 0),
+        totalQuestions: exam.questions ? exam.questions.length : 0,
+        status: latestAttempt.status || 'Completed',
+        timeTakenSeconds: latestAttempt.timeTakenSeconds || 0,
+        timeTaken: latestAttempt.timeTakenSeconds || 0,
+        attemptNumber: latestAttempt.attemptNumber || previousResults.length,
+        totalAttempts: previousResults.length,
+        attempts: previousResults.length,
+        latestScore: latestAttempt.score,
+        bestScore: bestScore,
+        submittedAt: latestAttempt.createdAt,
+      };
+    }
   }
+
+  const attemptNumber = previousResults.length + 1;
 
   // Normalize submitted answers input (supports map format and array format)
   const rawAnswers = submissionData.answers || submissionData.responses || {};
@@ -912,12 +1085,13 @@ async function submitStudentExam(examId, reqUser, submissionData = {}) {
     timeTakenSeconds = 0;
   }
 
-  // Save exclusively to UnaniExamResult
+  // Save exclusively to UnaniExamResult with distinct attemptNumber
   const newResult = new UnaniExamResult({
     studentId: studentId,
     examId: exam._id,
     courseId: 'unani',
     examType: 'grand_mock_test',
+    attemptNumber: attemptNumber,
     score: score,
     totalMarks: totalMarks,
     percentage: percentage,
@@ -931,6 +1105,7 @@ async function submitStudentExam(examId, reqUser, submissionData = {}) {
   await newResult.save();
 
   const attemptedQuestions = correctAnswers + wrongAnswers;
+  const bestScore = previousResults.reduce((max, r) => (r.score > max ? r.score : max), score);
 
   return {
     resultId: newResult._id.toString(),
@@ -950,6 +1125,11 @@ async function submitStudentExam(examId, reqUser, submissionData = {}) {
     marksPerQuestion: marksPerQuestion,
     negativeMark: penalty,
     totalQuestions: totalQuestions,
+    attemptNumber: attemptNumber,
+    totalAttempts: attemptNumber,
+    attempts: attemptNumber,
+    latestScore: score,
+    bestScore: bestScore,
     status: 'Completed',
     timeTakenSeconds: timeTakenSeconds,
     timeTaken: timeTakenSeconds,
@@ -1008,6 +1188,8 @@ async function getStudentResultByExam(examId, reqUser) {
     marksPerQuestion: exam ? (exam.marksPerQuestion || 1) : 1,
     negativeMark: exam ? (exam.negativeMark || exam.negativeMarkPenalty || 0) : 0,
     totalQuestions: totalQuestions,
+    attemptNumber: result.attemptNumber || 1,
+    attempts: result.attemptNumber || 1,
     status: result.status || 'Completed',
     timeTakenSeconds: result.timeTakenSeconds || 0,
     timeTaken: result.timeTakenSeconds || 0,
@@ -1794,6 +1976,62 @@ async function deleteRankImage(examId, studentId) {
   };
 }
 
+
+/**
+ * Check reattempt and attempt eligibility for an Unani exam
+ */
+async function checkReattemptEligibility(examId, reqUser) {
+  if (!examId || !mongoose.Types.ObjectId.isValid(examId)) {
+    return { notFound: true, message: 'Invalid Exam ID format' };
+  }
+  const exam = await UnaniExam.findOne({ _id: examId, courseId: 'unani' });
+  if (!exam) {
+    return { notFound: true, message: 'Unani exam not found' };
+  }
+  const studentId = await resolveStudentId(reqUser);
+  if (!studentId) {
+    return { unauthorized: true, message: 'Authenticated student not found' };
+  }
+  const previousResults = await UnaniExamResult.find({
+    examId: exam._id,
+    studentId: studentId,
+  }).sort({ attemptNumber: -1, createdAt: -1 }).lean();
+
+  const totalAttempts = previousResults.length;
+  const isReattempt = totalAttempts > 0;
+  const maxAttempts = Number(exam.maxAttempts || exam.attemptLimit) || 0;
+
+  if (maxAttempts > 0 && totalAttempts >= maxAttempts) {
+    return {
+      eligible: false,
+      isReattempt,
+      totalAttempts,
+      maxAttempts,
+      attemptsRemaining: 0,
+      latestScore: previousResults[0]?.score ?? null,
+      bestScore: previousResults.length > 0 ? Math.max(...previousResults.map(r => (typeof r.score === 'number' ? r.score : 0))) : null,
+      message: `Maximum attempts (${maxAttempts}) reached for this exam.`,
+      reason: `Maximum attempts (${maxAttempts}) reached for this exam.`,
+    };
+  }
+
+  const attemptsRemaining = maxAttempts > 0 ? Math.max(0, maxAttempts - totalAttempts) : null;
+  const latestScore = previousResults[0]?.score ?? null;
+  const bestScore = previousResults.length > 0 ? Math.max(...previousResults.map(r => (typeof r.score === 'number' ? r.score : 0))) : null;
+
+  return {
+    eligible: true,
+    isReattempt,
+    totalAttempts,
+    maxAttempts: maxAttempts > 0 ? maxAttempts : null,
+    attemptsRemaining,
+    latestScore,
+    bestScore,
+    message: isReattempt ? 'Eligible for reattempt.' : 'Eligible for first attempt.',
+    reason: null,
+  };
+}
+
 module.exports = {
   createExam,
   getAllExams,
@@ -1826,4 +2064,5 @@ module.exports = {
   generateUnaniAnswerKeyPDF,
   updateRankImage,
   deleteRankImage,
+  checkReattemptEligibility,
 };

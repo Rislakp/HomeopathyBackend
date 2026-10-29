@@ -65,6 +65,9 @@ const buildProfileResponse = async (user, studentDoc = null) => {
     registeredCourseIds: registeredCourseIds,
     dateOfBirth: (studentDoc && studentDoc.dateOfBirth) || user.dateOfBirth || '',
     qualification: (studentDoc && studentDoc.qualification) || user.qualification || '',
+    collegeName: (studentDoc && studentDoc.collegeName) || user.collegeName || '',
+    college_name: (studentDoc && studentDoc.collegeName) || user.collegeName || '',
+    college: (studentDoc && studentDoc.collegeName) || user.collegeName || '',
     subscription: (studentDoc && studentDoc.subscription) || 'Free',
     subscriptionStatus: (studentDoc && studentDoc.subscriptionStatus) || user.subscriptionStatus || (studentDoc && studentDoc.subscription ? 'Active' : 'None'),
     subscriptionExpiresAt: (studentDoc && studentDoc.subscriptionExpiresAt) || null,
@@ -402,6 +405,8 @@ const updateProfile = async (req, res) => {
       'dateOfBirth',
       'dob',
       'qualification',
+      'collegeName',
+      'college',
       'preferredCourse',
       'course',
     ];
@@ -439,6 +444,11 @@ const updateProfile = async (req, res) => {
 
     if (req.body.qualification !== undefined) {
       updates.qualification = req.body.qualification.toString().trim();
+    }
+
+    if (req.body.collegeName !== undefined || req.body.college !== undefined) {
+      const collegeVal = (req.body.collegeName !== undefined ? req.body.collegeName : req.body.college || '').toString().trim();
+      updates.collegeName = collegeVal;
     }
 
     if (req.body.preferredCourse !== undefined || req.body.course !== undefined) {
@@ -497,6 +507,8 @@ const updateProfile = async (req, res) => {
           studentUpdates.dateOfBirth = updates.dateOfBirth;
         if (updates.qualification !== undefined)
           studentUpdates.qualification = updates.qualification;
+        if (updates.collegeName !== undefined)
+          studentUpdates.collegeName = updates.collegeName;
         if (updates.preferredCourse !== undefined) {
           studentUpdates.preferredCourse = updates.preferredCourse;
           studentUpdates.course = updates.preferredCourse;

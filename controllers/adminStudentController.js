@@ -16,7 +16,7 @@ async function syncStudentUsers() {
     memoryCache.set('last_student_sync', true, 300); // 5 min TTL
 
     const studentUsers = await User.find({ role: 'student' })
-      .select('_id email name phone contactNumber dateOfBirth qualification createdAt')
+      .select('_id email name phone contactNumber dateOfBirth qualification collegeName createdAt')
       .lean();
     if (!studentUsers || studentUsers.length === 0) return;
 
@@ -49,6 +49,7 @@ async function syncStudentUsers() {
           contactNumber: u.contactNumber || u.phone || '',
           dateOfBirth: u.dateOfBirth || '',
           qualification: u.qualification || '',
+          collegeName: u.collegeName || u.college || '',
           profileImage: u.profileImage || u.avatar || '',
           avatar: u.avatar || u.profileImage || '',
           preferredCourse: u.preferredCourse || u.course || 'UNANI',
@@ -175,7 +176,7 @@ async function getAdminStudents(req, res) {
     const [total, rawStudents] = await Promise.all([
       Student.countDocuments(matchConditions),
       Student.find(matchConditions)
-        .select('_id userId name email phone contactNumber dateOfBirth qualification profileImage avatar course courseRef courseId courseIds status accountStatus isApproved subscription joinedDate createdAt updatedAt')
+        .select('_id userId name email phone contactNumber dateOfBirth qualification collegeName profileImage avatar course courseRef courseId courseIds status accountStatus isApproved subscription joinedDate createdAt updatedAt')
         .sort({ createdAt: -1 })
         .skip(skip)
         .limit(limit)
@@ -257,7 +258,7 @@ async function getAdminStudents(req, res) {
     const [matchedUsers, matchedCourses, testStatsAgg] = await Promise.all([
       userQueryConditions.length > 0
         ? User.find({ $or: userQueryConditions })
-            .select('_id email phone contactNumber dateOfBirth qualification profileImage avatar')
+            .select('_id email phone contactNumber dateOfBirth qualification collegeName profileImage avatar')
             .lean()
         : Promise.resolve([]),
       courseQueryConditions.length > 0
@@ -375,6 +376,9 @@ async function getAdminStudents(req, res) {
         contact_number: s.contactNumber || s.phone || userObj?.contactNumber || userObj?.phone || '',
         date_of_birth: s.dateOfBirth || userObj?.dateOfBirth || '',
         qualification: s.qualification || userObj?.qualification || '',
+        college_name: s.collegeName || userObj?.collegeName || '',
+        collegeName: s.collegeName || userObj?.collegeName || '',
+        college: s.collegeName || userObj?.collegeName || '',
         profile_image: profileImage,
         avatar: profileImage,
         enrolled_course: {
@@ -613,6 +617,15 @@ async function getAdminStudents(req, res) {
                 },
                 qualification: {
                   $ifNull: ['$qualification', { $ifNull: ['$userObj.qualification', ''] }]
+                },
+                college_name: {
+                  $ifNull: ['$collegeName', { $ifNull: ['$userObj.collegeName', ''] }]
+                },
+                collegeName: {
+                  $ifNull: ['$collegeName', { $ifNull: ['$userObj.collegeName', ''] }]
+                },
+                college: {
+                  $ifNull: ['$collegeName', { $ifNull: ['$userObj.collegeName', ''] }]
                 },
                 profile_image: {
                   $ifNull: [
@@ -955,6 +968,15 @@ async function getAdminStudentById(req, res) {
           },
           qualification: {
             $ifNull: ['$qualification', { $ifNull: ['$userObj.qualification', ''] }]
+          },
+          college_name: {
+            $ifNull: ['$collegeName', { $ifNull: ['$userObj.collegeName', ''] }]
+          },
+          collegeName: {
+            $ifNull: ['$collegeName', { $ifNull: ['$userObj.collegeName', ''] }]
+          },
+          college: {
+            $ifNull: ['$collegeName', { $ifNull: ['$userObj.collegeName', ''] }]
           },
           profile_image: {
             $ifNull: [
@@ -1483,6 +1505,11 @@ async function updateAdminStudent(req, res) {
       updateFields.qualification = String(req.body.qualification).trim();
     }
 
+    const collegeVal = req.body.collegeName !== undefined ? req.body.collegeName : req.body.college;
+    if (collegeVal !== undefined && collegeVal !== null) {
+      updateFields.collegeName = String(collegeVal).trim();
+    }
+
     const hasCourseIds = Object.prototype.hasOwnProperty.call(req.body, 'courseIds');
     if (hasCourseIds) {
       const resolvedCourses = await resolveCourseAssignments(req.body.courseIds);
@@ -1595,6 +1622,7 @@ async function updateAdminStudent(req, res) {
       }
       if (updateFields.dateOfBirth) userUpdateFields.dateOfBirth = updateFields.dateOfBirth;
       if (updateFields.qualification) userUpdateFields.qualification = updateFields.qualification;
+      if (updateFields.collegeName !== undefined) userUpdateFields.collegeName = updateFields.collegeName;
       if (Object.prototype.hasOwnProperty.call(updateFields, 'courseIds')) {
         // User.courseIds is already populated during registration and read by
         // authentication/course-access code, so keep this existing duplicate
@@ -1673,12 +1701,18 @@ async function createAdminStudent(req, res) {
       phone,
       dateOfBirth,
       qualification,
+      collegeName,
+      college,
       course,
       courseId,
       subscription,
       status,
       password
     } = req.body;
+
+    const finalCollege = (collegeName !== undefined && collegeName !== null)
+      ? String(collegeName).trim()
+      : ((college !== undefined && college !== null) ? String(college).trim() : '');
 
     if (!name || !email) {
       return res.status(400).json({
@@ -1707,6 +1741,7 @@ async function createAdminStudent(req, res) {
         phone: phone ? String(phone).trim() : '',
         contactNumber: phone ? String(phone).trim() : '',
         qualification: qualification ? String(qualification).trim() : '',
+        collegeName: finalCollege,
         dateOfBirth: dateOfBirth ? String(dateOfBirth).trim() : '',
       });
     }
@@ -1733,6 +1768,7 @@ async function createAdminStudent(req, res) {
       contactNumber: phone ? String(phone).trim() : '',
       dateOfBirth: dateOfBirth ? String(dateOfBirth).trim() : '',
       qualification: qualification ? String(qualification).trim() : '',
+      collegeName: finalCollege,
       ...(courseAssignment || { course: 'General' }),
       subscription: subscription ? String(subscription).trim() : 'Free',
       status: normalizedStatus,
@@ -1838,7 +1874,7 @@ async function exportStudentsScores(req, res) {
 
     // 2. Fetch filtered students with all course fields
     const students = await Student.find(matchConditions)
-      .select('_id userId name email phone contactNumber course courseId courseIds courseRef subscription status joinedDate createdAt')
+      .select('_id userId name email phone contactNumber qualification collegeName course courseId courseIds courseRef subscription status joinedDate createdAt')
       .sort({ createdAt: -1 })
       .lean();
     
@@ -1977,6 +2013,9 @@ async function exportStudentsScores(req, res) {
         name: st.name || '',
         email: st.email || '',
         phone: st.phone || st.contactNumber || '',
+        collegeName: st.collegeName || '',
+        college_name: st.collegeName || '',
+        college: st.collegeName || '',
         course: multiCourseString,
         courseIds: Array.isArray(st.courseIds) ? st.courseIds : [],
         enrolled_courses: enrolledCourses,
@@ -1990,7 +2029,7 @@ async function exportStudentsScores(req, res) {
     });
 
     if (format === 'csv') {
-      const headers = ['ID', 'Name', 'Email', 'Phone', 'Course', 'Subscription', 'Status', 'Total Exams Attended', 'Average Score', 'Joined Date'];
+      const headers = ['ID', 'Name', 'Email', 'Phone', 'College Name', 'Course', 'Subscription', 'Status', 'Total Exams Attended', 'Average Score', 'Joined Date'];
       const csvRows = [headers.join(',')];
 
       exportData.forEach(row => {
@@ -1999,6 +2038,7 @@ async function exportStudentsScores(req, res) {
           `"${(row.name || '').replace(/"/g, '""')}"`,
           `"${(row.email || '').replace(/"/g, '""')}"`,
           `"${(row.phone || '').replace(/"/g, '""')}"`,
+          `"${(row.collegeName || '').replace(/"/g, '""')}"`,
           `"${(row.course || '').replace(/"/g, '""')}"`,
           `"${(row.subscription || '').replace(/"/g, '""')}"`,
           `"${(row.status || '').replace(/"/g, '""')}"`,

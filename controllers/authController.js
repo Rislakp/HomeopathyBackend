@@ -180,6 +180,9 @@ const buildUserResponse = async (user, studentDoc = null, options = {}) => {
     phone: user.phone || user.contactNumber || '',
     contactNumber: user.contactNumber || user.phone || '',
     qualification: user.qualification || '',
+    collegeName: (studentDoc && studentDoc.collegeName) || user.collegeName || '',
+    college_name: (studentDoc && studentDoc.collegeName) || user.collegeName || '',
+    college: (studentDoc && studentDoc.collegeName) || user.collegeName || '',
     preferredCourse: preferredCourse,
     course: courseTitle,
     // Legacy single-course fields (backward compatibility)
@@ -338,6 +341,8 @@ const registerStudent = async (req, res) => {
       phone,
       contactNumber,
       qualification,
+      collegeName,
+      college,
       course,
       selectedCourse,
       preferredCourse,
@@ -346,6 +351,7 @@ const registerStudent = async (req, res) => {
     const finalDob = (dateOfBirth || dob || '').toString().trim();
     const finalPhone = (contactNumber || phone || '').toString().trim();
     const finalQualification = (qualification || '').toString().trim();
+    const finalCollegeName = (collegeName || college || '').toString().trim();
     const finalName = (name || '').toString().trim();
 
     // ── Multi-course: resolve selected course IDs ─────────────────────────────
@@ -506,6 +512,7 @@ const registerStudent = async (req, res) => {
         contactNumber: finalPhone,
         phone: finalPhone,
         qualification: finalQualification,
+        collegeName: finalCollegeName,
         preferredCourse: finalCourse,
         course: resolvedCourseTitle,
         courseId: resolvedCourseId,
@@ -529,6 +536,7 @@ const registerStudent = async (req, res) => {
             contactNumber: finalPhone,
             phone: finalPhone,
             qualification: finalQualification,
+            collegeName: finalCollegeName,
             preferredCourse: finalCourse,
             course: resolvedCourseTitle,
             courseId: resolvedCourseId,
