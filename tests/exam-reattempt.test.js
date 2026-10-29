@@ -657,33 +657,30 @@ test('8 & 10. Admin Exam Results accurately distinguishes studentsAttended from 
     assert.equal(adminRes.body.success, true);
     assert.equal(adminRes.body.studentsAttended, 2, 'studentsAttended must be distinct unique student count');
     assert.equal(adminRes.body.totalAttempts, 3, 'totalAttempts must equal total submission rows');
-    assert.equal(adminRes.body.total, 3);
+    assert.equal(adminRes.body.total, 2, 'total students for pagination must be 2');
     assert.equal(adminRes.body.totalQuestions, 50);
     assert.equal(adminRes.body.durationMinutes, 90);
 
     const rows = adminRes.body.data;
-    assert.equal(rows.length, 3);
+    assert.equal(rows.length, 2, 'Each student must appear only once in the table');
 
-    // Verify student 1 attempt 2
+    // Verify student 1 (Alice) summary and nested attempts
     assert.equal(rows[0].studentName, 'Alice Student');
-    assert.equal(rows[0].attemptNumber, 2);
-    assert.equal(rows[0].attempts, 2);
-    assert.equal(rows[0].totalAttempts, 2);
+    assert.equal(rows[0].score, 85);
     assert.equal(rows[0].bestScore, 85);
+    assert.equal(rows[0].totalAttempts, 2);
+    assert.equal(rows[0].attempts.length, 2);
+    assert.equal(rows[0].attempts[0].attemptNumber, 1);
+    assert.equal(rows[0].attempts[0].score, 60);
+    assert.equal(rows[0].attempts[1].attemptNumber, 2);
+    assert.equal(rows[0].attempts[1].score, 85);
 
-    // Verify student 1 attempt 1
-    assert.equal(rows[1].studentName, 'Alice Student');
-    assert.equal(rows[1].attemptNumber, 1);
-    assert.equal(rows[1].attempts, 1);
-    assert.equal(rows[1].totalAttempts, 2);
-    assert.equal(rows[1].bestScore, 85);
-
-    // Verify student 2 attempt 1
-    assert.equal(rows[2].studentName, 'Bob Student');
-    assert.equal(rows[2].attemptNumber, 1);
-    assert.equal(rows[2].attempts, 1);
-    assert.equal(rows[2].totalAttempts, 1);
-    assert.equal(rows[2].bestScore, 70);
+    // Verify student 2 (Bob) summary and nested attempt
+    assert.equal(rows[1].studentName, 'Bob Student');
+    assert.equal(rows[1].score, 70);
+    assert.equal(rows[1].totalAttempts, 1);
+    assert.equal(rows[1].attempts.length, 1);
+    assert.equal(rows[1].bestScore, 70);
   } finally {
     Exam.findById = original.examFindById;
     TestResult.countDocuments = original.resultCount;

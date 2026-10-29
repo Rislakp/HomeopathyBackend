@@ -1762,162 +1762,356 @@ async function getAdminExamResults(req, res) {
       filter.studentId = { $in: candidateObjectIds };
     }
 
-    const isDbConnected = mongoose.connection && mongoose.connection.readyState === 1;
-    const isDistinctMocked = typeof TestResult.distinct === 'function' && TestResult.distinct !== mongoose.Model.distinct;
-    const distinctPromise = (isDbConnected || isDistinctMocked)
-      ? TestResult.distinct('studentId', filter).catch(() => [])
-      : Promise.resolve([]);
+    const defaultTotalMarks = (exam.totalQuestions && exam.marksPerQuestion)
+      ? exam.totalQuestions * exam.marksPerQuestion
+      : 0;
 
-    const [total, rawResults, distinctStudents] = await Promise.all([
-      TestResult.countDocuments(filter),
-      TestResult.find(filter)
-        .select('_id studentId examId attemptNumber score totalMarks totalAttempted totalCorrect totalWrong unansweredQuestions positiveMarks negativeMarks maximumScore percentage status createdAt updatedAt')
-        .sort({ score: -1, createdAt: -1 })
-        .skip(skip)
-        .limit(limit)
-        .lean(),
-      distinctPromise
-    ]);
-    const studentsAttended = (Array.isArray(distinctStudents) && distinctStudents.length > 0)
-      ? distinctStudents.length
-      : (total > 0 ? (new Set((rawResults || []).map(r => r.studentId?.toString()).filter(Boolean)).size || total) : 0);
+    const findQuery = TestResult.find(filter)
+      .select('_id studentId examId attemptNumber score totalMarks totalAttempted totalCorrect totalWrong unansweredQuestions positiveMarks negativeMarks maximumScore percentage status createdAt updatedAt')
+      .sort({ createdAt: 1 });
+    const rawResults = (findQuery && typeof findQuery.lean === 'function')
+      ? await findQuery.lean()
+      : ((await findQuery) || []);
+
+    const totalAttempts = Array.isArray(rawResults) ? rawResults.length : 0;
 
     if (!rawResults || rawResults.length === 0) {
-      const pagination = buildPaginationResponse(total, page, limit);
+      const pagination = buildPaginationResponse(0, page, limit);
       return res.status(200).json({
         success: true,
         message: 'Exam results retrieved successfully',
         data: [],
         results: [],
         pagination,
-        total,
-        studentsAttended,
-        totalAttempts: total,
+        total: 0,
+        studentsAttended: 0,
+        totalAttempts: 0,
         totalQuestions: exam.totalQuestions || (Array.isArray(exam.questions) ? exam.questions.length : 0),
         durationMinutes: exam.durationMinutes || 0
       });
     }
 
-    // Batch resolve Student / User details and attempt statistics for the page
-    const studentIds = rawResults
-      .map((r) => r.studentId)
-      .filter((id) => id && mongoose.Types.ObjectId.isValid(id))
+    // Resolve unique student candidate IDs from results
+    const rawStudentIds = Array.from(new Set(rawResults.map((r) => r.studentId?.toString()).filter(Boolean)));
+    const validStudentObjectIds = rawStudentIds
+      .filter((id) => mongoose.Types.ObjectId.isValid(id))
       .map((id) => new mongoose.Types.ObjectId(id));
 
-    const [studentsById, studentsByUserId, usersById, studentStatsAgg] = await Promise.all([
-      StudentModel.find({ _id: { $in: studentIds } }).select('_id userId name email phone').lean(),
-      StudentModel.find({ userId: { $in: studentIds } }).select('_id userId name email phone').lean(),
-      UserModel.find({ _id: { $in: studentIds } }).select('_id name email phone').lean(),
-      (isDbConnected || (typeof TestResult.aggregate === 'function' && TestResult.aggregate !== mongoose.Model.aggregate))
-        ? TestResult.aggregate([
-            { $match: { examId: exam._id, studentId: { $in: studentIds } } },
-            { $group: { _id: '$studentId', totalAttempts: { $sum: 1 }, bestScore: { $max: '$score' } } }
-          ]).catch(() => [])
-        : Promise.resolve([])
-    ]);
+    let students = [];
+    let users = [];
+    try {
+      const studentFind = StudentModel.find({
+        $or: [
+          { _id: { $in: validStudentObjectIds } },
+          { userId: { $in: validStudentObjectIds } }
+        ]
+      }).select('_id userId name email phone');
+      students = (studentFind && typeof studentFind.lean === 'function')
+        ? await studentFind.lean()
+        : ((await studentFind) || []);
+    } catch (e) {}
 
-    const studentMap = new Map();
-    studentsById.forEach((s) => studentMap.set(s._id.toString(), s));
-    studentsByUserId.forEach((s) => {
-      if (s.userId) studentMap.set(s.userId.toString(), s);
+    try {
+      const userFind = UserModel.find({ _id: { $in: validStudentObjectIds } }).select('_id name email phone');
+      users = (userFind && typeof userFind.lean === 'function')
+        ? await userFind.lean()
+        : ((await userFind) || []);
+    } catch (e) {}
+
+    // Build canonical student mapping and metadata
+    const canonicalMap = new Map();
+    const studentInfoMap = new Map();
+
+    (students || []).forEach((s) => {
+      const cId = s._id ? s._id.toString() : (s.userId ? s.userId.toString() : '');
+      if (!cId) return;
+      canonicalMap.set(cId, cId);
+      if (s.userId) canonicalMap.set(s.userId.toString(), cId);
+      studentInfoMap.set(cId, {
+        studentId: cId,
+        name: s.name || 'Student',
+        email: s.email || '',
+        phone: s.phone || '',
+        studentDoc: s
+      });
     });
 
-    const userMap = new Map();
-    usersById.forEach((u) => userMap.set(u._id.toString(), u));
-
-    const studentStatsMap = new Map();
-    studentStatsAgg.forEach((s) => {
-      if (s._id) studentStatsMap.set(s._id.toString(), s);
+    (users || []).forEach((u) => {
+      const uId = u._id ? u._id.toString() : '';
+      if (!uId) return;
+      if (!canonicalMap.has(uId)) {
+        canonicalMap.set(uId, uId);
+        studentInfoMap.set(uId, {
+          studentId: uId,
+          name: u.name || 'Student',
+          email: u.email || '',
+          phone: u.phone || '',
+          userDoc: u
+        });
+      }
     });
 
-    const formattedResults = rawResults.map((result) => {
+    // Group attempts by stable canonical student ID
+    const groupedByStudent = new Map();
+    for (const result of rawResults) {
       const sIdStr = result.studentId ? result.studentId.toString() : '';
-      const matchedStudent = studentMap.get(sIdStr);
-      const matchedUser = userMap.get(sIdStr);
+      const canonicalId = canonicalMap.get(sIdStr) || sIdStr;
 
-      const studentName = matchedStudent?.name || matchedUser?.name || 'Student';
-      const studentEmail = matchedStudent?.email || matchedUser?.email || '';
+      if (!groupedByStudent.has(canonicalId)) {
+        groupedByStudent.set(canonicalId, []);
+      }
+      groupedByStudent.get(canonicalId).push(result);
+    }
 
-      const score = typeof result.score === 'number' ? result.score : 0;
-      const totalMarks = typeof result.totalMarks === 'number' && result.totalMarks > 0
-        ? result.totalMarks
-        : ((exam.totalQuestions && exam.marksPerQuestion) ? exam.totalQuestions * exam.marksPerQuestion : 0);
+    const studentsAttended = groupedByStudent.size;
+    const total = studentsAttended;
 
-      const percentage = typeof result.percentage === 'number'
-        ? result.percentage
-        : (totalMarks > 0 ? Math.round((score / totalMarks) * 10000) / 100 : 0);
+    // Build student summary rows with nested attempts history
+    const sortByParam = (req.query.sortBy || req.query.sort || '').toLowerCase().trim();
+    const isDateSort = sortByParam === 'date' || sortByParam === 'createdat' || sortByParam === 'recent' || sortByParam === 'latest';
 
-      const correct = typeof result.totalCorrect === 'number' ? result.totalCorrect : 0;
-      const wrong = typeof result.totalWrong === 'number' ? result.totalWrong : 0;
-      const unanswered = typeof result.unansweredQuestions === 'number' ? result.unansweredQuestions : 0;
-      const totalAttempted = typeof result.totalAttempted === 'number' ? result.totalAttempted : (correct + wrong);
-      const status = result.status || 'Completed';
+    const studentSummaries = [];
 
-      const sStats = studentStatsMap.get(sIdStr);
-      const attemptNumber = typeof result.attemptNumber === 'number' && result.attemptNumber > 0
-        ? result.attemptNumber
-        : 1;
-      const totalAttemptsForStudent = sStats?.totalAttempts || attemptNumber;
-      const bestScoreForStudent = typeof sStats?.bestScore === 'number' ? sStats.bestScore : score;
-
-      return {
-        _id: result._id.toString(),
-        id: result._id.toString(),
-        resultId: result._id.toString(),
-        examId: exam._id.toString(),
-        studentId: sIdStr,
-        studentName,
-        studentEmail,
-        name: studentName,
-        email: studentEmail,
-        student: {
-          _id: sIdStr,
-          id: sIdStr,
-          name: studentName,
-          email: studentEmail
-        },
-        attemptNumber,
-        attempts: attemptNumber,
-        totalAttempts: totalAttemptsForStudent,
-        bestScore: bestScoreForStudent,
-        score,
-        marksObtained: score,
-        totalScore: score,
-        totalMarks,
-        maxMarks: totalMarks,
-        percentage,
-        totalAttempted,
-        attempted: totalAttempted,
-        questionsAttempted: totalAttempted,
-        correct,
-        totalCorrect: correct,
-        correctAnswers: correct,
-        wrong,
-        totalWrong: wrong,
-        wrongAnswers: wrong,
-        unanswered,
-        totalUnanswered: unanswered,
-        unansweredQuestions: unanswered,
-        attemptStatus: status,
-        status,
-        submittedAt: result.createdAt ? result.createdAt.toISOString() : null,
-        submitted_at: result.createdAt ? result.createdAt.toISOString() : null,
-        submittedDate: result.createdAt ? result.createdAt.toISOString() : null,
-        createdAt: result.createdAt ? result.createdAt.toISOString() : null
+    for (const [canonicalId, studentRawAttempts] of groupedByStudent.entries()) {
+      const info = studentInfoMap.get(canonicalId) || {
+        studentId: canonicalId,
+        name: 'Student',
+        email: '',
+        phone: ''
       };
+
+      // Sort student attempts chronologically ascending
+      studentRawAttempts.sort((a, b) => {
+        const aNum = typeof a.attemptNumber === 'number' ? a.attemptNumber : 0;
+        const bNum = typeof b.attemptNumber === 'number' ? b.attemptNumber : 0;
+        if (aNum !== bNum && aNum > 0 && bNum > 0) return aNum - bNum;
+        const aTime = new Date(a.createdAt || a.updatedAt || 0).getTime();
+        const bTime = new Date(b.createdAt || b.updatedAt || 0).getTime();
+        return aTime - bTime;
+      });
+
+      const formattedAttempts = studentRawAttempts.map((att, idx) => {
+        const attNum = (typeof att.attemptNumber === 'number' && att.attemptNumber > 0)
+          ? att.attemptNumber
+          : (idx + 1);
+        const score = typeof att.score === 'number' ? att.score : 0;
+        const totalMarks = (typeof att.totalMarks === 'number' && att.totalMarks > 0)
+          ? att.totalMarks
+          : defaultTotalMarks;
+        const percentage = typeof att.percentage === 'number'
+          ? att.percentage
+          : (totalMarks > 0 ? Math.round((score / totalMarks) * 10000) / 100 : 0);
+        const correct = typeof att.totalCorrect === 'number' ? att.totalCorrect : 0;
+        const wrong = typeof att.totalWrong === 'number' ? att.totalWrong : 0;
+        const unanswered = typeof att.unansweredQuestions === 'number' ? att.unansweredQuestions : 0;
+        const totalAttempted = typeof att.totalAttempted === 'number' ? att.totalAttempted : (correct + wrong);
+        const submittedAt = att.createdAt ? new Date(att.createdAt).toISOString() : null;
+
+        return {
+          _id: att._id ? att._id.toString() : '',
+          id: att._id ? att._id.toString() : '',
+          resultId: att._id ? att._id.toString() : '',
+          examId: exam._id.toString(),
+          studentId: canonicalId,
+          attemptNumber: attNum,
+          attempt: attNum,
+          score,
+          marksObtained: score,
+          totalScore: score,
+          totalMarks,
+          maxMarks: totalMarks,
+          percentage,
+          totalAttempted,
+          attempted: totalAttempted,
+          questionsAttempted: totalAttempted,
+          correct,
+          totalCorrect: correct,
+          correctAnswers: correct,
+          wrong,
+          totalWrong: wrong,
+          wrongAnswers: wrong,
+          unanswered,
+          totalUnanswered: unanswered,
+          unansweredQuestions: unanswered,
+          positiveMarks: typeof att.positiveMarks === 'number' ? att.positiveMarks : 0,
+          negativeMarks: typeof att.negativeMarks === 'number' ? att.negativeMarks : 0,
+          status: att.status || 'Completed',
+          attemptStatus: att.status || 'Completed',
+          submittedAt,
+          submitted_at: submittedAt,
+          submittedDate: submittedAt,
+          createdAt: submittedAt
+        };
+      });
+
+      const totalAttemptsForStudent = formattedAttempts.length;
+      const bestScoreForStudent = Math.max(...formattedAttempts.map((a) => a.score));
+
+      // Identify best attempt (highest score, tie-break to latest)
+      let bestAttempt = formattedAttempts[0];
+      for (const a of formattedAttempts) {
+        if (a.score >= bestAttempt.score) {
+          bestAttempt = a;
+        }
+      }
+
+      // Identify latest attempt
+      const latestAttempt = formattedAttempts[formattedAttempts.length - 1];
+      const latestScoreForStudent = latestAttempt ? latestAttempt.score : 0;
+
+      // Select primary attempt for summary entry
+      const primaryAttempt = isDateSort ? latestAttempt : bestAttempt;
+
+      studentSummaries.push({
+        _id: primaryAttempt._id,
+        id: primaryAttempt.id,
+        resultId: primaryAttempt.resultId,
+        examId: exam._id.toString(),
+        studentId: canonicalId,
+        studentName: info.name,
+        studentEmail: info.email,
+        name: info.name,
+        email: info.email,
+        student: {
+          _id: canonicalId,
+          id: canonicalId,
+          name: info.name,
+          email: info.email,
+          phone: info.phone
+        },
+        attemptNumber: totalAttemptsForStudent,
+        attempts: formattedAttempts,
+        attemptHistory: formattedAttempts,
+        history: formattedAttempts,
+        totalAttempts: totalAttemptsForStudent,
+        attemptsCount: totalAttemptsForStudent,
+        bestScore: bestScoreForStudent,
+        latestScore: latestScoreForStudent,
+        bestAttempt,
+        latestAttempt,
+        score: primaryAttempt.score,
+        marksObtained: primaryAttempt.marksObtained,
+        totalScore: primaryAttempt.totalScore,
+        totalMarks: primaryAttempt.totalMarks,
+        maxMarks: primaryAttempt.maxMarks,
+        percentage: primaryAttempt.percentage,
+        totalAttempted: primaryAttempt.totalAttempted,
+        attempted: primaryAttempt.attempted,
+        questionsAttempted: primaryAttempt.questionsAttempted,
+        correct: primaryAttempt.correct,
+        totalCorrect: primaryAttempt.totalCorrect,
+        correctAnswers: primaryAttempt.correctAnswers,
+        wrong: primaryAttempt.wrong,
+        totalWrong: primaryAttempt.totalWrong,
+        wrongAnswers: primaryAttempt.wrongAnswers,
+        unanswered: primaryAttempt.unanswered,
+        totalUnanswered: primaryAttempt.totalUnanswered,
+        unansweredQuestions: primaryAttempt.unansweredQuestions,
+        positiveMarks: primaryAttempt.positiveMarks,
+        negativeMarks: primaryAttempt.negativeMarks,
+        attemptStatus: primaryAttempt.status,
+        status: primaryAttempt.status,
+        submittedAt: primaryAttempt.submittedAt,
+        submitted_at: primaryAttempt.submitted_at,
+        submittedDate: primaryAttempt.submittedDate,
+        createdAt: primaryAttempt.createdAt
+      });
+    }
+
+    // Sort student summaries
+    const sortOrderParam = (req.query.order || req.query.sortOrder || 'desc').toLowerCase().trim();
+    const isAsc = sortOrderParam === 'asc' || sortOrderParam === '1';
+
+    studentSummaries.sort((a, b) => {
+      if (sortByParam === 'name' || sortByParam === 'studentname') {
+        const cmp = (a.studentName || '').localeCompare(b.studentName || '');
+        return isAsc ? cmp : -cmp;
+      }
+      if (sortByParam === 'attempts' || sortByParam === 'totalattempts') {
+        const cmp = a.totalAttempts - b.totalAttempts;
+        return isAsc ? cmp : -cmp;
+      }
+      if (isDateSort) {
+        const aTime = new Date(a.submittedAt || 0).getTime();
+        const bTime = new Date(b.submittedAt || 0).getTime();
+        return isAsc ? aTime - bTime : bTime - aTime;
+      }
+      // Default: sort by score descending, tie-break by submission time descending
+      if (b.score !== a.score) {
+        return isAsc ? a.score - b.score : b.score - a.score;
+      }
+      const aTime = new Date(a.submittedAt || 0).getTime();
+      const bTime = new Date(b.submittedAt || 0).getTime();
+      return bTime - aTime;
     });
 
+    // Handle direct CSV export request if requested
+    if (req.query?.format === 'csv' || req.query?.export === 'csv' || (req.headers && typeof req.headers.accept === 'string' && req.headers.accept.includes('text/csv'))) {
+      const isDetailed = req.query.detailed === 'true' || req.query.export === 'detailed';
+      const headers = isDetailed
+        ? ['Exam Name', 'Exam Type', 'Student Name', 'Email', 'Attempt Number', 'Score', 'Percentage', 'Correct', 'Wrong', 'Unanswered', 'Status', 'Submitted Date']
+        : ['Exam Name', 'Exam Type', 'Student Name', 'Email', 'Score', 'Percentage', 'Correct', 'Wrong', 'Unanswered', 'Total Attempts', 'Status', 'Submitted Date'];
+
+      const csvRows = [headers.join(',')];
+      const examTitle = (exam.title || 'Exam').replace(/"/g, '""');
+      const examType = exam.testType === 'course_test' ? 'Course Test' : 'Grand Mock Test';
+
+      if (isDetailed) {
+        for (const student of studentSummaries) {
+          for (const att of student.attempts) {
+            csvRows.push([
+              `"${examTitle}"`,
+              `"${examType}"`,
+              `"${(student.studentName || '').replace(/"/g, '""')}"`,
+              `"${(student.studentEmail || '').replace(/"/g, '""')}"`,
+              att.attemptNumber,
+              `"${att.score} / ${att.totalMarks}"`,
+              `"${att.percentage}%"`,
+              att.correct,
+              att.wrong,
+              att.unanswered,
+              `"${att.status}"`,
+              `"${att.submittedAt || ''}"`
+            ].join(','));
+          }
+        }
+      } else {
+        for (const student of studentSummaries) {
+          csvRows.push([
+            `"${examTitle}"`,
+            `"${examType}"`,
+            `"${(student.studentName || '').replace(/"/g, '""')}"`,
+            `"${(student.studentEmail || '').replace(/"/g, '""')}"`,
+            `"${student.score} / ${student.totalMarks}"`,
+            `"${student.percentage}%"`,
+            student.correct,
+            student.wrong,
+            student.unanswered,
+            student.totalAttempts,
+            `"${student.status}"`,
+            `"${student.submittedAt || ''}"`
+          ].join(','));
+        }
+      }
+
+      res.setHeader('Content-Type', 'text/csv');
+      res.setHeader('Content-Disposition', `attachment; filename="Exam_Results_${(exam.title || 'Exam').replace(/[^a-zA-Z0-9_-]/g, '_')}.csv"`);
+      return res.status(200).send(csvRows.join('\r\n'));
+    }
+
+    // Paginate grouped student summaries
+    const paginatedStudents = studentSummaries.slice(skip, skip + limit);
     const pagination = buildPaginationResponse(total, page, limit);
 
     return res.status(200).json({
       success: true,
       message: 'Exam results retrieved successfully',
-      data: formattedResults,
-      results: formattedResults,
+      data: paginatedStudents,
+      results: paginatedStudents,
       pagination,
       total,
       studentsAttended,
-      totalAttempts: total,
+      totalAttempts,
       totalQuestions: exam.totalQuestions || (Array.isArray(exam.questions) ? exam.questions.length : 0),
       durationMinutes: exam.durationMinutes || 0
     });
