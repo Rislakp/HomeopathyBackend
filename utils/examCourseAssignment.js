@@ -24,7 +24,12 @@ function normalizeExamCourseIds(courseIds, legacyCourseId = null) {
 }
 
 function getExamAssignedCourseIds(exam) {
-  const assigned = Array.isArray(exam?.courseIds) ? exam.courseIds : [];
+  const assigned = [
+    ...(Array.isArray(exam?.courseIds) ? exam.courseIds : []),
+    ...(Array.isArray(exam?.courses) ? exam.courses : []),
+    ...(Array.isArray(exam?.assignedCourses) ? exam.assignedCourses : []),
+    ...(Array.isArray(exam?.assignedCourseIds) ? exam.assignedCourseIds : []),
+  ];
   return assigned.length > 0
     ? normalizeExamCourseIds(assigned)
     : normalizeExamCourseIds([], exam?.courseId);

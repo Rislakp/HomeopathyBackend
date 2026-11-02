@@ -102,7 +102,9 @@ const addSignedS3MediaUrls = async (course) => {
         const isLessonUrlLiveVideo = lesson.videoUrl &&
           !lesson.videoUrl.includes('meet.google.com') &&
           !lesson.videoUrl.includes('tel.meet') &&
-          (lesson.videoUrl.includes('X-Amz-Signature') || lesson.videoUrl.includes('cloudinary.com'));
+          !lesson.videoUrl.includes('amazonaws.com') &&
+          !lesson.videoUrl.includes('X-Amz-Signature') &&
+          lesson.videoUrl.includes('cloudinary.com');
         if (!isLessonUrlLiveVideo) {
           lesson.videoUrl = firstVideo.url;
         }
@@ -421,7 +423,15 @@ function formatCourseForStudent(courseDoc) {
               les.meetingUrl = les.videoUrl;
             }
           }
-          if (les.meetingUrl) les.meetingUrl = ensureAbsoluteUrl(les.meetingUrl);
+          if (les.meetingUrl) {
+            // Strip accidental expired S3 video/PDF URLs stored in meetingUrl
+            if (!/meet\.google\.com|tel\.meet|zoom\.us|teams/i.test(les.meetingUrl) &&
+                (les.meetingUrl.includes('.amazonaws.com') || les.meetingUrl.includes('X-Amz-Signature') || /\.mp4|\.webm/i.test(les.meetingUrl))) {
+              les.meetingUrl = '';
+            } else {
+              les.meetingUrl = ensureAbsoluteUrl(les.meetingUrl);
+            }
+          }
 
           ['videoParts', 'pdfNotes', 'assignments', 'attachments'].forEach((resKey) => {
             if (Array.isArray(les[resKey])) {

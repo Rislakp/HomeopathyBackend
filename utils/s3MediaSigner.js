@@ -3,7 +3,7 @@ const { getSignedUrl } = require('@aws-sdk/s3-request-presigner');
 const { s3Client, bucket, region, publicBaseUrl } = require('../config/s3');
 
 // Time-to-live for signed URLs (in seconds) - default 2 hours (7200s) to support long classes
-const S3_MEDIA_URL_TTL_SECONDS = parseInt(process.env.S3_SIGNED_URL_EXPIRES_IN || process.env.S3_MEDIA_URL_TTL_SECONDS, 10) || 7200;
+const S3_MEDIA_URL_TTL_SECONDS = parseInt(process.env.S3_SIGNED_URL_EXPIRES_IN || process.env.S3_MEDIA_URL_TTL_SECONDS, 10) || 21600;
 
 // Allowed S3 key patterns (folders and safe characters)
 const SAFE_S3_KEY = /^(videos|images|pdfs|documents|attachments|reviews|unani_ranks|grand_mock_questions|live_records)\/[a-zA-Z0-9][a-zA-Z0-9._\/\-]*$/;

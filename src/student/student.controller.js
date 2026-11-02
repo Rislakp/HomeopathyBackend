@@ -1248,7 +1248,7 @@ async function getStudentResults(req, res) {
     const [totalResults, results] = await Promise.all([
       TestResult.countDocuments(resultFilter),
       TestResult.find(resultFilter)
-        .populate('examId', 'title testType courseId moduleId courseName moduleName marksPerQuestion negativeMark negativeMarkPenalty durationMinutes totalQuestions questions')
+        .populate('examId', 'title testType courseId moduleId courseName moduleName marksPerQuestion negativeMark negativeMarkPenalty durationMinutes totalQuestions questions courses courseIds assignedCourses assignedCourseIds')
         .sort({ createdAt: -1 })
         .skip(skip)
         .limit(limit)
@@ -1260,8 +1260,15 @@ async function getStudentResults(req, res) {
       results.map(async (r) => {
         if (!r.examId) return false;
         const exam = r.examId;
-        if (exam.courseId && normalizeTestType(exam.testType) === 'course_test') {
-          return verifyStudentCourseAccess(req.user, exam.courseId);
+        if (normalizeTestType(exam.testType) === 'course_test') {
+          const assignedCourseIds = getExamAssignedCourseIds(exam);
+          if (assignedCourseIds.length > 0) {
+            return verifyStudentCourseAccessAny(req.user, assignedCourseIds);
+          }
+          if (exam.courseId) {
+            return verifyStudentCourseAccess(req.user, exam.courseId);
+          }
+          return false;
         }
         return true; // Grand mock results are global
       })
