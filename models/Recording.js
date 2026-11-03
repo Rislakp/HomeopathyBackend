@@ -88,6 +88,26 @@ const recordingSchema = new mongoose.Schema(
       trim: true,
       default: '',
     },
+    m4vS3Key: {
+      type: String,
+      trim: true,
+      default: '',
+    },
+    m4vStorageProvider: {
+      type: String,
+      trim: true,
+      default: '',
+    },
+    m4vConversionStatus: {
+      type: String,
+      enum: ['none', 'pending', 'processing', 'completed', 'failed'],
+      default: 'none',
+    },
+    m4vConversionError: {
+      type: String,
+      trim: true,
+      default: '',
+    },
     duration: {
       type: String,
       trim: true,

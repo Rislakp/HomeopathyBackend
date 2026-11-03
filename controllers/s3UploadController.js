@@ -283,6 +283,16 @@ const completeMultipartUpload = async (req, res) => {
 
     const durationVal = req.body?.duration !== undefined ? req.body.duration : req.body?.videoDuration;
 
+    // Automatically trigger background iOS M4V conversion for uploaded videos
+    if (key.toLowerCase().endsWith('.mp4') || key.toLowerCase().endsWith('.webm') || key.toLowerCase().endsWith('.mov')) {
+      try {
+        const { enqueueConversion } = require('../services/videoConversionService');
+        enqueueConversion(key);
+      } catch (convErr) {
+        console.warn('[S3 multipart] Could not enqueue background M4V conversion:', convErr.message);
+      }
+    }
+
     return res.json({
       success: true,
       key,
@@ -456,7 +466,7 @@ const courseContainsMediaKey = (course, key) => {
   for (const moduleItem of modules) {
     const lessons = getProp(moduleItem, 'lessons') || moduleItem.lessons || [];
     for (const lesson of lessons) {
-      if (getProp(lesson, 'videoS3Key') === targetKey || getProp(lesson, 's3Key') === targetKey) return true;
+      if (getProp(lesson, 'videoS3Key') === targetKey || getProp(lesson, 's3Key') === targetKey || getProp(lesson, 'm4vS3Key') === targetKey) return true;
       if (getS3KeyFromUrl(getProp(lesson, 'videoUrl')) === targetKey) return true;
       if (normalizeS3Reference(getProp(lesson, 'videoUrl'))?.s3Key === targetKey) return true;
       if (getS3KeyFromUrl(getProp(lesson, 'fileUrl')) === targetKey) return true;
@@ -470,7 +480,7 @@ const courseContainsMediaKey = (course, key) => {
       for (const collection of ['videoParts', 'pdfNotes', 'assignments', 'attachments']) {
         const list = getProp(lesson, collection) || lesson[collection] || [];
         for (const item of list) {
-          const itemKey = getProp(item, 's3Key') || getProp(item, 'key') ||
+          const itemKey = getProp(item, 's3Key') || getProp(item, 'm4vS3Key') || getProp(item, 'mp4S3Key') || getProp(item, 'key') ||
             getS3KeyFromUrl(getProp(item, 'url')) ||
             getS3KeyFromUrl(getProp(item, 'secure_url')) ||
             getS3KeyFromUrl(getProp(item, 'secureUrl')) ||
@@ -490,6 +500,12 @@ const courseContainsMediaKey = (course, key) => {
         }
       }
     }
+  }
+  if (targetKey.endsWith('_ios.m4v')) {
+    const origMp4 = targetKey.replace(/_ios\.m4v$/, '.mp4');
+    if (courseContainsMediaKey(course, origMp4)) return true;
+    const origWebm = targetKey.replace(/_ios\.m4v$/, '.webm');
+    if (courseContainsMediaKey(course, origWebm)) return true;
   }
   return false;
 };
@@ -633,6 +649,8 @@ const getMediaAccessUrl = async (req, res) => {
         { 'modules.lessons.url': { $regex: escapeRegex(key) } },
         { 'modules.lessons.path': { $regex: escapeRegex(key) } },
         { 'modules.lessons.videoParts.s3Key': key },
+        { 'modules.lessons.m4vS3Key': key },
+        { 'modules.lessons.videoParts.m4vS3Key': key },
         { 'modules.lessons.videoParts.url': { $regex: escapeRegex(key) } },
         { 'modules.lessons.videoParts.secure_url': { $regex: escapeRegex(key) } },
         { 'modules.lessons.videoParts.secureUrl': { $regex: escapeRegex(key) } },
@@ -837,7 +855,68 @@ const getMediaAccessUrl = async (req, res) => {
   }
 };
 
+const getVideoConversionStatus = async (req, res) => {
+  const s3Key = req.query?.s3Key || req.query?.key || req.body?.s3Key;
+  if (!s3Key) return fail(res, 400, 's3Key is required.');
+  try {
+    const { getConversionStatus } = require('../services/videoConversionService');
+    const status = await getConversionStatus(s3Key);
+    return res.json({ success: true, ...status });
+  } catch (err) {
+    return fail(res, 500, err.message);
+  }
+};
+
+const retryVideoConversion = async (req, res) => {
+  const s3Key = req.body?.s3Key || req.body?.key || req.query?.s3Key;
+  if (!s3Key) return fail(res, 400, 's3Key is required.');
+  try {
+    const { retryConversion } = require('../services/videoConversionService');
+    const enqueued = await retryConversion(s3Key);
+    return res.json({ success: true, enqueued, s3Key });
+  } catch (err) {
+    return fail(res, 500, err.message);
+  }
+};
+
+const batchConvertCourseVideos = async (req, res) => {
+  try {
+    const { enqueueConversion } = require('../services/videoConversionService');
+    const courses = await Course.find({}).lean();
+    const queued = [];
+    const seen = new Set();
+
+    for (const course of courses) {
+      for (const mod of course.modules || []) {
+        for (const lesson of mod.lessons || []) {
+          const keys = [
+            lesson.s3Key,
+            lesson.videoS3Key,
+            ...(lesson.videoParts || []).map((vp) => vp.s3Key),
+          ].filter(Boolean);
+
+          for (const k of keys) {
+            const trimmed = String(k).trim();
+            if (trimmed && (trimmed.endsWith('.mp4') || trimmed.endsWith('.webm') || trimmed.endsWith('.mov')) && !seen.has(trimmed)) {
+              seen.add(trimmed);
+              enqueueConversion(trimmed, { force: req.body?.force === true });
+              queued.push(trimmed);
+            }
+          }
+        }
+      }
+    }
+    return res.json({ success: true, count: queued.length, queued });
+  } catch (err) {
+    return fail(res, 500, err.message);
+  }
+};
+
+
 module.exports = {
+  getVideoConversionStatus,
+  retryVideoConversion,
+  batchConvertCourseVideos,
   initiateMultipartUpload,
   partUrl,
   completeMultipartUpload,
@@ -848,3 +927,4 @@ module.exports = {
   courseContainsMediaKey,
   courseContainsS3Key,
 };
+

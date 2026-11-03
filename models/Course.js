@@ -25,6 +25,10 @@ const resourceSchema = new mongoose.Schema({
   // Optional, explicitly attached H.264/AAC rendition for WebM playback fallback.
   mp4S3Key:      { type: String, trim: true, default: '' },
   mp4StorageProvider: { type: String, trim: true, default: '' },
+  m4vS3Key:      { type: String, trim: true, default: '' },
+  m4vStorageProvider: { type: String, trim: true, default: '' },
+  m4vConversionStatus: { type: String, enum: ['none', 'pending', 'processing', 'completed', 'failed'], default: 'none' },
+  m4vConversionError: { type: String, trim: true, default: '' },
   resourceType:  { type: String, trim: true, default: '' },
   fileName:      { type: String, trim: true, default: '' },
   originalFileName: { type: String, trim: true, default: '' },
@@ -150,6 +154,10 @@ const lessonSchema = new mongoose.Schema({
     trim: true,
     default: '',
   },
+  m4vS3Key: { type: String, trim: true, default: '' },
+  m4vStorageProvider: { type: String, trim: true, default: '' },
+  m4vConversionStatus: { type: String, enum: ['none', 'pending', 'processing', 'completed', 'failed'], default: 'none' },
+  m4vConversionError: { type: String, trim: true, default: '' },
   status: {
     type: String,
     enum: ['Published', 'Draft'],

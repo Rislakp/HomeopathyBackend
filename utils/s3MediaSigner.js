@@ -112,7 +112,7 @@ const signS3Reference = async (reference, responseContentType) => {
   let effectiveContentType = responseContentType || normalized.contentType;
   if (!effectiveContentType || effectiveContentType === 'application/octet-stream') {
     const lowerKey = key.toLowerCase();
-    if (lowerKey.endsWith('.mp4') || key.startsWith('videos/') || key.startsWith('live_records/')) {
+    if (lowerKey.endsWith('.mp4') || lowerKey.endsWith('.m4v') || key.startsWith('videos/') || key.startsWith('live_records/')) {
       effectiveContentType = lowerKey.endsWith('.webm') ? 'video/webm' : (lowerKey.endsWith('.mov') ? 'video/quicktime' : 'video/mp4');
     } else if (lowerKey.endsWith('.webm')) {
       effectiveContentType = 'video/webm';
