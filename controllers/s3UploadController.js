@@ -189,6 +189,9 @@ const initiateMultipartUpload = async (req, res) => {
   const safeName = safeFileName(fileName);
   if (!safeName) return fail(res, 400, 'A valid fileName is required.');
   if (typeof contentType !== 'string' || !/^video\/[a-z0-9][a-z0-9.+-]{0,126}$/i.test(contentType)) return fail(res, 400, 'contentType must be a valid video MIME type.');
+  if (contentType.toLowerCase() === 'video/webm' || safeName.toLowerCase().endsWith('.webm')) {
+    return fail(res, 400, 'WEBM format is not supported for iOS/Safari playback. Please upload MP4 with H.264 video and AAC audio.');
+  }
   if (req.body?.fileSize !== undefined && !validSize(req.body.fileSize, VIDEO_MAX_BYTES)) return fail(res, 400, 'fileSize must be a positive safe integer no greater than 2 TiB.');
   const key = `videos/${Date.now()}-${randomUUID()}-${safeName}`;
   try {
@@ -836,7 +839,10 @@ const getMediaAccessUrl = async (req, res) => {
     // 5. Generate SigV4 signed URL
     let contentType = undefined;
     if (prefix === 'videos/' || prefix === 'live_records/') {
-      contentType = key.endsWith('.webm') ? 'video/webm' : (key.endsWith('.mov') ? 'video/quicktime' : 'video/mp4');
+      const keyLower = key.toLowerCase();
+      contentType = keyLower.endsWith('.mp4') || keyLower.endsWith('.m4v')
+        ? 'video/mp4'
+        : (keyLower.endsWith('.mov') ? 'video/quicktime' : (keyLower.endsWith('.webm') ? 'video/webm' : 'video/mp4'));
     } else if (prefix === 'pdfs/') {
       contentType = 'application/pdf';
     }

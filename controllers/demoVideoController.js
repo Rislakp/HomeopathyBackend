@@ -15,7 +15,10 @@ const signDemoVideo = async (doc) => {
   const key = obj.s3Key || s3Service.getS3KeyFromUrl(obj.videoUrl);
   if (key && (obj.storageProvider === 's3' || obj.videoUrl?.includes('amazonaws.com') || key.startsWith('videos/'))) {
     try {
-      const contentType = key.toLowerCase().endsWith('.webm') ? 'video/webm' : (key.toLowerCase().endsWith('.mov') ? 'video/quicktime' : 'video/mp4');
+      const keyLower = key.toLowerCase();
+      const contentType = keyLower.endsWith('.mp4') || keyLower.endsWith('.m4v')
+        ? 'video/mp4'
+        : (keyLower.endsWith('.mov') ? 'video/quicktime' : (keyLower.endsWith('.webm') ? 'video/webm' : 'video/mp4'));
       const rawSigned = await getSignedUrl(s3Client, new GetObjectCommand({
         Bucket: bucket,
         Key: key,

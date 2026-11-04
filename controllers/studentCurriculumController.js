@@ -11,6 +11,8 @@ const { signS3Reference, normalizeS3Reference, resolveMediaRecord } = require('.
 const { calculateCourseTotalDurationMinutes } = require('../utils/courseDurationHelper');
 
 const isWebmMedia = (resource) => {
+  const s3Key = String(resource?.s3Key || '').trim().toLowerCase();
+  if (s3Key.endsWith('.mp4') || s3Key.endsWith('.m4v')) return false;
   const reference = resource?.s3Key || resource?.url || resource?.secure_url || resource?.fileUrl || '';
   try {
     return new URL(reference, 'https://media.invalid').pathname.toLowerCase().endsWith('.webm');
@@ -165,7 +167,8 @@ const addSignedS3MediaUrls = async (course) => {
           !lesson.videoUrl.includes('X-Amz-Signature') &&
           lesson.videoUrl.includes('cloudinary.com');
         if (!isLessonUrlLiveVideo) {
-          lesson.videoUrl = firstVideo.url;
+          const compatibleUrl = firstVideo.mp4Url || firstVideo.m4vUrl || firstVideo.url;
+          lesson.videoUrl = compatibleUrl;
         }
       } else if (!firstVideo && (lesson.videoS3Key || lesson.s3Key || lesson.storageProvider === 's3' || (lesson.videoUrl && (lesson.videoUrl.includes('.amazonaws.com/') || lesson.videoUrl.startsWith('videos/'))))) {
         const candidateKey = lesson.videoS3Key || lesson.s3Key || (lesson.videoUrl && lesson.videoUrl.startsWith('videos/') ? lesson.videoUrl : undefined);

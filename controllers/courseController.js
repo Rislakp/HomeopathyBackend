@@ -13,7 +13,7 @@ const { calculateCourseTotalDurationMinutes } = require('../utils/courseDuration
 const { attachVerifiedMp4Fallback } = require('./studentCurriculumController');
 
 
-const ALLOWED_VIDEO_FORMATS = ['mp4', 'mov', 'avi', 'mkv', 'webm', 'flv', 'wmv', 'm4v'];
+const ALLOWED_VIDEO_FORMATS = ['mp4', 'mov', 'avi', 'mkv', 'flv', 'wmv', 'm4v'];
 const ALLOWED_DOC_FORMATS = ['pdf', 'doc', 'docx', 'ppt', 'pptx', 'xls', 'xlsx', 'txt', 'csv', 'zip', 'rar'];
 const S3_RESOURCE_PREFIXES = ['videos/', 'images/', 'pdfs/', 'documents/', 'attachments/', 'live_records/'];
 

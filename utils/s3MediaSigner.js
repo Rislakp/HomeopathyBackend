@@ -110,12 +110,17 @@ const signS3Reference = async (reference, responseContentType) => {
 
   // Determine appropriate ResponseContentType for inline playback and seeking
   let effectiveContentType = responseContentType || normalized.contentType;
-  if (!effectiveContentType || effectiveContentType === 'application/octet-stream') {
-    const lowerKey = key.toLowerCase();
-    if (lowerKey.endsWith('.mp4') || lowerKey.endsWith('.m4v') || key.startsWith('videos/') || key.startsWith('live_records/')) {
-      effectiveContentType = lowerKey.endsWith('.webm') ? 'video/webm' : (lowerKey.endsWith('.mov') ? 'video/quicktime' : 'video/mp4');
+  const lowerKey = key.toLowerCase();
+  // Ground truth: If underlying S3 object is an MP4 or M4V container, enforce video/mp4
+  if (lowerKey.endsWith('.mp4') || lowerKey.endsWith('.m4v')) {
+    effectiveContentType = 'video/mp4';
+  } else if (!effectiveContentType || effectiveContentType === 'application/octet-stream') {
+    if (lowerKey.endsWith('.mov')) {
+      effectiveContentType = 'video/quicktime';
     } else if (lowerKey.endsWith('.webm')) {
       effectiveContentType = 'video/webm';
+    } else if (key.startsWith('videos/') || key.startsWith('live_records/')) {
+      effectiveContentType = 'video/mp4';
     } else if (lowerKey.endsWith('.pdf') || key.startsWith('pdfs/')) {
       effectiveContentType = 'application/pdf';
     } else if (lowerKey.endsWith('.png')) {
@@ -244,12 +249,32 @@ const resolveMediaRecord = async (reference, options = {}) => {
   if (!reference) return null;
   const source = typeof reference === 'string' ? { url: reference } : { ...reference };
   const rawUrl = String(source.url || source.secure_url || source.secureUrl || source.fileUrl || source.path || source.mediaUrl || source.s3Key || '').trim();
+  const keyLower = String(source.s3Key || '').trim().toLowerCase();
   const lowerTarget = String(source.title || source.fileName || source.s3Key || rawUrl || '').toLowerCase();
-  const isVideo = lowerTarget.endsWith('.mp4') || lowerTarget.endsWith('.webm') || lowerTarget.endsWith('.mov') || String(source.s3Key || '').startsWith('videos/') || String(source.s3Key || '').startsWith('live_records/');
-  const isPdf = lowerTarget.endsWith('.pdf') || String(source.s3Key || '').startsWith('pdfs/');
-  const defaultMediaMime = isVideo ? (lowerTarget.endsWith('.webm') ? 'video/webm' : 'video/mp4') : (isPdf ? 'application/pdf' : undefined);
-  const responseContentType = options.responseContentType ||
-    (source.contentType && source.contentType !== 'application/octet-stream' ? source.contentType : defaultMediaMime);
+  const isVideo = keyLower.endsWith('.mp4') || keyLower.endsWith('.m4v') || keyLower.endsWith('.mov') || keyLower.endsWith('.webm') ||
+    lowerTarget.endsWith('.mp4') || lowerTarget.endsWith('.webm') || lowerTarget.endsWith('.mov') ||
+    String(source.s3Key || '').startsWith('videos/') || String(source.s3Key || '').startsWith('live_records/');
+  const isPdf = keyLower.endsWith('.pdf') || lowerTarget.endsWith('.pdf') || String(source.s3Key || '').startsWith('pdfs/');
+
+  let defaultMediaMime = undefined;
+  if (keyLower.endsWith('.mp4') || keyLower.endsWith('.m4v')) {
+    defaultMediaMime = 'video/mp4';
+  } else if (keyLower.endsWith('.mov')) {
+    defaultMediaMime = 'video/quicktime';
+  } else if (keyLower.endsWith('.webm')) {
+    defaultMediaMime = 'video/webm';
+  } else if (isVideo) {
+    defaultMediaMime = lowerTarget.endsWith('.webm') ? 'video/webm' : (lowerTarget.endsWith('.mov') ? 'video/quicktime' : 'video/mp4');
+  } else if (isPdf) {
+    defaultMediaMime = 'application/pdf';
+  }
+
+  let responseContentType = options.responseContentType;
+  if (keyLower.endsWith('.mp4') || keyLower.endsWith('.m4v')) {
+    responseContentType = 'video/mp4';
+  } else if (!responseContentType) {
+    responseContentType = (source.contentType && source.contentType !== 'application/octet-stream' ? source.contentType : defaultMediaMime);
+  }
 
   // 1 & 2. Check for valid S3 reference (with or without explicit storageProvider)
   const normalized = normalizeS3Reference(source);
