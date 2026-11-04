@@ -1,5 +1,5 @@
 const mongoose = require('mongoose');
-const { resolveProfileImageUrl } = require('../utils/s3MediaSigner');
+const { resolveProfileImageUrl, normalizeS3Reference } = require('../utils/s3MediaSigner');
 const pdfParse = require('pdf-parse');
 const Tesseract = require('tesseract.js');
 const xlsx = require('xlsx');
@@ -323,7 +323,13 @@ function validateAndSanitizeQuestion(q, index = 0) {
     if (typeof rawImageUrl !== 'string') {
       return { valid: false, error: `Question ${index + 1}: imageUrl must be a string.` };
     }
-    sanitizedQuestion.imageUrl = rawImageUrl.trim();
+    const trimmed = rawImageUrl.trim();
+    const s3Ref = typeof normalizeS3Reference === 'function' ? normalizeS3Reference(trimmed) : null;
+    if (s3Ref && s3Ref.s3Key) {
+      sanitizedQuestion.imageUrl = `https://${process.env.AWS_S3_BUCKET_NAME || 'white-coat-academy-media'}.s3.${process.env.AWS_REGION || 'ap-south-1'}.amazonaws.com/${s3Ref.s3Key}`;
+    } else {
+      sanitizedQuestion.imageUrl = trimmed;
+    }
   }
 
   // tableData (optional JSON/Array structure)

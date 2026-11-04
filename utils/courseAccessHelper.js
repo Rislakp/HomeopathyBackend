@@ -87,19 +87,56 @@ async function verifyStudentCourseAccess(reqUser, requestedCourseId) {
 
   if (!student) return false;
 
-  // ── Primary check: match against all enrolled IDs ──────────────────────────
-  const enrolledIds = collectEnrolledIds(student);
-
-  if (enrolledIds.has(targetStr)) return true;
-
   // ── Extended check: resolve Course documents for ObjectId / custom courseId pairs ──
-  // This handles the case where the student has courseRef (ObjectId) but the
-  // exam stores the human-readable courseId string, or vice versa.
   const CourseModel = (() => {
     try { return mongoose.models.Course || require('../models/Course'); } catch (e) { return null; }
   })();
 
   if (!CourseModel) return false;
+
+  // Resolve target course to verify status is Published for students
+  const targetObjIds = isObjId(requestedCourseId)
+    ? [new mongoose.Types.ObjectId(requestedCourseId)]
+    : [];
+  const targetCourseOrConditions = [
+    ...(targetObjIds.length > 0 ? [{ _id: { $in: targetObjIds } }] : []),
+    { courseId: String(requestedCourseId).trim() },
+    { courseTitle: String(requestedCourseId).trim() },
+  ];
+  let targetCourse = null;
+  try {
+    targetCourse = await CourseModel.findOne({ $or: targetCourseOrConditions })
+      .select('_id courseId courseTitle status')
+      .lean();
+  } catch (err) {
+    console.warn('[courseAccessHelper] Target course lookup error:', err.message);
+  }
+
+  if (!targetCourse) return false;
+
+  // Non-staff can NEVER access unpublished (Draft or Archived) courses
+  if (String(targetCourse.status || '').toLowerCase() !== 'published') {
+    return false;
+  }
+
+  // ── Match against all enrolled IDs ──────────────────────────
+  const enrolledIds = collectEnrolledIds(student);
+  const tId = targetCourse._id ? targetCourse._id.toString().toLowerCase() : '';
+  const tCourseId = targetCourse.courseId ? String(targetCourse.courseId).trim().toLowerCase() : '';
+  const tTitle = targetCourse.courseTitle ? String(targetCourse.courseTitle).trim().toLowerCase() : '';
+
+  if (
+    enrolledIds.has(targetStr) ||
+    (tId && enrolledIds.has(tId)) ||
+    (tCourseId && enrolledIds.has(tCourseId)) ||
+    (tTitle && enrolledIds.has(tTitle))
+  ) {
+    return true;
+  }
+
+  // ── Extended check: resolve Course documents for ObjectId / custom courseId pairs ──
+  // This handles the case where the student has courseRef (ObjectId) but the
+  // exam stores the human-readable courseId string, or vice versa.
 
   // Collect all unique raw enrolled ID values (before lowercasing) for DB query
   const rawIds = [];
