@@ -11,5 +11,8 @@ router.post('/objects/presign', requireAdmin, controller.initiateObjectUpload);
 router.post('/objects/complete', requireAdmin, controller.completeObjectUpload);
 router.get('/media/access-url', requireAuth, controller.getMediaAccessUrl);
 router.post('/media/access-url', requireAuth, controller.getMediaAccessUrl);
+router.get('/conversion-status', requireAuth, controller.getVideoConversionStatus);
+router.post('/retry-conversion', requireAdmin, controller.retryVideoConversion);
+router.post('/batch-convert', requireAdmin, controller.batchConvertCourseVideos);
 
 module.exports = router;

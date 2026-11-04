@@ -20,8 +20,59 @@ const isWebmMedia = (resource) => {
 };
 
 const hasSafeMp4Key = (key) => typeof key === 'string' &&
-  /^videos\/[a-zA-Z0-9][a-zA-Z0-9._/-]*\.mp4$/i.test(key) &&
+  /^videos\/[a-zA-Z0-9][a-zA-Z0-9._/-]*\.(mp4|m4v)$/i.test(key) &&
   !key.includes('..') && !key.includes('//') && !/[\\\r\n]/.test(key);
+
+const hasSafeM4vKey = (key) => typeof key === 'string' &&
+  /^videos\/[a-zA-Z0-9][a-zA-Z0-9._\/-]*\.m4v$/i.test(key) &&
+  !key.includes('..') && !key.includes('//') && !/[\\\r\n]/.test(key);
+
+const attachVerifiedM4vRendition = async (resource) => {
+  if (!resource || typeof resource !== 'object') return resource;
+  const output = { ...resource };
+  for (const field of ['m4vUrl', 'iosM4vUrl', 'iosVideoUrl', 'fallbackM4vUrl']) delete output[field];
+
+  let m4vKey = String(resource.m4vS3Key || '').trim();
+  let status = resource.m4vConversionStatus || 'none';
+
+  if (!m4vKey && resource.s3Key) {
+    try {
+      const VideoConversion = require('../models/VideoConversion');
+      const conversion = await VideoConversion.findOne({ originalS3Key: resource.s3Key }).lean();
+      if (conversion) {
+        status = conversion.status;
+        if (conversion.status === 'completed' && conversion.m4vS3Key) {
+          m4vKey = conversion.m4vS3Key;
+        }
+      }
+    } catch (_) {}
+  }
+
+  output.m4vConversionStatus = status;
+  if (!m4vKey || !hasSafeM4vKey(m4vKey)) return output;
+
+  try {
+    const metadata = await s3Client.send(new HeadObjectCommand({ Bucket: bucket, Key: m4vKey }));
+    if (!(Number(metadata?.ContentLength) > 0)) return output;
+    const signed = await signS3Reference({
+      storageProvider: 's3',
+      s3Key: m4vKey,
+      contentType: 'video/mp4',
+      resourceType: 'video',
+      title: resource.title || resource.fileName || '',
+    }, 'video/mp4');
+    if (!signed?.url) return output;
+    output.m4vS3Key = m4vKey;
+    output.m4vStorageProvider = 's3';
+    output.m4vUrl = signed.url;
+    output.iosM4vUrl = signed.url;
+    output.iosVideoUrl = signed.url;
+    output.m4vConversionStatus = 'completed';
+  } catch (_) {
+    return output;
+  }
+  return output;
+};
 
 const attachVerifiedMp4Fallback = async (resource) => {
   if (!resource || typeof resource !== 'object') return resource;
@@ -86,12 +137,20 @@ const addSignedS3MediaUrls = async (course) => {
               ? (isWebmMedia(resource) ? 'video/webm' : 'video/mp4')
               : type;
             const resolved = await resolveMediaRecord(resource, { responseContentType: mediaType, course });
-            return field === 'videoParts' ? attachVerifiedMp4Fallback(resolved) : resolved;
+            if (field === 'videoParts') { const withMp4 = await attachVerifiedMp4Fallback(resolved); return attachVerifiedM4vRendition(withMp4); } return resolved;
           }));
         }
       }
       const firstVideo = (lesson.videoParts || []).find((resource) => resource.storageProvider === 's3' && resource.s3Key);
       if (firstVideo) {
+        if (firstVideo.m4vUrl) {
+          lesson.m4vUrl = firstVideo.m4vUrl;
+          lesson.iosM4vUrl = firstVideo.m4vUrl;
+          lesson.iosVideoUrl = firstVideo.m4vUrl;
+          lesson.m4vS3Key = firstVideo.m4vS3Key;
+          lesson.m4vStorageProvider = firstVideo.m4vStorageProvider;
+          lesson.m4vConversionStatus = firstVideo.m4vConversionStatus;
+        }
         if (firstVideo.mp4Url) {
           lesson.mp4Url = firstVideo.mp4Url;
           lesson.fallbackVideoUrl = firstVideo.fallbackVideoUrl || firstVideo.mp4Url;
@@ -121,7 +180,21 @@ const addSignedS3MediaUrls = async (course) => {
           if (signed?.url) {
             lesson.videoUrl = signed.url;
           }
-          if (videoType === 'video/webm' && lesson.mp4S3Key) {
+          const withM4v = await attachVerifiedM4vRendition({
+              ...s3Ref,
+              m4vS3Key: lesson.m4vS3Key,
+              m4vStorageProvider: lesson.m4vStorageProvider || 's3',
+              m4vConversionStatus: lesson.m4vConversionStatus,
+            });
+            if (withM4v?.m4vUrl) {
+              lesson.m4vUrl = withM4v.m4vUrl;
+              lesson.iosM4vUrl = withM4v.m4vUrl;
+              lesson.iosVideoUrl = withM4v.m4vUrl;
+              lesson.m4vS3Key = withM4v.m4vS3Key;
+              lesson.m4vStorageProvider = withM4v.m4vStorageProvider;
+              lesson.m4vConversionStatus = withM4v.m4vConversionStatus;
+            }
+            if (videoType === 'video/webm' && lesson.mp4S3Key) {
             const fallbackRef = await attachVerifiedMp4Fallback({
               ...s3Ref,
               mp4S3Key: lesson.mp4S3Key,
@@ -1436,4 +1509,6 @@ module.exports = {
   extractDurationSeconds,
   formatCourseForStudent,
   attachVerifiedMp4Fallback,
+  attachVerifiedM4vRendition,
+  hasSafeM4vKey,
 };
