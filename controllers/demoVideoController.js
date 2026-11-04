@@ -103,6 +103,14 @@ exports.createDemoVideo = async (req, res) => {
       });
     }
 
+    const isStaff = ['admin', 'superadmin'].includes((req.user?.role || '').toLowerCase());
+    if (!isStaff && String(course.status || '').toLowerCase() !== 'published') {
+      return res.status(404).json({
+        success: false,
+        message: `Course with courseId "${cleanCourseId}" not found`,
+      });
+    }
+
     const canonicalCourseId = course.courseId || cleanCourseId;
 
     const s3KeyFromBody = (req.body.s3Key || '').trim();
@@ -161,6 +169,9 @@ exports.getDemoVideos = async (req, res) => {
     if (courseId && typeof courseId === 'string' && courseId.trim()) {
       const cleanCourseId = courseId.trim();
       const course = await findCourseByIdOrCustomId(cleanCourseId);
+      if (!isStaff && (!course || String(course.status || '').toLowerCase() !== 'published')) {
+        return res.status(200).json({ success: true, count: 0, data: [] });
+      }
       resolvedCourseId = course?.courseId || cleanCourseId;
 
       filter = {

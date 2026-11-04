@@ -518,16 +518,21 @@ const getMyCourses = async (req, res) => {
       }
 
       if (queryOr.length > 0) {
-        courses = await Course.find({ $or: queryOr });
+        courses = await Course.find({
+          $and: [
+            { $or: queryOr },
+            { status: new RegExp('^published$', 'i') },
+          ]
+        });
       }
 
       if (!courses || courses.length === 0) {
-        courses = await Course.find({ status: 'Published' }).sort({ createdAt: -1 });
+        courses = await Course.find({ status: new RegExp('^published$', 'i') }).sort({ createdAt: -1 });
       }
     }
 
     if (!isStaff && (!courses || courses.length === 0)) {
-      courses = await Course.find({}).sort({ createdAt: -1 }).limit(1);
+      courses = await Course.find({ status: new RegExp('^published$', 'i') }).sort({ createdAt: -1 }).limit(1);
     }
 
     const formatted = await Promise.all(courses.map(async (c) => {
@@ -641,6 +646,13 @@ const getMyCourseContent = async (req, res) => {
     }
 
     if (!course) {
+      return res.status(404).json({
+        success: false,
+        message: 'Course not found',
+      });
+    }
+
+    if (!isStaff && String(course.status || '').toLowerCase() !== 'published') {
       return res.status(404).json({
         success: false,
         message: 'Course not found',

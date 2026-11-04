@@ -33,6 +33,7 @@ const MEDIA_RULES = {
     prefix: 'images',
     maxBytes: IMAGE_MAX_BYTES,
     extensions: {
+      'application/pdf': new Set(['pdf']),
       'image/jpeg': new Set(['jpg', 'jpeg']),
       'image/png': new Set(['png']),
       'image/webp': new Set(['webp']),
@@ -66,6 +67,7 @@ const MEDIA_RULES = {
       'application/octet-stream': new Set(['doc', 'docx', 'ppt', 'pptx', 'xls', 'xlsx', 'txt', 'csv', 'zip', 'rar']),
     },
     types: new Set([
+      'application/pdf',
       'application/msword',
       'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
       'application/vnd.ms-powerpoint',
@@ -456,7 +458,7 @@ const courseContainsMediaKey = (course, key) => {
   for (const moduleItem of modules) {
     const lessons = getProp(moduleItem, 'lessons') || moduleItem.lessons || [];
     for (const lesson of lessons) {
-      if (getProp(lesson, 'videoS3Key') === targetKey || getProp(lesson, 's3Key') === targetKey) return true;
+      if (getProp(lesson, 'videoS3Key') === targetKey || getProp(lesson, 's3Key') === targetKey || getProp(lesson, 'mp4S3Key') === targetKey) return true;
       if (getS3KeyFromUrl(getProp(lesson, 'videoUrl')) === targetKey) return true;
       if (normalizeS3Reference(getProp(lesson, 'videoUrl'))?.s3Key === targetKey) return true;
       if (getS3KeyFromUrl(getProp(lesson, 'fileUrl')) === targetKey) return true;
@@ -471,6 +473,7 @@ const courseContainsMediaKey = (course, key) => {
         const list = getProp(lesson, collection) || lesson[collection] || [];
         for (const item of list) {
           const itemKey = getProp(item, 's3Key') || getProp(item, 'key') ||
+            getProp(item, 'mp4S3Key') ||
             getS3KeyFromUrl(getProp(item, 'url')) ||
             getS3KeyFromUrl(getProp(item, 'secure_url')) ||
             getS3KeyFromUrl(getProp(item, 'secureUrl')) ||
@@ -632,7 +635,9 @@ const getMediaAccessUrl = async (req, res) => {
         { 'modules.lessons.documentUrl': { $regex: escapeRegex(key) } },
         { 'modules.lessons.url': { $regex: escapeRegex(key) } },
         { 'modules.lessons.path': { $regex: escapeRegex(key) } },
+        { 'modules.lessons.mp4S3Key': key },
         { 'modules.lessons.videoParts.s3Key': key },
+        { 'modules.lessons.videoParts.mp4S3Key': key },
         { 'modules.lessons.videoParts.url': { $regex: escapeRegex(key) } },
         { 'modules.lessons.videoParts.secure_url': { $regex: escapeRegex(key) } },
         { 'modules.lessons.videoParts.secureUrl': { $regex: escapeRegex(key) } },
@@ -772,6 +777,23 @@ const getMediaAccessUrl = async (req, res) => {
       }
 
       if (!foundMedia) {
+        let ExamModel;
+        try { ExamModel = require('../models/Exam'); } catch (_) {}
+        if (ExamModel) {
+          const examDoc = await ExamModel.findOne({
+            $or: [
+              { 'questions.imageUrl': { $regex: escapeRegex(key) } },
+              { 'questions.image': { $regex: escapeRegex(key) } },
+              { 'questions.questionImage': { $regex: escapeRegex(key) } },
+            ],
+          });
+          if (examDoc) {
+            foundMedia = true;
+          }
+        }
+      }
+
+      if (!foundMedia) {
         return fail(res, 404, 'S3 media was not found in a course or recording.');
       }
     }
@@ -780,6 +802,9 @@ const getMediaAccessUrl = async (req, res) => {
     if (!isStaff) {
       if (!resolvedCourse) {
         return fail(res, 403, 'Course access is required to access this media.');
+      }
+      if (String(resolvedCourse.status || '').toLowerCase() !== 'published') {
+        return fail(res, 404, 'Course not found or not published.');
       }
       const student = await findStudentForMedia(req.user || {});
       if (!student) return fail(res, 403, 'Student profile is required to access course media.');

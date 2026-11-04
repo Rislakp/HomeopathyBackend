@@ -826,6 +826,15 @@ const findCourseByIdOrCustomId = async (id) => {
 // 1. COURSES CRUD
 // ==========================================
 
+const normalizeStatus = (statusStr) => {
+  if (!statusStr || typeof statusStr !== 'string') return undefined;
+  const s = statusStr.trim().toLowerCase();
+  if (s === 'published') return 'Published';
+  if (s === 'draft') return 'Draft';
+  if (s === 'archived') return 'Archived';
+  return statusStr.trim();
+};
+
 exports.getCourses = async (req, res) => {
   try {
     const { parsePaginationParams, buildPaginationResponse } = require('../utils/pagination');
@@ -847,7 +856,13 @@ exports.getCourses = async (req, res) => {
     const { search, status, category } = query;
     const filter = {};
 
-    if (status && status.trim() && status.toLowerCase() !== 'all') {
+    const role = (req.user?.role || '').toLowerCase();
+    const canSignS3Media = ['admin', 'superadmin'].includes(role);
+
+    // Non-staff can ONLY see Published courses
+    if (!canSignS3Media) {
+      filter.status = new RegExp('^published$', 'i');
+    } else if (status && status.trim() && status.toLowerCase() !== 'all') {
       filter.status = new RegExp(`^${status.trim()}$`, 'i');
     }
 
@@ -867,9 +882,7 @@ exports.getCourses = async (req, res) => {
       ];
     }
 
-    const role = (req.user?.role || '').toLowerCase();
-    const canSignS3Media = ['admin', 'superadmin'].includes(role);
-    const cacheKey = `courses_list_${page}_${limit}_${search || ''}_${status || ''}_${category || ''}_${['admin', 'superadmin'].includes(role) ? 'admin' : 'public'}`;
+    const cacheKey = `courses_list_${page}_${limit}_${search || ''}_${status || ''}_${category || ''}_${canSignS3Media ? 'admin' : 'public'}`;
     const cachedData = memoryCache.get(cacheKey);
     if (cachedData) {
       return res.status(200).json(cachedData);
@@ -982,6 +995,15 @@ exports.getCourseById = async (req, res) => {
       });
     }
 
+    const role = (req.user?.role || '').toLowerCase();
+    const isStaff = ['admin', 'superadmin', 'instructor'].includes(role);
+    if (!isStaff && String(course.status || '').toLowerCase() !== 'published') {
+      return res.status(404).json({
+        success: false,
+        message: 'Course not found',
+      });
+    }
+
     const serialized = await serializeCourse(course, req);
 
     return res.status(200).json({
@@ -1074,7 +1096,7 @@ exports.createCourse = async (req, res) => {
       price: typeof price === 'number' ? price : Number(price) || 0,
       shortDescription: actualShortDescription || '',
       duration: duration || '',
-      status: status || 'Published',
+      status: normalizeStatus(status) || 'Published',
       thumbnail: actualThumbnail,
       bannerUrl: actualThumbnail,
       courseBanner: actualThumbnail,
@@ -1111,6 +1133,10 @@ exports.updateCourse = async (req, res) => {
     const { id } = req.params;
     const query = getQueryById(id);
     const updateData = { ...req.body };
+
+    if (updateData.status !== undefined) {
+      updateData.status = normalizeStatus(updateData.status) || updateData.status;
+    }
 
     const s3ThumbnailMedia = findS3ThumbnailMedia(
       updateData.thumbnailMedia,
@@ -1288,9 +1314,15 @@ exports.getModules = async (req, res) => {
         });
       }
 
+      const role = (req.user?.role || '').toLowerCase();
+      const isStaff = ['admin', 'superadmin', 'instructor'].includes(role);
+      const accessibleCourses = isStaff
+        ? courses
+        : courses.filter((c) => c && String(c.status || '').toLowerCase() === 'published');
+
       const modules = [];
       const seenModuleIds = new Set();
-      for (const course of courses) {
+      for (const course of accessibleCourses) {
         const serialized = await Promise.all((course.modules || []).map((module) => serializeModule(module, req)));
         serialized.forEach((module) => {
           const moduleId = module?._id ? String(module._id) : null;
@@ -1311,6 +1343,12 @@ exports.getModules = async (req, res) => {
 
     const course = await findCourseByIdOrCustomId(courseId);
     if (!course) return res.status(404).json({ success: false, message: 'Course not found' });
+
+    const role = (req.user?.role || '').toLowerCase();
+    const isStaff = ['admin', 'superadmin', 'instructor'].includes(role);
+    if (!isStaff && String(course.status || '').toLowerCase() !== 'published') {
+      return res.status(404).json({ success: false, message: 'Course not found' });
+    }
 
     const modules = await Promise.all((course.modules || []).map((module) => serializeModule(module, req)));
     return res.status(200).json({ success: true, data: modules });
@@ -1422,6 +1460,12 @@ exports.getLessonsByModule = async (req, res) => {
     const course = await findCourseByIdOrCustomId(courseId);
     if (!course) {
       console.log('[getLessonsByModule] Course not found:', courseId);
+      return res.status(404).json({ success: false, message: 'Course not found' });
+    }
+
+    const role = (req.user?.role || '').toLowerCase();
+    const isStaff = ['admin', 'superadmin', 'instructor'].includes(role);
+    if (!isStaff && String(course.status || '').toLowerCase() !== 'published') {
       return res.status(404).json({ success: false, message: 'Course not found' });
     }
 
