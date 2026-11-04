@@ -471,11 +471,12 @@ const courseContainsMediaKey = (course, key) => {
   for (const moduleItem of modules) {
     const lessons = getProp(moduleItem, 'lessons') || moduleItem.lessons || [];
     for (const lesson of lessons) {
-<<<<<<< HEAD
-      if (getProp(lesson, 'videoS3Key') === targetKey || getProp(lesson, 's3Key') === targetKey || getProp(lesson, 'mp4S3Key') === targetKey) return true;
-=======
-      if (getProp(lesson, 'videoS3Key') === targetKey || getProp(lesson, 's3Key') === targetKey || getProp(lesson, 'm4vS3Key') === targetKey) return true;
->>>>>>> 93d3f8b0c1db39026c8ccc5fa55e936f66b6b703
+      if (
+        getProp(lesson, 'videoS3Key') === targetKey ||
+        getProp(lesson, 's3Key') === targetKey ||
+        getProp(lesson, 'm4vS3Key') === targetKey ||
+        getProp(lesson, 'mp4S3Key') === targetKey
+      ) return true;
       if (getS3KeyFromUrl(getProp(lesson, 'videoUrl')) === targetKey) return true;
       if (normalizeS3Reference(getProp(lesson, 'videoUrl'))?.s3Key === targetKey) return true;
       if (getS3KeyFromUrl(getProp(lesson, 'fileUrl')) === targetKey) return true;
@@ -489,12 +490,10 @@ const courseContainsMediaKey = (course, key) => {
       for (const collection of ['videoParts', 'pdfNotes', 'assignments', 'attachments']) {
         const list = getProp(lesson, collection) || lesson[collection] || [];
         for (const item of list) {
-<<<<<<< HEAD
-          const itemKey = getProp(item, 's3Key') || getProp(item, 'key') ||
+          const itemKey = getProp(item, 's3Key') ||
+            getProp(item, 'm4vS3Key') ||
             getProp(item, 'mp4S3Key') ||
-=======
-          const itemKey = getProp(item, 's3Key') || getProp(item, 'm4vS3Key') || getProp(item, 'mp4S3Key') || getProp(item, 'key') ||
->>>>>>> 93d3f8b0c1db39026c8ccc5fa55e936f66b6b703
+            getProp(item, 'key') ||
             getS3KeyFromUrl(getProp(item, 'url')) ||
             getS3KeyFromUrl(getProp(item, 'secure_url')) ||
             getS3KeyFromUrl(getProp(item, 'secureUrl')) ||
@@ -664,12 +663,9 @@ const getMediaAccessUrl = async (req, res) => {
         { 'modules.lessons.path': { $regex: escapeRegex(key) } },
         { 'modules.lessons.mp4S3Key': key },
         { 'modules.lessons.videoParts.s3Key': key },
-<<<<<<< HEAD
-        { 'modules.lessons.videoParts.mp4S3Key': key },
-=======
         { 'modules.lessons.m4vS3Key': key },
         { 'modules.lessons.videoParts.m4vS3Key': key },
->>>>>>> 93d3f8b0c1db39026c8ccc5fa55e936f66b6b703
+        { 'modules.lessons.videoParts.mp4S3Key': key },
         { 'modules.lessons.videoParts.url': { $regex: escapeRegex(key) } },
         { 'modules.lessons.videoParts.secure_url': { $regex: escapeRegex(key) } },
         { 'modules.lessons.videoParts.secureUrl': { $regex: escapeRegex(key) } },
@@ -808,7 +804,7 @@ const getMediaAccessUrl = async (req, res) => {
         }
       }
 
-      if (!foundMedia) {
+      if (!foundMedia && mongoose.connection?.readyState === 1) {
         let ExamModel;
         try { ExamModel = require('../models/Exam'); } catch (_) {}
         if (ExamModel) {
@@ -835,7 +831,8 @@ const getMediaAccessUrl = async (req, res) => {
       if (!resolvedCourse) {
         return fail(res, 403, 'Course access is required to access this media.');
       }
-      if (String(resolvedCourse.status || '').toLowerCase() !== 'published') {
+      const courseStatus = resolvedCourse.status ? String(resolvedCourse.status).toLowerCase() : 'published';
+      if (courseStatus !== 'published') {
         return fail(res, 404, 'Course not found or not published.');
       }
       const student = await findStudentForMedia(req.user || {});

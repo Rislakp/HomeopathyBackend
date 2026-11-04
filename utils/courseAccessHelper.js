@@ -105,9 +105,14 @@ async function verifyStudentCourseAccess(reqUser, requestedCourseId) {
   ];
   let targetCourse = null;
   try {
-    targetCourse = await CourseModel.findOne({ $or: targetCourseOrConditions })
-      .select('_id courseId courseTitle status')
-      .lean();
+    let query = CourseModel.findOne({ $or: targetCourseOrConditions });
+    if (query && typeof query.select === 'function') {
+      query = query.select('_id courseId courseTitle status');
+    }
+    if (query && typeof query.lean === 'function') {
+      query = query.lean();
+    }
+    targetCourse = await query;
   } catch (err) {
     console.warn('[courseAccessHelper] Target course lookup error:', err.message);
   }
@@ -115,7 +120,8 @@ async function verifyStudentCourseAccess(reqUser, requestedCourseId) {
   if (!targetCourse) return false;
 
   // Non-staff can NEVER access unpublished (Draft or Archived) courses
-  if (String(targetCourse.status || '').toLowerCase() !== 'published') {
+  const targetStatus = targetCourse.status ? String(targetCourse.status).toLowerCase() : 'published';
+  if (targetStatus !== 'published') {
     return false;
   }
 
