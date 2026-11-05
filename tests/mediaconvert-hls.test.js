@@ -1,5 +1,6 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
+const crypto = require('crypto');
 const mongoose = require('mongoose');
 
 const s3 = require('../config/s3');
@@ -28,6 +29,8 @@ const {
   attachHlsCookiesToResponse,
   generateHlsSignedUrl,
   isCloudFrontSigningConfigured,
+  getKeyPairId,
+  getCookieDomain,
 } = require('../utils/cloudFrontSecurity');
 
 const {
@@ -772,6 +775,269 @@ test('12. Fallback behavior: COMPLETED returns HLS, PROCESSING and FAILED return
     assert.equal(sFail.responseBody.hlsMasterUrl, '');
     assert.match(sFail.responseBody.url, /X-Amz-Signature=/);
   } finally {
+    Course.findOne = origFindOneCourse;
+    VideoConversion.findOne = origFindOneVC;
+    s3.s3Client.send = origSend;
+  }
+});
+
+test('13. CloudFront Signed Cookies: Custom wildcard policy signing generates CloudFront-Policy, CloudFront-Signature, and CloudFront-Key-Pair-Id', () => {
+  const { privateKey } = crypto.generateKeyPairSync('rsa', {
+    modulusLength: 2048,
+    privateKeyEncoding: { type: 'pkcs1', format: 'pem' },
+  });
+
+  const origKeyPairId = process.env.CLOUDFRONT_KEY_PAIR_ID;
+  const origPrivateKey = process.env.CLOUDFRONT_PRIVATE_KEY;
+
+  process.env.CLOUDFRONT_KEY_PAIR_ID = 'KTESTSIGNER01';
+  process.env.CLOUDFRONT_PRIVATE_KEY = privateKey;
+
+  try {
+    const videoId = 'lecture-cardio-99';
+    const ttlSeconds = 3600;
+    const cookies = generateHlsSignedCookies(videoId, ttlSeconds);
+
+    assert.ok(cookies, 'Signed cookies object should be returned');
+    assert.equal(cookies['CloudFront-Key-Pair-Id'], 'KTESTSIGNER01');
+    assert.ok(typeof cookies['CloudFront-Signature'] === 'string' && cookies['CloudFront-Signature'].length > 0);
+    assert.ok(typeof cookies['CloudFront-Policy'] === 'string' && cookies['CloudFront-Policy'].length > 0);
+
+    // Decode and verify CloudFront custom policy JSON
+    const b64 = cookies['CloudFront-Policy'].replace(/-/g, '+').replace(/_/g, '=').replace(/~/g, '/');
+    const policyJson = Buffer.from(b64, 'base64').toString('utf8');
+    const policy = JSON.parse(policyJson);
+
+    assert.ok(Array.isArray(policy.Statement) && policy.Statement.length === 1);
+    const statement = policy.Statement[0];
+    assert.equal(statement.Resource, 'https://d9rfsgqgwn1wa.cloudfront.net/hls/lecture-cardio-99/*');
+    assert.ok(statement.Condition && statement.Condition.DateLessThan);
+    const epochTime = statement.Condition.DateLessThan['AWS:EpochTime'];
+    const nowEpoch = Math.floor(Date.now() / 1000);
+    assert.ok(epochTime >= nowEpoch + 3500 && epochTime <= nowEpoch + 3700, 'Epoch expiration within expected TTL window');
+  } finally {
+    process.env.CLOUDFRONT_KEY_PAIR_ID = origKeyPairId;
+    process.env.CLOUDFRONT_PRIVATE_KEY = origPrivateKey;
+  }
+});
+
+test('14. Key ID fallback configuration: CLOUDFRONT_KEY_PAIR_ID, CLOUDFRONT_PUBLIC_KEY_ID, and CLOUDFRONT_KEY_ID', () => {
+  const origKeyPairId = process.env.CLOUDFRONT_KEY_PAIR_ID;
+  const origPublicKeyId = process.env.CLOUDFRONT_PUBLIC_KEY_ID;
+  const origKeyId = process.env.CLOUDFRONT_KEY_ID;
+  const origCfgKeyPairId = mediaConvertConfig.cloudFrontKeyPairId;
+
+  try {
+    delete process.env.CLOUDFRONT_KEY_PAIR_ID;
+    delete process.env.CLOUDFRONT_PUBLIC_KEY_ID;
+    delete process.env.CLOUDFRONT_KEY_ID;
+    mediaConvertConfig.cloudFrontKeyPairId = '';
+
+    // Test fallback to CLOUDFRONT_KEY_ID
+    process.env.CLOUDFRONT_KEY_ID = 'KID-ONLY-999';
+    assert.equal(getKeyPairId(), 'KID-ONLY-999');
+
+    // Test CLOUDFRONT_PUBLIC_KEY_ID takes precedence over CLOUDFRONT_KEY_ID
+    process.env.CLOUDFRONT_PUBLIC_KEY_ID = 'KPUB-PRECEDENCE-888';
+    assert.equal(getKeyPairId(), 'KPUB-PRECEDENCE-888');
+
+    // Test CLOUDFRONT_KEY_PAIR_ID takes highest precedence
+    process.env.CLOUDFRONT_KEY_PAIR_ID = 'KPAIR-TOP-777';
+    assert.equal(getKeyPairId(), 'KPAIR-TOP-777');
+  } finally {
+    process.env.CLOUDFRONT_KEY_PAIR_ID = origKeyPairId;
+    process.env.CLOUDFRONT_PUBLIC_KEY_ID = origPublicKeyId;
+    process.env.CLOUDFRONT_KEY_ID = origKeyId;
+    mediaConvertConfig.cloudFrontKeyPairId = origCfgKeyPairId;
+  }
+});
+
+test('15. Cookie security attributes and CLOUDFRONT_COOKIE_DOMAIN configuration support', () => {
+  const { privateKey } = crypto.generateKeyPairSync('rsa', {
+    modulusLength: 2048,
+    privateKeyEncoding: { type: 'pkcs1', format: 'pem' },
+  });
+
+  const origKeyPairId = process.env.CLOUDFRONT_KEY_PAIR_ID;
+  const origPrivateKey = process.env.CLOUDFRONT_PRIVATE_KEY;
+  const origCookieDomain = process.env.CLOUDFRONT_COOKIE_DOMAIN;
+  const origCfgCookieDomain = mediaConvertConfig.cookieDomain;
+
+  process.env.CLOUDFRONT_KEY_PAIR_ID = 'KTESTKEY123';
+  process.env.CLOUDFRONT_PRIVATE_KEY = privateKey;
+  delete process.env.CLOUDFRONT_COOKIE_DOMAIN;
+  mediaConvertConfig.cookieDomain = '';
+
+  try {
+    // 15.1 Without CLOUDFRONT_COOKIE_DOMAIN: host-only cookies (domain undefined)
+    const resHostOnly = {
+      cookies: {},
+      cookie(name, val, options) {
+        this.cookies[name] = { val, options };
+      },
+    };
+
+    const successHost = attachHlsCookiesToResponse(resHostOnly, 'session-vid-1', 7200);
+    assert.equal(successHost, true);
+
+    const expectedCookies = ['CloudFront-Key-Pair-Id', 'CloudFront-Policy', 'CloudFront-Signature'];
+    for (const cookieName of expectedCookies) {
+      assert.ok(resHostOnly.cookies[cookieName], `Cookie ${cookieName} must be attached`);
+      const { options } = resHostOnly.cookies[cookieName];
+      assert.equal(options.httpOnly, true, 'Must have httpOnly: true');
+      assert.equal(options.secure, true, 'Must have secure: true');
+      assert.equal(options.sameSite, 'None', 'Must have sameSite: "None"');
+      assert.equal(options.path, '/', 'Must have path: "/"');
+      assert.equal(options.maxAge, 7200 * 1000, 'Must have correct maxAge in ms');
+      assert.equal(options.domain, undefined, 'Host-only cookie has no domain attribute');
+    }
+
+    // 15.2 With CLOUDFRONT_COOKIE_DOMAIN: domain attribute is set
+    process.env.CLOUDFRONT_COOKIE_DOMAIN = '.whitecoat.academy';
+    const resWithDomain = {
+      cookies: {},
+      cookie(name, val, options) {
+        this.cookies[name] = { val, options };
+      },
+    };
+
+    const successDomain = attachHlsCookiesToResponse(resWithDomain, 'session-vid-1', 7200);
+    assert.equal(successDomain, true);
+
+    for (const cookieName of expectedCookies) {
+      assert.ok(resWithDomain.cookies[cookieName]);
+      const { options } = resWithDomain.cookies[cookieName];
+      assert.equal(options.domain, '.whitecoat.academy', 'Cookie domain attribute must match CLOUDFRONT_COOKIE_DOMAIN');
+      assert.equal(options.httpOnly, true);
+      assert.equal(options.secure, true);
+      assert.equal(options.sameSite, 'None');
+      assert.equal(options.path, '/');
+    }
+  } finally {
+    process.env.CLOUDFRONT_KEY_PAIR_ID = origKeyPairId;
+    process.env.CLOUDFRONT_PRIVATE_KEY = origPrivateKey;
+    process.env.CLOUDFRONT_COOKIE_DOMAIN = origCookieDomain;
+    mediaConvertConfig.cookieDomain = origCfgCookieDomain;
+  }
+});
+
+test('16. Graceful degradation on missing CloudFront credentials', () => {
+  const origKeyPairId = process.env.CLOUDFRONT_KEY_PAIR_ID;
+  const origPublicKeyId = process.env.CLOUDFRONT_PUBLIC_KEY_ID;
+  const origKeyId = process.env.CLOUDFRONT_KEY_ID;
+  const origPrivateKey = process.env.CLOUDFRONT_PRIVATE_KEY;
+  const origCfgKeyPairId = mediaConvertConfig.cloudFrontKeyPairId;
+  const origCfgPrivateKey = mediaConvertConfig.cloudFrontPrivateKey;
+
+  try {
+    delete process.env.CLOUDFRONT_KEY_PAIR_ID;
+    delete process.env.CLOUDFRONT_PUBLIC_KEY_ID;
+    delete process.env.CLOUDFRONT_KEY_ID;
+    delete process.env.CLOUDFRONT_PRIVATE_KEY;
+    mediaConvertConfig.cloudFrontKeyPairId = '';
+    mediaConvertConfig.cloudFrontPrivateKey = '';
+
+    assert.equal(isCloudFrontSigningConfigured(), false);
+    assert.equal(generateHlsSignedCookies('missing-creds-vid'), null);
+
+    const res = { cookies: {}, cookie() {} };
+    assert.equal(attachHlsCookiesToResponse(res, 'missing-creds-vid'), false);
+
+    const unsignedUrl = 'https://d9rfsgqgwn1wa.cloudfront.net/hls/vid/vid.m3u8';
+    assert.equal(generateHlsSignedUrl(unsignedUrl), unsignedUrl);
+  } finally {
+    process.env.CLOUDFRONT_KEY_PAIR_ID = origKeyPairId;
+    process.env.CLOUDFRONT_PUBLIC_KEY_ID = origPublicKeyId;
+    process.env.CLOUDFRONT_KEY_ID = origKeyId;
+    process.env.CLOUDFRONT_PRIVATE_KEY = origPrivateKey;
+    mediaConvertConfig.cloudFrontKeyPairId = origCfgKeyPairId;
+    mediaConvertConfig.cloudFrontPrivateKey = origCfgPrivateKey;
+  }
+});
+
+test('17. Error handling with corrupted / invalid private key', () => {
+  const origKeyPairId = process.env.CLOUDFRONT_KEY_PAIR_ID;
+  const origPrivateKey = process.env.CLOUDFRONT_PRIVATE_KEY;
+  const origCfgKeyPairId = mediaConvertConfig.cloudFrontKeyPairId;
+  const origCfgPrivateKey = mediaConvertConfig.cloudFrontPrivateKey;
+
+  try {
+    process.env.CLOUDFRONT_KEY_PAIR_ID = 'KTESTKEY123';
+    process.env.CLOUDFRONT_PRIVATE_KEY = 'invalid-pem-not-an-rsa-key';
+    mediaConvertConfig.cloudFrontKeyPairId = 'KTESTKEY123';
+    mediaConvertConfig.cloudFrontPrivateKey = 'invalid-pem-not-an-rsa-key';
+
+    assert.equal(isCloudFrontSigningConfigured(), true);
+    assert.equal(generateHlsSignedCookies('invalid-key-vid'), null);
+
+    const res = { cookies: {}, cookie() {} };
+    assert.equal(attachHlsCookiesToResponse(res, 'invalid-key-vid'), false);
+
+    const unsignedUrl = 'https://d9rfsgqgwn1wa.cloudfront.net/hls/vid/vid.m3u8';
+    assert.equal(generateHlsSignedUrl(unsignedUrl), unsignedUrl);
+  } finally {
+    process.env.CLOUDFRONT_KEY_PAIR_ID = origKeyPairId;
+    process.env.CLOUDFRONT_PRIVATE_KEY = origPrivateKey;
+    mediaConvertConfig.cloudFrontKeyPairId = origCfgKeyPairId;
+    mediaConvertConfig.cloudFrontPrivateKey = origCfgPrivateKey;
+  }
+});
+
+test('18. getMediaAccessUrl attaches CloudFront signed cookies when signing is configured and status is COMPLETED', async () => {
+  const { privateKey } = crypto.generateKeyPairSync('rsa', {
+    modulusLength: 2048,
+    privateKeyEncoding: { type: 'pkcs1', format: 'pem' },
+  });
+
+  const origKeyPairId = process.env.CLOUDFRONT_KEY_PAIR_ID;
+  const origPrivateKey = process.env.CLOUDFRONT_PRIVATE_KEY;
+  const origFindOneCourse = Course.findOne;
+  const origFindOneVC = VideoConversion.findOne;
+  const origSend = s3.s3Client.send;
+
+  process.env.CLOUDFRONT_KEY_PAIR_ID = 'KTESTSIGNER02';
+  process.env.CLOUDFRONT_PRIVATE_KEY = privateKey;
+
+  s3.s3Client.send = async () => ({ ContentLength: 2048000, ContentType: 'video/mp4' });
+  Course.findOne = () => ({
+    lean: async () => ({
+      courseId: 'CRS-COOKIE-TEST',
+      status: 'published',
+      modules: [{ lessons: [{ s3Key: 'videos/signed-cookies-stream.mp4' }] }],
+    }),
+  });
+
+  VideoConversion.findOne = () => ({
+    lean: async () => ({
+      originalS3Key: 'videos/signed-cookies-stream.mp4',
+      videoId: 'signed-cookies-stream',
+      hlsConversionStatus: 'COMPLETED',
+      hlsMasterUrl: 'https://d9rfsgqgwn1wa.cloudfront.net/hls/signed-cookies-stream/signed-cookies-stream.m3u8',
+      hlsOutputPrefix: 'hls/signed-cookies-stream/',
+    }),
+  });
+
+  try {
+    const { req, res } = mockReqRes({
+      query: { s3Key: 'videos/signed-cookies-stream.mp4', courseId: 'CRS-COOKIE-TEST' },
+      user: { role: 'admin' },
+    });
+
+    await s3Controller.getMediaAccessUrl(req, res);
+
+    assert.equal(res.statusCode, 200);
+    assert.equal(res.responseBody.playbackType, 'hls');
+    assert.ok(res.cookies['CloudFront-Key-Pair-Id'], 'CloudFront-Key-Pair-Id cookie attached to response');
+    assert.ok(res.cookies['CloudFront-Policy'], 'CloudFront-Policy cookie attached to response');
+    assert.ok(res.cookies['CloudFront-Signature'], 'CloudFront-Signature cookie attached to response');
+    assert.equal(res.cookies['CloudFront-Policy'].options.httpOnly, true);
+    assert.equal(res.cookies['CloudFront-Policy'].options.secure, true);
+    assert.equal(res.cookies['CloudFront-Policy'].options.sameSite, 'None');
+    assert.equal(res.cookies['CloudFront-Policy'].options.path, '/');
+    assert.match(res.responseBody.url, /X-Amz-Signature=/, 'Preserves MP4 fallback URL');
+  } finally {
+    process.env.CLOUDFRONT_KEY_PAIR_ID = origKeyPairId;
+    process.env.CLOUDFRONT_PRIVATE_KEY = origPrivateKey;
     Course.findOne = origFindOneCourse;
     VideoConversion.findOne = origFindOneVC;
     s3.s3Client.send = origSend;

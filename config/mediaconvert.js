@@ -63,11 +63,18 @@ const mediaConvertConfig = {
 
   cloudFrontKeyPairId: (
     process.env.CLOUDFRONT_KEY_PAIR_ID ||
+    process.env.CLOUDFRONT_PUBLIC_KEY_ID ||
+    process.env.CLOUDFRONT_KEY_ID ||
     ''
   ).trim(),
 
   cloudFrontPrivateKey: (
     process.env.CLOUDFRONT_PRIVATE_KEY ||
+    ''
+  ).trim(),
+
+  cookieDomain: (
+    process.env.CLOUDFRONT_COOKIE_DOMAIN ||
     ''
   ).trim(),
 
