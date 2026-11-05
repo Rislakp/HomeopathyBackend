@@ -109,7 +109,7 @@ const safeFileName = (value) => {
   return fileName && fileName !== '.' && fileName !== '..' ? fileName : null;
 };
 const validSize = (value, maxBytes) => Number.isSafeInteger(value) && value > 0 && value <= maxBytes;
-const makeReference = ({ key, fileName, contentType, fileSize, duration, uploadStatus = 'uploaded' }) => {
+const makeReference = ({ key, fileName, contentType, fileSize, duration, uploadStatus = 'uploaded', hlsConversionStatus, hlsOutputPrefix, hlsMasterUrl }) => {
   const resolvedSize = Number(fileSize) || 0;
   const numDuration = (duration !== undefined && duration !== null && !isNaN(duration) && Number(duration) > 0)
     ? Number(duration)
@@ -140,6 +140,9 @@ const makeReference = ({ key, fileName, contentType, fileSize, duration, uploadS
     bytes: resolvedSize,
     ...(numDuration !== undefined ? { duration: numDuration, videoDuration: numDuration } : {}),
     uploadStatus,
+    ...(hlsConversionStatus ? { hlsConversionStatus } : {}),
+    ...(hlsOutputPrefix ? { hlsOutputPrefix } : {}),
+    ...(hlsMasterUrl ? { hlsMasterUrl } : {}),
   };
 };
 const handleS3Error = (res, error, action) => {
@@ -288,7 +291,23 @@ const completeMultipartUpload = async (req, res) => {
 
     const durationVal = req.body?.duration !== undefined ? req.body.duration : req.body?.videoDuration;
 
-    // Automatically trigger background iOS M4V conversion for uploaded videos
+    // Automatically trigger AWS Elemental MediaConvert HLS conversion
+    let hlsData = null;
+    if (key.toLowerCase().endsWith('.mp4') || key.toLowerCase().endsWith('.webm') || key.toLowerCase().endsWith('.mov')) {
+      try {
+        const { enqueueHlsConversion } = require('../services/mediaConvertService');
+        hlsData = enqueueHlsConversion(key, {
+          userMetadata: {
+            s3Key: key,
+            recordingId: req.body?.recordingId || '',
+          },
+        });
+      } catch (hlsErr) {
+        console.warn('[S3 multipart] Could not enqueue MediaConvert HLS conversion:', hlsErr.message);
+      }
+    }
+
+    // Also trigger background iOS M4V conversion for uploaded videos
     if (key.toLowerCase().endsWith('.mp4') || key.toLowerCase().endsWith('.webm') || key.toLowerCase().endsWith('.mov')) {
       try {
         const { enqueueConversion } = require('../services/videoConversionService');
@@ -297,6 +316,10 @@ const completeMultipartUpload = async (req, res) => {
         console.warn('[S3 multipart] Could not enqueue background M4V conversion:', convErr.message);
       }
     }
+
+    const hlsStatus = hlsData?.status || 'PENDING';
+    const hlsOutputPrefix = hlsData?.hlsOutputPrefix || '';
+    const hlsMasterUrl = hlsData?.hlsMasterUrl || '';
 
     return res.json({
       success: true,
@@ -308,12 +331,18 @@ const completeMultipartUpload = async (req, res) => {
       url: s3Url,
       etag: result.ETag,
       recording: linkedRecording,
+      hlsConversionStatus: hlsStatus,
+      hlsOutputPrefix,
+      hlsMasterUrl,
       media: makeReference({
         key,
         fileName: safeFileName(req.body?.fileName) || key.split('/').pop(),
         contentType: objectMetadata.ContentType || req.body?.contentType || 'application/octet-stream',
         fileSize: objectMetadata.ContentLength || 0,
         duration: durationVal,
+        hlsConversionStatus: hlsStatus,
+        hlsOutputPrefix,
+        hlsMasterUrl,
       }),
     });
   } catch (error) { return handleS3Error(res, error, 'complete'); }
@@ -886,9 +915,56 @@ const getMediaAccessUrl = async (req, res) => {
     }), { expiresIn: MEDIA_URL_TTL_SECONDS });
     const url = encodeSignedUrl(rawUrl);
 
+    // HLS video integration: check conversion status and issue CloudFront signed cookies / URL
+    let hlsResponseFields = {};
+    if (prefix === 'videos/' || prefix === 'live_records/') {
+      try {
+        const { getHlsConversionStatus } = require('../services/mediaConvertService');
+        const { attachHlsCookiesToResponse, generateHlsSignedUrl } = require('../utils/cloudFrontSecurity');
+        const hlsInfo = await getHlsConversionStatus(key);
+
+        if (hlsInfo.hlsConversionStatus === 'COMPLETED' && hlsInfo.hlsMasterUrl) {
+          attachHlsCookiesToResponse(res, hlsInfo.videoId);
+          const signedHlsUrl = generateHlsSignedUrl(hlsInfo.hlsMasterUrl);
+          hlsResponseFields = {
+            hlsMasterUrl: signedHlsUrl,
+            hlsPlaybackUrl: signedHlsUrl,
+            hlsOutputPrefix: hlsInfo.hlsOutputPrefix,
+            hlsConversionStatus: 'COMPLETED',
+            mediaConvertJobId: hlsInfo.mediaConvertJobId,
+            playbackType: 'hls',
+          };
+        } else if (['PROCESSING', 'PENDING'].includes(hlsInfo.hlsConversionStatus)) {
+          hlsResponseFields = {
+            hlsMasterUrl: '',
+            hlsConversionStatus: hlsInfo.hlsConversionStatus,
+            mediaConvertJobId: hlsInfo.mediaConvertJobId,
+            playbackType: 'mp4',
+          };
+        } else if (hlsInfo.hlsConversionStatus === 'FAILED') {
+          hlsResponseFields = {
+            hlsMasterUrl: '',
+            hlsConversionStatus: 'FAILED',
+            hlsConversionError: hlsInfo.error,
+            mediaConvertJobId: hlsInfo.mediaConvertJobId,
+            playbackType: 'mp4',
+          };
+        }
+      } catch (hlsCheckErr) {
+        console.warn('[S3 media] HLS status resolution warning:', hlsCheckErr.message);
+      }
+    }
+
     const mediaOwnerId = resolvedCourse?.courseId || resolvedCourse?._id || recordingDoc?.courseId || recordingDoc?._id || demoVideoDoc?.courseId || 'authorized-media';
     console.info('[S3 media] access URL issued', { courseId: String(mediaOwnerId), prefix, userId: req.user?.id });
-    return res.json({ success: true, url, key, s3Key: key, expiresIn: MEDIA_URL_TTL_SECONDS });
+    return res.json({
+      success: true,
+      url,
+      key,
+      s3Key: key,
+      expiresIn: MEDIA_URL_TTL_SECONDS,
+      ...hlsResponseFields,
+    });
   } catch (error) {
     return handleS3Error(res, error, 'media-access');
   }
@@ -952,7 +1028,63 @@ const batchConvertCourseVideos = async (req, res) => {
 };
 
 
+
+const handleMediaConvertWebhook = async (req, res) => {
+  const secret = process.env.HLS_WEBHOOK_SECRET || process.env.MEDIACONVERT_WEBHOOK_SECRET;
+  if (secret) {
+    const incomingSecret =
+      req.headers['x-api-key'] ||
+      req.headers['x-webhook-secret'] ||
+      req.headers['authorization']?.replace(/^Bearer\s+/i, '') ||
+      req.query?.secret;
+    if (incomingSecret !== secret) {
+      console.warn('[MediaConvert Webhook] Unauthorized webhook attempt.');
+      return res.status(401).json({ success: false, message: 'Invalid webhook secret.' });
+    }
+  }
+
+  try {
+    const { handleJobStateChange } = require('../services/mediaConvertService');
+    const result = await handleJobStateChange(req.body);
+    return res.status(200).json({ success: true, ...result });
+  } catch (err) {
+    console.error('[MediaConvert Webhook] Processing error:', err.message);
+    return res.status(500).json({ success: false, message: err.message });
+  }
+};
+
+const getMediaConvertJobStatus = async (req, res) => {
+  const keyOrJobId = req.params?.keyOrJobId || req.query?.s3Key || req.query?.key || req.query?.jobId || req.body?.s3Key;
+  if (!keyOrJobId) return fail(res, 400, 's3Key or jobId is required.');
+  try {
+    const { getHlsConversionStatus, checkMediaConvertJob } = require('../services/mediaConvertService');
+    let status = await getHlsConversionStatus(keyOrJobId);
+    if (['PENDING', 'PROCESSING'].includes(status.hlsConversionStatus) && status.mediaConvertJobId) {
+      await checkMediaConvertJob(status.mediaConvertJobId).catch(() => {});
+      status = await getHlsConversionStatus(keyOrJobId);
+    }
+    return res.json({ success: true, ...status });
+  } catch (err) {
+    return fail(res, 500, err.message);
+  }
+};
+
+const retryMediaConvertJob = async (req, res) => {
+  const s3Key = req.body?.s3Key || req.body?.key || req.query?.s3Key;
+  if (!s3Key) return fail(res, 400, 's3Key is required.');
+  try {
+    const { submitHlsConversionJob } = require('../services/mediaConvertService');
+    const result = await submitHlsConversionJob({ s3Key, force: true });
+    return res.json({ success: true, ...result });
+  } catch (err) {
+    return fail(res, 500, err.message);
+  }
+};
+
 module.exports = {
+  handleMediaConvertWebhook,
+  getMediaConvertJobStatus,
+  retryMediaConvertJob,
   getVideoConversionStatus,
   retryVideoConversion,
   batchConvertCourseVideos,

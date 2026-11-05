@@ -15,4 +15,10 @@ router.get('/conversion-status', requireAuth, controller.getVideoConversionStatu
 router.post('/retry-conversion', requireAdmin, controller.retryVideoConversion);
 router.post('/batch-convert', requireAdmin, controller.batchConvertCourseVideos);
 
+// AWS Elemental MediaConvert HLS endpoints
+router.post('/mediaconvert/webhook', controller.handleMediaConvertWebhook);
+router.get('/mediaconvert/status/:keyOrJobId', requireAuth, controller.getMediaConvertJobStatus);
+router.get('/mediaconvert/status', requireAuth, controller.getMediaConvertJobStatus);
+router.post('/mediaconvert/retry', requireAdmin, controller.retryMediaConvertJob);
+
 module.exports = router;

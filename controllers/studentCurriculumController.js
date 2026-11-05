@@ -1,3 +1,4 @@
+const mongoose = require('mongoose');
 const Course = require('../models/Course');
 const Student = require('../models/Student');
 const LessonProgress = require('../models/LessonProgress');
@@ -28,6 +29,58 @@ const hasSafeMp4Key = (key) => typeof key === 'string' &&
 const hasSafeM4vKey = (key) => typeof key === 'string' &&
   /^videos\/[a-zA-Z0-9][a-zA-Z0-9._\/-]*\.m4v$/i.test(key) &&
   !key.includes('..') && !key.includes('//') && !/[\\\r\n]/.test(key);
+
+
+const attachVerifiedHlsStream = async (resource) => {
+  if (!resource || typeof resource !== 'object') return resource;
+  const output = { ...resource };
+
+  let hlsStatus = String(resource.hlsConversionStatus || 'none').toUpperCase();
+  let hlsMasterUrl = String(resource.hlsMasterUrl || '').trim();
+  let hlsOutputPrefix = String(resource.hlsOutputPrefix || '').trim();
+  let jobId = String(resource.mediaConvertJobId || '').trim();
+  let s3Key = String(resource.s3Key || resource.videoS3Key || '').trim();
+
+  if ((!hlsMasterUrl || hlsStatus === 'NONE') && s3Key) {
+    try {
+      const VideoConversion = require('../models/VideoConversion');
+      const isDbConnected = mongoose.connection?.readyState === 1;
+      if (isDbConnected || (VideoConversion.findOne && VideoConversion.findOne !== mongoose.Model.findOne)) {
+        const q = VideoConversion.findOne({ originalS3Key: s3Key });
+        const conversion = (q && typeof q.lean === 'function') ? await q.lean() : await q;
+        if (conversion) {
+          hlsStatus = String(conversion.hlsConversionStatus || 'none').toUpperCase();
+          if (hlsStatus === 'COMPLETED' && conversion.hlsMasterUrl) {
+            hlsMasterUrl = conversion.hlsMasterUrl;
+            hlsOutputPrefix = conversion.hlsOutputPrefix || `hls/${conversion.videoId || ''}/`;
+          }
+          if (conversion.mediaConvertJobId) jobId = conversion.mediaConvertJobId;
+        }
+      }
+    } catch (_) {}
+  }
+
+  output.hlsConversionStatus = hlsStatus;
+  if (jobId) output.mediaConvertJobId = jobId;
+  if (hlsOutputPrefix) output.hlsOutputPrefix = hlsOutputPrefix;
+
+  if (hlsStatus === 'COMPLETED' && hlsMasterUrl) {
+    const { generateHlsSignedUrl } = require('../utils/cloudFrontSecurity');
+    const signedUrl = generateHlsSignedUrl(hlsMasterUrl);
+    output.hlsMasterUrl = signedUrl;
+    output.hlsPlaybackUrl = signedUrl;
+    output.playbackType = 'hls';
+  } else if (['PROCESSING', 'PENDING'].includes(hlsStatus)) {
+    output.hlsMasterUrl = '';
+    output.playbackType = 'mp4';
+  } else if (hlsStatus === 'FAILED') {
+    output.hlsMasterUrl = '';
+    output.playbackType = 'mp4';
+    output.hlsConversionError = resource.hlsConversionError || '';
+  }
+
+  return output;
+};
 
 const attachVerifiedM4vRendition = async (resource) => {
   if (!resource || typeof resource !== 'object') return resource;
@@ -139,7 +192,7 @@ const addSignedS3MediaUrls = async (course) => {
               ? (isWebmMedia(resource) ? 'video/webm' : 'video/mp4')
               : type;
             const resolved = await resolveMediaRecord(resource, { responseContentType: mediaType, course });
-            if (field === 'videoParts') { const withMp4 = await attachVerifiedMp4Fallback(resolved); return attachVerifiedM4vRendition(withMp4); } return resolved;
+            if (field === 'videoParts') { const withMp4 = await attachVerifiedMp4Fallback(resolved); const withM4v = await attachVerifiedM4vRendition(withMp4); return attachVerifiedHlsStream(withM4v); } return resolved;
           }));
         }
       }
@@ -1514,4 +1567,5 @@ module.exports = {
   attachVerifiedMp4Fallback,
   attachVerifiedM4vRendition,
   hasSafeM4vKey,
+  attachVerifiedHlsStream,
 };

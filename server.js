@@ -299,6 +299,9 @@ app.use('/api/media', require('./routes/uploadRoutes'));
 app.use('/api/uploads', require('./routes/uploadRoutes'));
 app.use('/api/upload-image', require('./routes/uploadRoutes'));
 app.use('/api/s3-upload', require('./routes/s3UploadRoutes'));
+app.use('/api/s3', require('./routes/s3UploadRoutes'));
+app.use('/api/v1/s3', require('./routes/s3UploadRoutes'));
+app.post('/api/webhooks/mediaconvert', require('./controllers/s3UploadController').handleMediaConvertWebhook);
 
 app.use('/courses', require('./routes/studentCurriculumRoutes'));
 app.use('/api/courses', require('./routes/courseRoutes'));
