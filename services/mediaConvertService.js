@@ -41,10 +41,13 @@ function isEligibleVideoKey(key) {
 
 /**
  * Constructs the CloudFront master playlist URL for a given videoId.
+ * AWS MediaConvert generates {videoId}.m3u8 as the master playlist in S3.
  */
 function getCloudFrontHlsMasterUrl(videoId) {
+  if (!videoId || typeof videoId !== 'string') return '';
   const domain = mediaConvertConfig.cloudFrontDomain;
-  return `https://${domain}/hls/${videoId}/master.m3u8`;
+  const cleanId = videoId.trim().replace(/\.m3u8$/i, '');
+  return `https://${domain}/hls/${cleanId}/${cleanId}.m3u8`;
 }
 
 /**
@@ -330,6 +333,7 @@ async function submitHlsConversionJob({
   videoId,
   userMetadata = {},
   force = false,
+  _fromEnqueue = false,
 }) {
   const cleanKey = String(s3Key || '').trim();
   if (!isEligibleVideoKey(cleanKey)) {
@@ -342,7 +346,7 @@ async function submitHlsConversionJob({
   const outputS3Destination = `s3://${bucketName}/hls/${resolvedVideoId}/`;
 
   // Idempotency check 1: in-flight memory lock
-  if (inFlightSubmissions.has(cleanKey)) {
+  if (!_fromEnqueue && inFlightSubmissions.has(cleanKey)) {
     console.info(`[MediaConvert] Job submission already in flight for ${cleanKey}, skipping duplicate.`);
     const existing = await VideoConversion.findOne({ originalS3Key: cleanKey }).lean();
     return {
@@ -385,7 +389,9 @@ async function submitHlsConversionJob({
     }
   }
 
-  inFlightSubmissions.add(cleanKey);
+  if (!_fromEnqueue) {
+    inFlightSubmissions.add(cleanKey);
+  }
 
   try {
     // Verify source video existence in S3 before calling MediaConvert
@@ -446,12 +452,15 @@ async function submitHlsConversionJob({
     });
     throw err;
   } finally {
-    inFlightSubmissions.delete(cleanKey);
+    if (!_fromEnqueue) {
+      inFlightSubmissions.delete(cleanKey);
+    }
   }
 }
 
 /**
  * Enqueues a video for MediaConvert HLS conversion asynchronously without blocking the caller.
+ * Includes synchronous duplicate-submission guard before scheduling setImmediate.
  * Returns initial status immediately.
  */
 function enqueueHlsConversion(s3Key, options = {}) {
@@ -466,6 +475,22 @@ function enqueueHlsConversion(s3Key, options = {}) {
   const videoId = options.videoId || deriveVideoIdFromKey(cleanKey);
   const hlsOutputPrefix = `hls/${videoId}/`;
   const hlsMasterUrl = getCloudFrontHlsMasterUrl(videoId);
+
+  // Synchronous duplicate submission guard
+  if (inFlightSubmissions.has(cleanKey)) {
+    console.info(`[MediaConvert] Conversion already in flight for ${cleanKey}, skipping duplicate enqueue.`);
+    return {
+      enqueued: false,
+      alreadyInFlight: true,
+      status: 'PENDING',
+      videoId,
+      hlsOutputPrefix,
+      hlsMasterUrl,
+    };
+  }
+
+  // Synchronously lock this key immediately BEFORE scheduling setImmediate
+  inFlightSubmissions.add(cleanKey);
 
   // Set initial PENDING record in DB immediately
   syncHlsDatabaseRecords({
@@ -483,9 +508,12 @@ function enqueueHlsConversion(s3Key, options = {}) {
         videoId,
         userMetadata: options.userMetadata || {},
         force: options.force === true,
+        _fromEnqueue: true,
       });
     } catch (err) {
       console.error(`[MediaConvert] Background submission error for ${cleanKey}:`, err.message);
+    } finally {
+      inFlightSubmissions.delete(cleanKey);
     }
   });
 
@@ -649,12 +677,21 @@ async function getHlsConversionStatus(s3KeyOrVideoId) {
   const normStatus = String(record.hlsConversionStatus || record.status || 'none').toUpperCase();
   const videoId = record.videoId || deriveVideoIdFromKey(record.originalS3Key);
 
+  let hlsMasterUrl = '';
+  if (normStatus === 'COMPLETED') {
+    if (record.hlsMasterUrl && !record.hlsMasterUrl.endsWith('/master.m3u8')) {
+      hlsMasterUrl = record.hlsMasterUrl;
+    } else {
+      hlsMasterUrl = getCloudFrontHlsMasterUrl(videoId);
+    }
+  }
+
   return {
     s3Key: record.originalS3Key,
     videoId,
     status: normStatus,
     hlsConversionStatus: normStatus,
-    hlsMasterUrl: normStatus === 'COMPLETED' ? (record.hlsMasterUrl || getCloudFrontHlsMasterUrl(videoId)) : '',
+    hlsMasterUrl,
     hlsOutputPrefix: record.hlsOutputPrefix || `hls/${videoId}/`,
     mediaConvertJobId: record.mediaConvertJobId || '',
     error: record.hlsConversionError || record.error || '',
@@ -664,6 +701,7 @@ async function getHlsConversionStatus(s3KeyOrVideoId) {
 }
 
 module.exports = {
+  inFlightSubmissions,
   deriveVideoIdFromKey,
   isEligibleVideoKey,
   getCloudFrontHlsMasterUrl,

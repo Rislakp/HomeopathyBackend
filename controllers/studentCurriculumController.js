@@ -66,7 +66,15 @@ const attachVerifiedHlsStream = async (resource) => {
 
   if (hlsStatus === 'COMPLETED' && hlsMasterUrl) {
     const { generateHlsSignedUrl } = require('../utils/cloudFrontSecurity');
-    const signedUrl = generateHlsSignedUrl(hlsMasterUrl);
+    let effectiveMasterUrl = hlsMasterUrl;
+    if (effectiveMasterUrl.endsWith('/master.m3u8')) {
+      const { deriveVideoIdFromKey } = require('../services/mediaConvertService');
+      const derivedId = (s3Key ? deriveVideoIdFromKey(s3Key) : '') || (effectiveMasterUrl.match(/\/hls\/([^/]+)\/master\.m3u8/i) || [])[1];
+      if (derivedId) {
+        effectiveMasterUrl = effectiveMasterUrl.replace(/\/master\.m3u8$/i, `/${derivedId}.m3u8`);
+      }
+    }
+    const signedUrl = generateHlsSignedUrl(effectiveMasterUrl);
     output.hlsMasterUrl = signedUrl;
     output.hlsPlaybackUrl = signedUrl;
     output.playbackType = 'hls';
@@ -213,6 +221,26 @@ const addSignedS3MediaUrls = async (course) => {
           lesson.mp4S3Key = firstVideo.mp4S3Key;
           lesson.mp4StorageProvider = firstVideo.mp4StorageProvider;
         }
+        if (firstVideo.hlsMasterUrl) {
+          lesson.hlsMasterUrl = firstVideo.hlsMasterUrl;
+          lesson.hlsPlaybackUrl = firstVideo.hlsPlaybackUrl || firstVideo.hlsMasterUrl;
+          lesson.playbackType = firstVideo.playbackType || 'hls';
+        } else {
+          lesson.hlsMasterUrl = '';
+          lesson.playbackType = firstVideo.playbackType || 'mp4';
+        }
+        if (firstVideo.hlsConversionStatus && firstVideo.hlsConversionStatus !== 'NONE') {
+          lesson.hlsConversionStatus = firstVideo.hlsConversionStatus;
+        }
+        if (firstVideo.hlsOutputPrefix) {
+          lesson.hlsOutputPrefix = firstVideo.hlsOutputPrefix;
+        }
+        if (firstVideo.mediaConvertJobId) {
+          lesson.mediaConvertJobId = firstVideo.mediaConvertJobId;
+        }
+        if (firstVideo.hlsConversionError) {
+          lesson.hlsConversionError = firstVideo.hlsConversionError;
+        }
         const isLessonUrlLiveVideo = lesson.videoUrl &&
           !lesson.videoUrl.includes('meet.google.com') &&
           !lesson.videoUrl.includes('tel.meet') &&
@@ -261,6 +289,33 @@ const addSignedS3MediaUrls = async (course) => {
               lesson.fallbackVideoUrl = fallbackRef.fallbackVideoUrl;
               lesson.fallbackMp4Url = fallbackRef.mp4Url;
             }
+          }
+          const withHls = await attachVerifiedHlsStream({
+            ...s3Ref,
+            hlsMasterUrl: lesson.hlsMasterUrl,
+            hlsConversionStatus: lesson.hlsConversionStatus,
+            hlsOutputPrefix: lesson.hlsOutputPrefix,
+            mediaConvertJobId: lesson.mediaConvertJobId,
+          });
+          if (withHls?.hlsMasterUrl) {
+            lesson.hlsMasterUrl = withHls.hlsMasterUrl;
+            lesson.hlsPlaybackUrl = withHls.hlsPlaybackUrl || withHls.hlsMasterUrl;
+            lesson.playbackType = withHls.playbackType || 'hls';
+          } else if (withHls?.hlsConversionStatus && withHls.hlsConversionStatus !== 'NONE') {
+            lesson.hlsMasterUrl = '';
+            lesson.playbackType = withHls.playbackType || 'mp4';
+          }
+          if (withHls?.hlsConversionStatus && withHls.hlsConversionStatus !== 'NONE') {
+            lesson.hlsConversionStatus = withHls.hlsConversionStatus;
+          }
+          if (withHls?.hlsOutputPrefix) {
+            lesson.hlsOutputPrefix = withHls.hlsOutputPrefix;
+          }
+          if (withHls?.mediaConvertJobId) {
+            lesson.mediaConvertJobId = withHls.mediaConvertJobId;
+          }
+          if (withHls?.hlsConversionError) {
+            lesson.hlsConversionError = withHls.hlsConversionError;
           }
         }
       }
@@ -1568,4 +1623,5 @@ module.exports = {
   attachVerifiedM4vRendition,
   hasSafeM4vKey,
   attachVerifiedHlsStream,
+  addSignedS3MediaUrls,
 };

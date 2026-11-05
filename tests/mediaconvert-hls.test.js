@@ -11,11 +11,14 @@ const DemoVideo = require('../models/DemoVideo');
 const Student = require('../models/Student');
 
 const {
+  inFlightSubmissions,
   deriveVideoIdFromKey,
   isEligibleVideoKey,
   getCloudFrontHlsMasterUrl,
   buildHlsJobSettings,
   syncHlsDatabaseRecords,
+  submitHlsConversionJob,
+  enqueueHlsConversion,
   handleJobStateChange,
   getHlsConversionStatus,
 } = require('../services/mediaConvertService');
@@ -29,6 +32,7 @@ const {
 
 const {
   attachVerifiedHlsStream,
+  addSignedS3MediaUrls,
 } = require('../controllers/studentCurriculumController');
 
 const s3Controller = require('../controllers/s3UploadController');
@@ -86,7 +90,7 @@ test('1. Course schema validates HLS fields on both lessons and videoParts', () 
             lessonTitle: 'Lesson 1',
             s3Key: 'videos/cardio.mp4',
             originalVideoUrl: 'https://whitecoat-media-prod.s3.us-east-1.amazonaws.com/videos/cardio.mp4',
-            hlsMasterUrl: 'https://d9rfsgqgwn1wa.cloudfront.net/hls/cardio/master.m3u8',
+            hlsMasterUrl: 'https://d9rfsgqgwn1wa.cloudfront.net/hls/cardio/cardio.m3u8',
             hlsOutputPrefix: 'hls/cardio/',
             mediaConvertJobId: 'job-1001',
             hlsConversionStatus: 'COMPLETED',
@@ -98,7 +102,7 @@ test('1. Course schema validates HLS fields on both lessons and videoParts', () 
                 storageProvider: 's3',
                 s3Key: 'videos/cardio.mp4',
                 originalVideoUrl: 'https://whitecoat-media-prod.s3.us-east-1.amazonaws.com/videos/cardio.mp4',
-                hlsMasterUrl: 'https://d9rfsgqgwn1wa.cloudfront.net/hls/cardio/master.m3u8',
+                hlsMasterUrl: 'https://d9rfsgqgwn1wa.cloudfront.net/hls/cardio/cardio.m3u8',
                 hlsOutputPrefix: 'hls/cardio/',
                 mediaConvertJobId: 'job-1001',
                 hlsConversionStatus: 'COMPLETED',
@@ -115,7 +119,7 @@ test('1. Course schema validates HLS fields on both lessons and videoParts', () 
 
   const les = course.modules[0].lessons[0];
   assert.equal(les.hlsConversionStatus, 'COMPLETED');
-  assert.equal(les.hlsMasterUrl, 'https://d9rfsgqgwn1wa.cloudfront.net/hls/cardio/master.m3u8');
+  assert.equal(les.hlsMasterUrl, 'https://d9rfsgqgwn1wa.cloudfront.net/hls/cardio/cardio.m3u8');
   assert.equal(les.mediaConvertJobId, 'job-1001');
 
   const part = les.videoParts[0];
@@ -127,7 +131,7 @@ test('2. Recording, DemoVideo, and VideoConversion models validate HLS fields', 
   const rec = new Recording({
     s3Key: 'videos/live-rec.mp4',
     originalVideoUrl: 'https://whitecoat-media-prod.s3.us-east-1.amazonaws.com/videos/live-rec.mp4',
-    hlsMasterUrl: 'https://d9rfsgqgwn1wa.cloudfront.net/hls/live-rec/master.m3u8',
+    hlsMasterUrl: 'https://d9rfsgqgwn1wa.cloudfront.net/hls/live-rec/live-rec.m3u8',
     hlsConversionStatus: 'PROCESSING',
     mediaConvertJobId: 'job-1002',
   });
@@ -136,10 +140,10 @@ test('2. Recording, DemoVideo, and VideoConversion models validate HLS fields', 
 
   const dv = new DemoVideo({
     title: 'Demo Cardiology',
-    videoUrl: 'https://d9rfsgqgwn1wa.cloudfront.net/hls/demo-cardio/master.m3u8',
+    videoUrl: 'https://d9rfsgqgwn1wa.cloudfront.net/hls/demo-cardio/demo-cardio.m3u8',
     courseId: 'CRS-DEMO-01',
     s3Key: 'videos/demo-cardio.mp4',
-    hlsMasterUrl: 'https://d9rfsgqgwn1wa.cloudfront.net/hls/demo-cardio/master.m3u8',
+    hlsMasterUrl: 'https://d9rfsgqgwn1wa.cloudfront.net/hls/demo-cardio/demo-cardio.m3u8',
     hlsConversionStatus: 'COMPLETED',
   });
   assert.equal(dv.validateSync(), undefined);
@@ -147,7 +151,7 @@ test('2. Recording, DemoVideo, and VideoConversion models validate HLS fields', 
   const vc = new VideoConversion({
     originalS3Key: 'videos/demo-cardio.mp4',
     videoId: 'demo-cardio',
-    hlsMasterUrl: 'https://d9rfsgqgwn1wa.cloudfront.net/hls/demo-cardio/master.m3u8',
+    hlsMasterUrl: 'https://d9rfsgqgwn1wa.cloudfront.net/hls/demo-cardio/demo-cardio.m3u8',
     hlsConversionStatus: 'COMPLETED',
     mediaConvertJobId: 'job-1003',
   });
@@ -173,7 +177,7 @@ test('3. Helper functions: deriveVideoIdFromKey, isEligibleVideoKey, getCloudFro
 
   assert.equal(
     getCloudFrontHlsMasterUrl('sample-123'),
-    'https://d9rfsgqgwn1wa.cloudfront.net/hls/sample-123/master.m3u8'
+    'https://d9rfsgqgwn1wa.cloudfront.net/hls/sample-123/sample-123.m3u8'
   );
 });
 
@@ -267,9 +271,9 @@ test('5. EventBridge webhook notification handles COMPLETE and ERROR status tran
 
     assert.equal(resComplete.success, true);
     assert.equal(resComplete.status, 'COMPLETED');
-    assert.equal(resComplete.hlsMasterUrl, 'https://d9rfsgqgwn1wa.cloudfront.net/hls/test-session/master.m3u8');
+    assert.equal(resComplete.hlsMasterUrl, 'https://d9rfsgqgwn1wa.cloudfront.net/hls/test-session/test-session.m3u8');
     assert.equal(recordedStatus, 'COMPLETED');
-    assert.equal(recordedMasterUrl, 'https://d9rfsgqgwn1wa.cloudfront.net/hls/test-session/master.m3u8');
+    assert.equal(recordedMasterUrl, 'https://d9rfsgqgwn1wa.cloudfront.net/hls/test-session/test-session.m3u8');
 
     // 5.2 Test ERROR
     const resError = await handleJobStateChange({
@@ -382,7 +386,7 @@ test('7. Playback API (getMediaAccessUrl) returns HLS master URL on COMPLETED, a
         originalS3Key: 'videos/playback-test.mp4',
         videoId: 'playback-test',
         hlsConversionStatus: 'COMPLETED',
-        hlsMasterUrl: 'https://d9rfsgqgwn1wa.cloudfront.net/hls/playback-test/master.m3u8',
+        hlsMasterUrl: 'https://d9rfsgqgwn1wa.cloudfront.net/hls/playback-test/playback-test.m3u8',
         hlsOutputPrefix: 'hls/playback-test/',
         mediaConvertJobId: 'job-comp-1',
       };
@@ -401,7 +405,7 @@ test('7. Playback API (getMediaAccessUrl) returns HLS master URL on COMPLETED, a
     assert.equal(resComp.responseBody.success, true);
     assert.equal(resComp.responseBody.playbackType, 'hls');
     assert.equal(resComp.responseBody.hlsConversionStatus, 'COMPLETED');
-    assert.equal(resComp.responseBody.hlsMasterUrl, 'https://d9rfsgqgwn1wa.cloudfront.net/hls/playback-test/master.m3u8');
+    assert.equal(resComp.responseBody.hlsMasterUrl, 'https://d9rfsgqgwn1wa.cloudfront.net/hls/playback-test/playback-test.m3u8');
     assert.match(resComp.responseBody.url, /X-Amz-Signature=/); // Original MP4 presigned fallback preserved!
 
     // 7.2 Video is PROCESSING in VideoConversion
@@ -470,7 +474,7 @@ test('8. Student curriculum attachVerifiedHlsStream attaches HLS URL when comple
         originalS3Key: 'videos/student-video.mp4',
         videoId: 'student-video',
         hlsConversionStatus: 'COMPLETED',
-        hlsMasterUrl: 'https://d9rfsgqgwn1wa.cloudfront.net/hls/student-video/master.m3u8',
+        hlsMasterUrl: 'https://d9rfsgqgwn1wa.cloudfront.net/hls/student-video/student-video.m3u8',
         hlsOutputPrefix: 'hls/student-video/',
       }),
     });
@@ -483,8 +487,8 @@ test('8. Student curriculum attachVerifiedHlsStream attaches HLS URL when comple
 
     assert.equal(completedResource.hlsConversionStatus, 'COMPLETED');
     assert.equal(completedResource.playbackType, 'hls');
-    assert.equal(completedResource.hlsMasterUrl, 'https://d9rfsgqgwn1wa.cloudfront.net/hls/student-video/master.m3u8');
-    assert.equal(completedResource.hlsPlaybackUrl, 'https://d9rfsgqgwn1wa.cloudfront.net/hls/student-video/master.m3u8');
+    assert.equal(completedResource.hlsMasterUrl, 'https://d9rfsgqgwn1wa.cloudfront.net/hls/student-video/student-video.m3u8');
+    assert.equal(completedResource.hlsPlaybackUrl, 'https://d9rfsgqgwn1wa.cloudfront.net/hls/student-video/student-video.m3u8');
     assert.match(completedResource.url, /signed=true/); // original MP4 preserved
 
     // 8.2 In-progress / Pending stream
@@ -544,10 +548,232 @@ test('9. Multipart complete upload returns HLS status PENDING and non-blocking j
     assert.equal(res.responseBody.hlsOutputPrefix, 'hls/1793873964171-38c7b73e-d7ef-4b4f-9014-f426b39c034e-new-lecture/');
     assert.equal(
       res.responseBody.hlsMasterUrl,
-      'https://d9rfsgqgwn1wa.cloudfront.net/hls/1793873964171-38c7b73e-d7ef-4b4f-9014-f426b39c034e-new-lecture/master.m3u8'
+      'https://d9rfsgqgwn1wa.cloudfront.net/hls/1793873964171-38c7b73e-d7ef-4b4f-9014-f426b39c034e-new-lecture/1793873964171-38c7b73e-d7ef-4b4f-9014-f426b39c034e-new-lecture.m3u8'
     );
     assert.equal(res.responseBody.media.hlsConversionStatus, 'PENDING');
   } finally {
     s3.s3Client.send = originalSend;
+  }
+});
+
+
+test('10. Lesson-level curriculum response receives hlsMasterUrl and hlsConversionStatus from first eligible video part', async () => {
+  const originalFindOneVC = VideoConversion.findOne;
+  const originalSend = s3.s3Client.send;
+
+  s3.s3Client.config.credentials = async () => ({ accessKeyId: 'LOCAL', secretAccessKey: 'local' });
+  s3.s3Client.send = async () => ({ ContentLength: 2000000, ContentType: 'video/mp4' });
+
+  VideoConversion.findOne = () => ({
+    lean: async () => ({
+      originalS3Key: 'videos/curriculum-hls.mp4',
+      videoId: 'curriculum-hls',
+      hlsConversionStatus: 'COMPLETED',
+      hlsMasterUrl: 'https://d9rfsgqgwn1wa.cloudfront.net/hls/curriculum-hls/curriculum-hls.m3u8',
+      hlsOutputPrefix: 'hls/curriculum-hls/',
+      mediaConvertJobId: 'job-curriculum-1',
+    }),
+  });
+
+  try {
+    const rawCourse = {
+      _id: '6aab7f3954d18fda4f673a0d',
+      courseId: 'CRS-CURRICULUM-TEST',
+      status: 'published',
+      modules: [
+        {
+          moduleName: 'Module 1',
+          lessons: [
+            {
+              _id: 'les101',
+              lessonTitle: 'HLS Mapping Lesson',
+              s3Key: 'videos/curriculum-hls.mp4',
+              videoParts: [
+                {
+                  title: 'Part 1',
+                  storageProvider: 's3',
+                  s3Key: 'videos/curriculum-hls.mp4',
+                  m4vS3Key: 'videos/curriculum-hls_ios.m4v',
+                  m4vStorageProvider: 's3',
+                  m4vConversionStatus: 'completed',
+                },
+              ],
+            },
+          ],
+        },
+      ],
+    };
+
+    const formatted = await addSignedS3MediaUrls(rawCourse);
+    const lesson = formatted.modules[0].lessons[0];
+
+    // Assert lesson-level receives HLS fields from first eligible videoPart
+    assert.equal(lesson.hlsConversionStatus, 'COMPLETED');
+    assert.equal(lesson.playbackType, 'hls');
+    assert.equal(
+      lesson.hlsMasterUrl,
+      'https://d9rfsgqgwn1wa.cloudfront.net/hls/curriculum-hls/curriculum-hls.m3u8'
+    );
+    assert.equal(lesson.hlsOutputPrefix, 'hls/curriculum-hls/');
+    assert.equal(lesson.mediaConvertJobId, 'job-curriculum-1');
+
+    // Assert existing video parts have matching HLS fields
+    const part = lesson.videoParts[0];
+    assert.equal(part.hlsConversionStatus, 'COMPLETED');
+    assert.equal(
+      part.hlsMasterUrl,
+      'https://d9rfsgqgwn1wa.cloudfront.net/hls/curriculum-hls/curriculum-hls.m3u8'
+    );
+
+    // Assert MP4 and M4V fields are preserved
+    assert.ok(lesson.videoUrl && lesson.videoUrl.includes('X-Amz-Signature='), 'Preserves videoUrl MP4 fallback');
+    assert.ok(lesson.iosM4vUrl && lesson.iosM4vUrl.includes('X-Amz-Signature='), 'Preserves iosM4vUrl');
+    assert.equal(lesson.m4vConversionStatus, 'completed');
+
+    // Standalone lesson without videoParts also maps HLS
+    const standaloneCourse = {
+      _id: '6aab7f3954d18fda4f673a0e',
+      courseId: 'CRS-STANDALONE-TEST',
+      status: 'published',
+      modules: [
+        {
+          moduleName: 'Module 1',
+          lessons: [
+            {
+              _id: 'les102',
+              lessonTitle: 'Standalone HLS Lesson',
+              videoS3Key: 'videos/curriculum-hls.mp4',
+              videoParts: [],
+            },
+          ],
+        },
+      ],
+    };
+
+    const formattedStandalone = await addSignedS3MediaUrls(standaloneCourse);
+    const standaloneLesson = formattedStandalone.modules[0].lessons[0];
+    assert.equal(standaloneLesson.hlsConversionStatus, 'COMPLETED');
+    assert.equal(
+      standaloneLesson.hlsMasterUrl,
+      'https://d9rfsgqgwn1wa.cloudfront.net/hls/curriculum-hls/curriculum-hls.m3u8'
+    );
+  } finally {
+    VideoConversion.findOne = originalFindOneVC;
+    s3.s3Client.send = originalSend;
+  }
+});
+
+
+test('11. enqueueHlsConversion enforces synchronous duplicate-submission guard for concurrent calls', async () => {
+  const testKey = 'videos/concurrent-dedup-test.mp4';
+  inFlightSubmissions.delete(testKey);
+
+  // Call 1: First call should enqueue and reserve lock immediately
+  const call1 = enqueueHlsConversion(testKey);
+  assert.equal(call1.enqueued, true);
+  assert.equal(call1.status, 'PENDING');
+  assert.equal(
+    call1.hlsMasterUrl,
+    'https://d9rfsgqgwn1wa.cloudfront.net/hls/concurrent-dedup-test/concurrent-dedup-test.m3u8'
+  );
+  assert.equal(inFlightSubmissions.has(testKey), true, 'Synchronous lock held immediately');
+
+  // Call 2: Concurrent duplicate call before setImmediate executes
+  const call2 = enqueueHlsConversion(testKey);
+  assert.equal(call2.enqueued, false);
+  assert.equal(call2.alreadyInFlight, true);
+  assert.equal(call2.status, 'PENDING');
+
+  // Allow setImmediate loop tick to complete and verify cleanup
+  await new Promise((resolve) => setImmediate(resolve));
+  const start = Date.now();
+  while (inFlightSubmissions.has(testKey) && (Date.now() - start < 5000)) {
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  }
+  assert.equal(inFlightSubmissions.has(testKey), false, 'In-flight lock cleaned up in finally block');
+});
+
+
+test('12. Fallback behavior: COMPLETED returns HLS, PROCESSING and FAILED return safe MP4 fallback', async () => {
+  const origFindOneCourse = Course.findOne;
+  const origFindOneVC = VideoConversion.findOne;
+  const origSend = s3.s3Client.send;
+
+  s3.s3Client.send = async () => ({ ContentLength: 2048000, ContentType: 'video/mp4' });
+  Course.findOne = () => ({
+    lean: async () => ({
+      courseId: 'CRS-FALLBACK-TEST',
+      status: 'published',
+      modules: [{ lessons: [{ s3Key: 'videos/fallback-matrix.mp4' }] }],
+    }),
+  });
+
+  try {
+    // 12.1 COMPLETED: returns HLS master URL and signed cookies
+    VideoConversion.findOne = () => ({
+      lean: async () => ({
+        originalS3Key: 'videos/fallback-matrix.mp4',
+        videoId: 'fallback-matrix',
+        hlsConversionStatus: 'COMPLETED',
+        hlsMasterUrl: 'https://d9rfsgqgwn1wa.cloudfront.net/hls/fallback-matrix/fallback-matrix.m3u8',
+        hlsOutputPrefix: 'hls/fallback-matrix/',
+      }),
+    });
+
+    const { req: rComp, res: sComp } = mockReqRes({
+      query: { s3Key: 'videos/fallback-matrix.mp4', courseId: 'CRS-FALLBACK-TEST' },
+    });
+    await s3Controller.getMediaAccessUrl(rComp, sComp);
+    assert.equal(sComp.statusCode, 200);
+    assert.equal(sComp.responseBody.playbackType, 'hls');
+    assert.equal(
+      sComp.responseBody.hlsMasterUrl,
+      'https://d9rfsgqgwn1wa.cloudfront.net/hls/fallback-matrix/fallback-matrix.m3u8'
+    );
+    assert.match(sComp.responseBody.url, /X-Amz-Signature=/, 'MP4 fallback preserved');
+
+    // 12.2 PROCESSING: returns empty HLS URL and safe MP4 fallback
+    VideoConversion.findOne = () => ({
+      lean: async () => ({
+        originalS3Key: 'videos/fallback-matrix.mp4',
+        videoId: 'fallback-matrix',
+        hlsConversionStatus: 'PROCESSING',
+      }),
+    });
+
+    const { req: rProc, res: sProc } = mockReqRes({
+      query: { s3Key: 'videos/fallback-matrix.mp4', courseId: 'CRS-FALLBACK-TEST' },
+    });
+    await s3Controller.getMediaAccessUrl(rProc, sProc);
+    assert.equal(sProc.statusCode, 200);
+    assert.equal(sProc.responseBody.playbackType, 'mp4');
+    assert.equal(sProc.responseBody.hlsConversionStatus, 'PROCESSING');
+    assert.equal(sProc.responseBody.hlsMasterUrl, '');
+    assert.match(sProc.responseBody.url, /X-Amz-Signature=/);
+
+    // 12.3 FAILED: returns empty HLS URL, error detail, and safe MP4 fallback
+    VideoConversion.findOne = () => ({
+      lean: async () => ({
+        originalS3Key: 'videos/fallback-matrix.mp4',
+        videoId: 'fallback-matrix',
+        hlsConversionStatus: 'FAILED',
+        hlsConversionError: 'Transcode failed: corrupt header',
+      }),
+    });
+
+    const { req: rFail, res: sFail } = mockReqRes({
+      query: { s3Key: 'videos/fallback-matrix.mp4', courseId: 'CRS-FALLBACK-TEST' },
+    });
+    await s3Controller.getMediaAccessUrl(rFail, sFail);
+    assert.equal(sFail.statusCode, 200);
+    assert.equal(sFail.responseBody.playbackType, 'mp4');
+    assert.equal(sFail.responseBody.hlsConversionStatus, 'FAILED');
+    assert.equal(sFail.responseBody.hlsConversionError, 'Transcode failed: corrupt header');
+    assert.equal(sFail.responseBody.hlsMasterUrl, '');
+    assert.match(sFail.responseBody.url, /X-Amz-Signature=/);
+  } finally {
+    Course.findOne = origFindOneCourse;
+    VideoConversion.findOne = origFindOneVC;
+    s3.s3Client.send = origSend;
   }
 });

@@ -291,7 +291,7 @@ async function runMigration() {
     console.log('DRY-RUN: Listing candidate videos for migration:');
     finalQueue.forEach((item, idx) => {
       console.log(`  [${idx + 1}/${finalQueue.length}] ${item.s3Key} (${item.title || item.source})`);
-      console.log(`     -> Target Output: hls/${item.videoId}/master.m3u8`);
+      console.log(`     -> Target Output: hls/${item.videoId}/${item.videoId}.m3u8`);
     });
     console.log('\nDRY-RUN completed. No jobs submitted.');
     await mongoose.disconnect();

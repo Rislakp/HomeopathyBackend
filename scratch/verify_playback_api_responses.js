@@ -65,7 +65,7 @@ async function run() {
         originalS3Key: 'videos/playback.mp4',
         videoId: 'playback',
         hlsConversionStatus: 'COMPLETED',
-        hlsMasterUrl: 'https://d9rfsgqgwn1wa.cloudfront.net/hls/playback/master.m3u8',
+        hlsMasterUrl: 'https://d9rfsgqgwn1wa.cloudfront.net/hls/playback/playback.m3u8',
         hlsOutputPrefix: 'hls/playback/',
         mediaConvertJobId: 'job-1',
       };
@@ -78,7 +78,7 @@ async function run() {
     await s3Controller.getMediaAccessUrl(r1, s1);
     assert.equal(s1.statusCode, 200);
     assert.equal(s1.responseBody.playbackType, 'hls');
-    assert.equal(s1.responseBody.hlsMasterUrl, 'https://d9rfsgqgwn1wa.cloudfront.net/hls/playback/master.m3u8');
+    assert.equal(s1.responseBody.hlsMasterUrl, 'https://d9rfsgqgwn1wa.cloudfront.net/hls/playback/playback.m3u8');
     assert.ok(s1.responseBody.url.includes('X-Amz-Signature='), 'Original MP4 signed url preserved');
     console.log('✔ getMediaAccessUrl returns correct HLS URL and preserves MP4 fallback');
 
@@ -88,7 +88,7 @@ async function run() {
     assert.equal(s2.statusCode, 200);
     const curriculumLesson = s2.responseBody.data.course.modules[0].lessons[0];
     assert.equal(curriculumLesson.hlsConversionStatus, 'COMPLETED');
-    assert.equal(curriculumLesson.hlsMasterUrl, 'https://d9rfsgqgwn1wa.cloudfront.net/hls/playback/master.m3u8');
+    assert.equal(curriculumLesson.hlsMasterUrl, 'https://d9rfsgqgwn1wa.cloudfront.net/hls/playback/playback.m3u8');
     assert.ok(curriculumLesson.videoUrl.includes('X-Amz-Signature='), 'Curriculum lesson has original MP4 fallback');
     console.log('✔ getMyCourseContent attaches HLS URL to student curriculum');
   } finally {

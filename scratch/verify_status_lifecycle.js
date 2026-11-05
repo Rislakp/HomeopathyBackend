@@ -59,7 +59,7 @@ async function testLifecycle() {
     }
   });
   let s3 = await getHlsConversionStatus(testKey);
-  console.log('Step 3 (Complete):', s3.hlsConversionStatus === 'COMPLETED' && s3.hlsMasterUrl.includes('master.m3u8') ? 'PASS (COMPLETED)' : 'FAIL');
+  console.log('Step 3 (Complete):', s3.hlsConversionStatus === 'COMPLETED' && s3.hlsMasterUrl.includes(testVid + '.m3u8') ? 'PASS (COMPLETED)' : 'FAIL');
 
   // 4. Reset & test ERROR -> FAILED
   await handleJobStateChange({
