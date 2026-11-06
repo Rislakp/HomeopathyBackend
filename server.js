@@ -402,8 +402,11 @@ app.use((err, req, res, next) => {
 
 const PORT = process.env.PORT || 5000;
 
+const loadHlsSecrets = require('./utils/loadHlsSecrets');
+
 const startServer = async () => {
   try {
+    await loadHlsSecrets();
     await connectDB();
     const { seedInitialAdmin } = require('./controllers/adminAuthController');
     await seedInitialAdmin();
