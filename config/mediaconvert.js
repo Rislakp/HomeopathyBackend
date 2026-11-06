@@ -47,7 +47,7 @@ const mediaConvertConfig = {
   cloudFrontDomain: (
     process.env.CLOUDFRONT_HLS_DOMAIN ||
     process.env.CLOUDFRONT_DOMAIN ||
-    'd9rfsgqgwn1wa.cloudfront.net'
+    'media.whitecoat.academy'
   ).trim().replace(/^https?:\/\//i, '').replace(/\/+$/, ''),
 
   cloudFrontDistributionId: (

@@ -16,6 +16,7 @@ const Recording = require('../models/Recording');
 const DemoVideo = require('../models/DemoVideo');
 const Lesson = require('../models/Lesson.model');
 const Student = require('../models/Student');
+const { resolveStudentLessonVideoAccess } = require('../utils/studentLessonVideoAccess');
 const { getS3Url, getS3KeyFromUrl } = require('../services/s3Service');
 const { verifyStudentCourseAccess } = require('../utils/courseAccessHelper');
 const { normalizeS3Reference, encodeSignedUrl, resolveMediaRecord, getVerifiedS3KeyForLegacyAsset } = require('../utils/s3MediaSigner');
@@ -559,6 +560,29 @@ const getMediaAccessUrl = async (req, res) => {
   const rawKey = req.query?.s3Key || req.query?.key || req.body?.s3Key || req.body?.key;
   if (typeof rawKey !== 'string' || !rawKey.trim()) return fail(res, 400, 's3Key is required.');
 
+  // Student playback uses only video keys verified inside an enrolled course lesson.
+  if ((req.user?.role || '').toLowerCase() === 'student') {
+    try {
+      const access = await resolveStudentLessonVideoAccess({ user: req.user, courseId, s3Key: rawKey });
+      if (access.status !== 200) return fail(res, access.status, access.error);
+      const { key, lesson } = access;
+      const { getHlsConversionStatus } = require('../services/mediaConvertService');
+      let hlsInfo;
+      try { hlsInfo = await getHlsConversionStatus(key); } catch (_) { hlsInfo = null; }
+      if (String(hlsInfo?.hlsConversionStatus || '').toUpperCase() === 'COMPLETED' && hlsInfo.videoId) {
+        try {
+          const { attachHlsCookiesToResponse, getCloudFrontDomain } = require('../utils/cloudFrontSecurity');
+          if (!attachHlsCookiesToResponse(res, hlsInfo.videoId)) return fail(res, 503, 'Secure HLS playback is temporarily unavailable.');
+          const playlistUrl = `https://${getCloudFrontDomain()}/hls/${encodeURIComponent(hlsInfo.videoId)}/${encodeURIComponent(hlsInfo.videoId)}.m3u8`;
+          return res.json({ success: true, url: playlistUrl, hlsMasterUrl: playlistUrl, hlsPlaybackUrl: playlistUrl, s3Key: key, key, playbackType: 'hls', hlsConversionStatus: 'COMPLETED' });
+        } catch (_) { return fail(res, 503, 'Secure HLS playback is temporarily unavailable.'); }
+      }
+      await s3Client.send(new HeadObjectCommand({ Bucket: bucket, Key: key }));
+      const signed = await getSignedUrl(s3Client, new GetObjectCommand({ Bucket: bucket, Key: key, ResponseContentType: 'video/mp4', ResponseContentDisposition: 'inline' }), { expiresIn: MEDIA_URL_TTL_SECONDS });
+      return res.json({ success: true, url: encodeSignedUrl(signed), s3Key: key, key, expiresIn: MEDIA_URL_TTL_SECONDS, playbackType: 'mp4', hlsConversionStatus: hlsInfo?.hlsConversionStatus || lesson.hlsConversionStatus || 'PENDING' });
+    } catch (_) { return fail(res, 503, 'Media playback is temporarily unavailable.'); }
+  }
+
   // Handle external Cloudinary URLs seamlessly
   const trimmedRawKey = rawKey.trim();
   if (trimmedRawKey.includes('cloudinary.com')) {
@@ -920,12 +944,14 @@ const getMediaAccessUrl = async (req, res) => {
     if (prefix === 'videos/' || prefix === 'live_records/') {
       try {
         const { getHlsConversionStatus } = require('../services/mediaConvertService');
-        const { attachHlsCookiesToResponse, generateHlsSignedUrl } = require('../utils/cloudFrontSecurity');
+        const { attachHlsCookiesToResponse, generateHlsSignedUrl, getCloudFrontDomain } = require('../utils/cloudFrontSecurity');
         const hlsInfo = await getHlsConversionStatus(key);
 
         if (hlsInfo.hlsConversionStatus === 'COMPLETED' && hlsInfo.hlsMasterUrl) {
-          attachHlsCookiesToResponse(res, hlsInfo.videoId);
-          const signedHlsUrl = generateHlsSignedUrl(hlsInfo.hlsMasterUrl);
+          if (!attachHlsCookiesToResponse(res, hlsInfo.videoId)) {
+            return fail(res, 503, 'Secure HLS playback is temporarily unavailable.');
+          }
+          const signedHlsUrl = `https://${getCloudFrontDomain()}/hls/${encodeURIComponent(hlsInfo.videoId)}/${encodeURIComponent(hlsInfo.videoId)}.m3u8`;
           hlsResponseFields = {
             hlsMasterUrl: signedHlsUrl,
             hlsPlaybackUrl: signedHlsUrl,
@@ -1031,13 +1057,18 @@ const batchConvertCourseVideos = async (req, res) => {
 
 const handleMediaConvertWebhook = async (req, res) => {
   const secret = process.env.HLS_WEBHOOK_SECRET || process.env.MEDIACONVERT_WEBHOOK_SECRET;
+  if (!secret && process.env.NODE_ENV === 'production') {
+    return res.status(503).json({ success: false, message: 'Webhook authentication is not configured.' });
+  }
   if (secret) {
     const incomingSecret =
       req.headers['x-api-key'] ||
       req.headers['x-webhook-secret'] ||
-      req.headers['authorization']?.replace(/^Bearer\s+/i, '') ||
-      req.query?.secret;
-    if (incomingSecret !== secret) {
+      req.headers['authorization']?.replace(/^Bearer\s+/i, '');
+    const supplied = Buffer.from(String(incomingSecret || ''));
+    const expected = Buffer.from(secret);
+    const { timingSafeEqual } = require('crypto');
+    if (supplied.length !== expected.length || !timingSafeEqual(supplied, expected)) {
       console.warn('[MediaConvert Webhook] Unauthorized webhook attempt.');
       return res.status(401).json({ success: false, message: 'Invalid webhook secret.' });
     }
@@ -1048,8 +1079,8 @@ const handleMediaConvertWebhook = async (req, res) => {
     const result = await handleJobStateChange(req.body);
     return res.status(200).json({ success: true, ...result });
   } catch (err) {
-    console.error('[MediaConvert Webhook] Processing error:', err.message);
-    return res.status(500).json({ success: false, message: err.message });
+    console.error('[MediaConvert Webhook] Processing error.');
+    return res.status(500).json({ success: false, message: 'Webhook processing failed.' });
   }
 };
 

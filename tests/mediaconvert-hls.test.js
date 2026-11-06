@@ -80,6 +80,23 @@ function mockReqRes(reqData = {}) {
   return { req, res };
 }
 
+function configureTestCloudFrontSigner() {
+  const oldId = process.env.CLOUDFRONT_KEY_PAIR_ID;
+  const oldKey = process.env.CLOUDFRONT_PRIVATE_KEY;
+  const { privateKey } = crypto.generateKeyPairSync('rsa', {
+    modulusLength: 2048,
+    privateKeyEncoding: { type: 'pkcs1', format: 'pem' },
+  });
+  process.env.CLOUDFRONT_KEY_PAIR_ID = 'K1XNYI3JNPWK0P';
+  process.env.CLOUDFRONT_PRIVATE_KEY = privateKey;
+  return () => {
+    if (oldId === undefined) delete process.env.CLOUDFRONT_KEY_PAIR_ID;
+    else process.env.CLOUDFRONT_KEY_PAIR_ID = oldId;
+    if (oldKey === undefined) delete process.env.CLOUDFRONT_PRIVATE_KEY;
+    else process.env.CLOUDFRONT_PRIVATE_KEY = oldKey;
+  };
+}
+
 test('1. Course schema validates HLS fields on both lessons and videoParts', () => {
   const course = new Course({
     courseTitle: 'HLS Test Course',
@@ -93,7 +110,7 @@ test('1. Course schema validates HLS fields on both lessons and videoParts', () 
             lessonTitle: 'Lesson 1',
             s3Key: 'videos/cardio.mp4',
             originalVideoUrl: 'https://whitecoat-media-prod.s3.us-east-1.amazonaws.com/videos/cardio.mp4',
-            hlsMasterUrl: 'https://d9rfsgqgwn1wa.cloudfront.net/hls/cardio/cardio.m3u8',
+            hlsMasterUrl: 'https://media.whitecoat.academy/hls/cardio/cardio.m3u8',
             hlsOutputPrefix: 'hls/cardio/',
             mediaConvertJobId: 'job-1001',
             hlsConversionStatus: 'COMPLETED',
@@ -105,7 +122,7 @@ test('1. Course schema validates HLS fields on both lessons and videoParts', () 
                 storageProvider: 's3',
                 s3Key: 'videos/cardio.mp4',
                 originalVideoUrl: 'https://whitecoat-media-prod.s3.us-east-1.amazonaws.com/videos/cardio.mp4',
-                hlsMasterUrl: 'https://d9rfsgqgwn1wa.cloudfront.net/hls/cardio/cardio.m3u8',
+                hlsMasterUrl: 'https://media.whitecoat.academy/hls/cardio/cardio.m3u8',
                 hlsOutputPrefix: 'hls/cardio/',
                 mediaConvertJobId: 'job-1001',
                 hlsConversionStatus: 'COMPLETED',
@@ -122,7 +139,7 @@ test('1. Course schema validates HLS fields on both lessons and videoParts', () 
 
   const les = course.modules[0].lessons[0];
   assert.equal(les.hlsConversionStatus, 'COMPLETED');
-  assert.equal(les.hlsMasterUrl, 'https://d9rfsgqgwn1wa.cloudfront.net/hls/cardio/cardio.m3u8');
+  assert.equal(les.hlsMasterUrl, 'https://media.whitecoat.academy/hls/cardio/cardio.m3u8');
   assert.equal(les.mediaConvertJobId, 'job-1001');
 
   const part = les.videoParts[0];
@@ -134,7 +151,7 @@ test('2. Recording, DemoVideo, and VideoConversion models validate HLS fields', 
   const rec = new Recording({
     s3Key: 'videos/live-rec.mp4',
     originalVideoUrl: 'https://whitecoat-media-prod.s3.us-east-1.amazonaws.com/videos/live-rec.mp4',
-    hlsMasterUrl: 'https://d9rfsgqgwn1wa.cloudfront.net/hls/live-rec/live-rec.m3u8',
+    hlsMasterUrl: 'https://media.whitecoat.academy/hls/live-rec/live-rec.m3u8',
     hlsConversionStatus: 'PROCESSING',
     mediaConvertJobId: 'job-1002',
   });
@@ -143,10 +160,10 @@ test('2. Recording, DemoVideo, and VideoConversion models validate HLS fields', 
 
   const dv = new DemoVideo({
     title: 'Demo Cardiology',
-    videoUrl: 'https://d9rfsgqgwn1wa.cloudfront.net/hls/demo-cardio/demo-cardio.m3u8',
+    videoUrl: 'https://media.whitecoat.academy/hls/demo-cardio/demo-cardio.m3u8',
     courseId: 'CRS-DEMO-01',
     s3Key: 'videos/demo-cardio.mp4',
-    hlsMasterUrl: 'https://d9rfsgqgwn1wa.cloudfront.net/hls/demo-cardio/demo-cardio.m3u8',
+    hlsMasterUrl: 'https://media.whitecoat.academy/hls/demo-cardio/demo-cardio.m3u8',
     hlsConversionStatus: 'COMPLETED',
   });
   assert.equal(dv.validateSync(), undefined);
@@ -154,7 +171,7 @@ test('2. Recording, DemoVideo, and VideoConversion models validate HLS fields', 
   const vc = new VideoConversion({
     originalS3Key: 'videos/demo-cardio.mp4',
     videoId: 'demo-cardio',
-    hlsMasterUrl: 'https://d9rfsgqgwn1wa.cloudfront.net/hls/demo-cardio/demo-cardio.m3u8',
+    hlsMasterUrl: 'https://media.whitecoat.academy/hls/demo-cardio/demo-cardio.m3u8',
     hlsConversionStatus: 'COMPLETED',
     mediaConvertJobId: 'job-1003',
   });
@@ -180,7 +197,7 @@ test('3. Helper functions: deriveVideoIdFromKey, isEligibleVideoKey, getCloudFro
 
   assert.equal(
     getCloudFrontHlsMasterUrl('sample-123'),
-    'https://d9rfsgqgwn1wa.cloudfront.net/hls/sample-123/sample-123.m3u8'
+    'https://media.whitecoat.academy/hls/sample-123/sample-123.m3u8'
   );
 });
 
@@ -274,9 +291,9 @@ test('5. EventBridge webhook notification handles COMPLETE and ERROR status tran
 
     assert.equal(resComplete.success, true);
     assert.equal(resComplete.status, 'COMPLETED');
-    assert.equal(resComplete.hlsMasterUrl, 'https://d9rfsgqgwn1wa.cloudfront.net/hls/test-session/test-session.m3u8');
+    assert.equal(resComplete.hlsMasterUrl, 'https://media.whitecoat.academy/hls/test-session/test-session.m3u8');
     assert.equal(recordedStatus, 'COMPLETED');
-    assert.equal(recordedMasterUrl, 'https://d9rfsgqgwn1wa.cloudfront.net/hls/test-session/test-session.m3u8');
+    assert.equal(recordedMasterUrl, 'https://media.whitecoat.academy/hls/test-session/test-session.m3u8');
 
     // 5.2 Test ERROR
     const resError = await handleJobStateChange({
@@ -352,6 +369,7 @@ test('6. Webhook HTTP endpoint authenticates secret and delegates to handleJobSt
 });
 
 test('7. Playback API (getMediaAccessUrl) returns HLS master URL on COMPLETED, and fallback MP4 on PROCESSING/FAILED', async () => {
+  const restoreSigner = configureTestCloudFrontSigner();
   const originalFindOneCourse = Course.findOne;
   const originalFindOneVC = VideoConversion.findOne;
   const originalSend = s3.s3Client.send;
@@ -389,7 +407,7 @@ test('7. Playback API (getMediaAccessUrl) returns HLS master URL on COMPLETED, a
         originalS3Key: 'videos/playback-test.mp4',
         videoId: 'playback-test',
         hlsConversionStatus: 'COMPLETED',
-        hlsMasterUrl: 'https://d9rfsgqgwn1wa.cloudfront.net/hls/playback-test/playback-test.m3u8',
+        hlsMasterUrl: 'https://media.whitecoat.academy/hls/playback-test/playback-test.m3u8',
         hlsOutputPrefix: 'hls/playback-test/',
         mediaConvertJobId: 'job-comp-1',
       };
@@ -408,7 +426,7 @@ test('7. Playback API (getMediaAccessUrl) returns HLS master URL on COMPLETED, a
     assert.equal(resComp.responseBody.success, true);
     assert.equal(resComp.responseBody.playbackType, 'hls');
     assert.equal(resComp.responseBody.hlsConversionStatus, 'COMPLETED');
-    assert.equal(resComp.responseBody.hlsMasterUrl, 'https://d9rfsgqgwn1wa.cloudfront.net/hls/playback-test/playback-test.m3u8');
+    assert.equal(resComp.responseBody.hlsMasterUrl, 'https://media.whitecoat.academy/hls/playback-test/playback-test.m3u8');
     assert.match(resComp.responseBody.url, /X-Amz-Signature=/); // Original MP4 presigned fallback preserved!
 
     // 7.2 Video is PROCESSING in VideoConversion
@@ -461,6 +479,7 @@ test('7. Playback API (getMediaAccessUrl) returns HLS master URL on COMPLETED, a
     assert.equal(resFail.responseBody.hlsConversionError, 'Transcoding timeout');
     assert.match(resFail.responseBody.url, /X-Amz-Signature=/); // MP4 fallback preserved
   } finally {
+    restoreSigner();
     Course.findOne = originalFindOneCourse;
     VideoConversion.findOne = originalFindOneVC;
     s3.s3Client.send = originalSend;
@@ -477,7 +496,7 @@ test('8. Student curriculum attachVerifiedHlsStream attaches HLS URL when comple
         originalS3Key: 'videos/student-video.mp4',
         videoId: 'student-video',
         hlsConversionStatus: 'COMPLETED',
-        hlsMasterUrl: 'https://d9rfsgqgwn1wa.cloudfront.net/hls/student-video/student-video.m3u8',
+        hlsMasterUrl: 'https://media.whitecoat.academy/hls/student-video/student-video.m3u8',
         hlsOutputPrefix: 'hls/student-video/',
       }),
     });
@@ -490,8 +509,8 @@ test('8. Student curriculum attachVerifiedHlsStream attaches HLS URL when comple
 
     assert.equal(completedResource.hlsConversionStatus, 'COMPLETED');
     assert.equal(completedResource.playbackType, 'hls');
-    assert.equal(completedResource.hlsMasterUrl, 'https://d9rfsgqgwn1wa.cloudfront.net/hls/student-video/student-video.m3u8');
-    assert.equal(completedResource.hlsPlaybackUrl, 'https://d9rfsgqgwn1wa.cloudfront.net/hls/student-video/student-video.m3u8');
+    assert.equal(completedResource.hlsMasterUrl, 'https://media.whitecoat.academy/hls/student-video/student-video.m3u8');
+    assert.equal(completedResource.hlsPlaybackUrl, 'https://media.whitecoat.academy/hls/student-video/student-video.m3u8');
     assert.match(completedResource.url, /signed=true/); // original MP4 preserved
 
     // 8.2 In-progress / Pending stream
@@ -551,7 +570,7 @@ test('9. Multipart complete upload returns HLS status PENDING and non-blocking j
     assert.equal(res.responseBody.hlsOutputPrefix, 'hls/1793873964171-38c7b73e-d7ef-4b4f-9014-f426b39c034e-new-lecture/');
     assert.equal(
       res.responseBody.hlsMasterUrl,
-      'https://d9rfsgqgwn1wa.cloudfront.net/hls/1793873964171-38c7b73e-d7ef-4b4f-9014-f426b39c034e-new-lecture/1793873964171-38c7b73e-d7ef-4b4f-9014-f426b39c034e-new-lecture.m3u8'
+      'https://media.whitecoat.academy/hls/1793873964171-38c7b73e-d7ef-4b4f-9014-f426b39c034e-new-lecture/1793873964171-38c7b73e-d7ef-4b4f-9014-f426b39c034e-new-lecture.m3u8'
     );
     assert.equal(res.responseBody.media.hlsConversionStatus, 'PENDING');
   } finally {
@@ -572,7 +591,7 @@ test('10. Lesson-level curriculum response receives hlsMasterUrl and hlsConversi
       originalS3Key: 'videos/curriculum-hls.mp4',
       videoId: 'curriculum-hls',
       hlsConversionStatus: 'COMPLETED',
-      hlsMasterUrl: 'https://d9rfsgqgwn1wa.cloudfront.net/hls/curriculum-hls/curriculum-hls.m3u8',
+      hlsMasterUrl: 'https://media.whitecoat.academy/hls/curriculum-hls/curriculum-hls.m3u8',
       hlsOutputPrefix: 'hls/curriculum-hls/',
       mediaConvertJobId: 'job-curriculum-1',
     }),
@@ -615,7 +634,7 @@ test('10. Lesson-level curriculum response receives hlsMasterUrl and hlsConversi
     assert.equal(lesson.playbackType, 'hls');
     assert.equal(
       lesson.hlsMasterUrl,
-      'https://d9rfsgqgwn1wa.cloudfront.net/hls/curriculum-hls/curriculum-hls.m3u8'
+      'https://media.whitecoat.academy/hls/curriculum-hls/curriculum-hls.m3u8'
     );
     assert.equal(lesson.hlsOutputPrefix, 'hls/curriculum-hls/');
     assert.equal(lesson.mediaConvertJobId, 'job-curriculum-1');
@@ -625,7 +644,7 @@ test('10. Lesson-level curriculum response receives hlsMasterUrl and hlsConversi
     assert.equal(part.hlsConversionStatus, 'COMPLETED');
     assert.equal(
       part.hlsMasterUrl,
-      'https://d9rfsgqgwn1wa.cloudfront.net/hls/curriculum-hls/curriculum-hls.m3u8'
+      'https://media.whitecoat.academy/hls/curriculum-hls/curriculum-hls.m3u8'
     );
 
     // Assert MP4 and M4V fields are preserved
@@ -658,7 +677,7 @@ test('10. Lesson-level curriculum response receives hlsMasterUrl and hlsConversi
     assert.equal(standaloneLesson.hlsConversionStatus, 'COMPLETED');
     assert.equal(
       standaloneLesson.hlsMasterUrl,
-      'https://d9rfsgqgwn1wa.cloudfront.net/hls/curriculum-hls/curriculum-hls.m3u8'
+      'https://media.whitecoat.academy/hls/curriculum-hls/curriculum-hls.m3u8'
     );
   } finally {
     VideoConversion.findOne = originalFindOneVC;
@@ -677,7 +696,7 @@ test('11. enqueueHlsConversion enforces synchronous duplicate-submission guard f
   assert.equal(call1.status, 'PENDING');
   assert.equal(
     call1.hlsMasterUrl,
-    'https://d9rfsgqgwn1wa.cloudfront.net/hls/concurrent-dedup-test/concurrent-dedup-test.m3u8'
+    'https://media.whitecoat.academy/hls/concurrent-dedup-test/concurrent-dedup-test.m3u8'
   );
   assert.equal(inFlightSubmissions.has(testKey), true, 'Synchronous lock held immediately');
 
@@ -698,6 +717,7 @@ test('11. enqueueHlsConversion enforces synchronous duplicate-submission guard f
 
 
 test('12. Fallback behavior: COMPLETED returns HLS, PROCESSING and FAILED return safe MP4 fallback', async () => {
+  const restoreSigner = configureTestCloudFrontSigner();
   const origFindOneCourse = Course.findOne;
   const origFindOneVC = VideoConversion.findOne;
   const origSend = s3.s3Client.send;
@@ -718,7 +738,7 @@ test('12. Fallback behavior: COMPLETED returns HLS, PROCESSING and FAILED return
         originalS3Key: 'videos/fallback-matrix.mp4',
         videoId: 'fallback-matrix',
         hlsConversionStatus: 'COMPLETED',
-        hlsMasterUrl: 'https://d9rfsgqgwn1wa.cloudfront.net/hls/fallback-matrix/fallback-matrix.m3u8',
+        hlsMasterUrl: 'https://media.whitecoat.academy/hls/fallback-matrix/fallback-matrix.m3u8',
         hlsOutputPrefix: 'hls/fallback-matrix/',
       }),
     });
@@ -731,7 +751,7 @@ test('12. Fallback behavior: COMPLETED returns HLS, PROCESSING and FAILED return
     assert.equal(sComp.responseBody.playbackType, 'hls');
     assert.equal(
       sComp.responseBody.hlsMasterUrl,
-      'https://d9rfsgqgwn1wa.cloudfront.net/hls/fallback-matrix/fallback-matrix.m3u8'
+      'https://media.whitecoat.academy/hls/fallback-matrix/fallback-matrix.m3u8'
     );
     assert.match(sComp.responseBody.url, /X-Amz-Signature=/, 'MP4 fallback preserved');
 
@@ -775,6 +795,7 @@ test('12. Fallback behavior: COMPLETED returns HLS, PROCESSING and FAILED return
     assert.equal(sFail.responseBody.hlsMasterUrl, '');
     assert.match(sFail.responseBody.url, /X-Amz-Signature=/);
   } finally {
+    restoreSigner();
     Course.findOne = origFindOneCourse;
     VideoConversion.findOne = origFindOneVC;
     s3.s3Client.send = origSend;
@@ -790,7 +811,7 @@ test('13. CloudFront Signed Cookies: Custom wildcard policy signing generates Cl
   const origKeyPairId = process.env.CLOUDFRONT_KEY_PAIR_ID;
   const origPrivateKey = process.env.CLOUDFRONT_PRIVATE_KEY;
 
-  process.env.CLOUDFRONT_KEY_PAIR_ID = 'KTESTSIGNER01';
+  process.env.CLOUDFRONT_KEY_PAIR_ID = 'K1XNYI3JNPWK0P';
   process.env.CLOUDFRONT_PRIVATE_KEY = privateKey;
 
   try {
@@ -799,7 +820,7 @@ test('13. CloudFront Signed Cookies: Custom wildcard policy signing generates Cl
     const cookies = generateHlsSignedCookies(videoId, ttlSeconds);
 
     assert.ok(cookies, 'Signed cookies object should be returned');
-    assert.equal(cookies['CloudFront-Key-Pair-Id'], 'KTESTSIGNER01');
+    assert.equal(cookies['CloudFront-Key-Pair-Id'], 'K1XNYI3JNPWK0P');
     assert.ok(typeof cookies['CloudFront-Signature'] === 'string' && cookies['CloudFront-Signature'].length > 0);
     assert.ok(typeof cookies['CloudFront-Policy'] === 'string' && cookies['CloudFront-Policy'].length > 0);
 
@@ -810,7 +831,7 @@ test('13. CloudFront Signed Cookies: Custom wildcard policy signing generates Cl
 
     assert.ok(Array.isArray(policy.Statement) && policy.Statement.length === 1);
     const statement = policy.Statement[0];
-    assert.equal(statement.Resource, 'https://d9rfsgqgwn1wa.cloudfront.net/hls/lecture-cardio-99/*');
+  assert.equal(statement.Resource, 'https://media.whitecoat.academy/hls/lecture-cardio-99/*');
     assert.ok(statement.Condition && statement.Condition.DateLessThan);
     const epochTime = statement.Condition.DateLessThan['AWS:EpochTime'];
     const nowEpoch = Math.floor(Date.now() / 1000);
@@ -938,12 +959,12 @@ test('16. Graceful degradation on missing CloudFront credentials', () => {
     mediaConvertConfig.cloudFrontPrivateKey = '';
 
     assert.equal(isCloudFrontSigningConfigured(), false);
-    assert.equal(generateHlsSignedCookies('missing-creds-vid'), null);
+    assert.throws(() => generateHlsSignedCookies('missing-creds-vid'), /not configured/);
 
     const res = { cookies: {}, cookie() {} };
-    assert.equal(attachHlsCookiesToResponse(res, 'missing-creds-vid'), false);
+    assert.throws(() => attachHlsCookiesToResponse(res, 'missing-creds-vid'), /not configured/);
 
-    const unsignedUrl = 'https://d9rfsgqgwn1wa.cloudfront.net/hls/vid/vid.m3u8';
+    const unsignedUrl = 'https://media.whitecoat.academy/hls/vid/vid.m3u8';
     assert.equal(generateHlsSignedUrl(unsignedUrl), unsignedUrl);
   } finally {
     process.env.CLOUDFRONT_KEY_PAIR_ID = origKeyPairId;
@@ -968,12 +989,12 @@ test('17. Error handling with corrupted / invalid private key', () => {
     mediaConvertConfig.cloudFrontPrivateKey = 'invalid-pem-not-an-rsa-key';
 
     assert.equal(isCloudFrontSigningConfigured(), true);
-    assert.equal(generateHlsSignedCookies('invalid-key-vid'), null);
+    assert.throws(() => generateHlsSignedCookies('invalid-key-vid'), /signing failed/);
 
     const res = { cookies: {}, cookie() {} };
-    assert.equal(attachHlsCookiesToResponse(res, 'invalid-key-vid'), false);
+    assert.throws(() => attachHlsCookiesToResponse(res, 'invalid-key-vid'), /signing failed/);
 
-    const unsignedUrl = 'https://d9rfsgqgwn1wa.cloudfront.net/hls/vid/vid.m3u8';
+    const unsignedUrl = 'https://media.whitecoat.academy/hls/vid/vid.m3u8';
     assert.equal(generateHlsSignedUrl(unsignedUrl), unsignedUrl);
   } finally {
     process.env.CLOUDFRONT_KEY_PAIR_ID = origKeyPairId;
@@ -1012,7 +1033,7 @@ test('18. getMediaAccessUrl attaches CloudFront signed cookies when signing is c
       originalS3Key: 'videos/signed-cookies-stream.mp4',
       videoId: 'signed-cookies-stream',
       hlsConversionStatus: 'COMPLETED',
-      hlsMasterUrl: 'https://d9rfsgqgwn1wa.cloudfront.net/hls/signed-cookies-stream/signed-cookies-stream.m3u8',
+      hlsMasterUrl: 'https://media.whitecoat.academy/hls/signed-cookies-stream/signed-cookies-stream.m3u8',
       hlsOutputPrefix: 'hls/signed-cookies-stream/',
     }),
   });

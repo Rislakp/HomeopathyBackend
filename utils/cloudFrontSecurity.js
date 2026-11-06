@@ -1,7 +1,17 @@
 const { getSignedCookies, getSignedUrl } = require('@aws-sdk/cloudfront-signer');
 const { mediaConvertConfig } = require('../config/mediaconvert');
 
-const DEFAULT_TTL_SECONDS = parseInt(process.env.S3_SIGNED_URL_EXPIRES_IN || '21600', 10); // 6 hours
+const MIN_TTL_SECONDS = 60;
+const MAX_TTL_SECONDS = 86400;
+const DEFAULT_TTL_SECONDS = Number.parseInt(process.env.CLOUDFRONT_COOKIE_TTL || '3600', 10);
+
+function getValidatedTtl(ttl = DEFAULT_TTL_SECONDS) {
+  const value = Number(ttl);
+  if (!Number.isInteger(value) || value < MIN_TTL_SECONDS || value > MAX_TTL_SECONDS) {
+    throw new Error('Invalid CloudFront cookie TTL configuration');
+  }
+  return value;
+}
 
 /**
  * Resolves CloudFront Key Pair ID across supported environment variables and config fields.
@@ -45,10 +55,11 @@ function getCloudFrontDomain() {
   const domain = (
     mediaConvertConfig.cloudFrontDomain ||
     process.env.CLOUDFRONT_HLS_DOMAIN ||
-    process.env.CLOUDFRONT_DOMAIN ||
-    'd9rfsgqgwn1wa.cloudfront.net'
+    process.env.CLOUDFRONT_DOMAIN || ''
   ).trim();
-  return domain.replace(/^https?:\/\//i, '').replace(/\/+$/, '');
+  const normalized = domain.replace(/^https?:\/\//i, '').replace(/\/+$/, '');
+  if (!/^(?:[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\.)+[a-z]{2,}$/i.test(normalized)) throw new Error('Invalid CloudFront media domain configuration');
+  return normalized;
 }
 
 /**
@@ -83,11 +94,11 @@ function getFormattedPrivateKey() {
  * Generates all three cookies: CloudFront-Policy, CloudFront-Signature, and CloudFront-Key-Pair-Id.
  */
 function generateHlsSignedCookies(videoId, ttlSeconds = DEFAULT_TTL_SECONDS) {
-  if (!videoId || !isCloudFrontSigningConfigured()) {
-    return null;
-  }
+  if (!videoId || !/^[A-Za-z0-9_-]+$/.test(String(videoId))) throw new Error('Invalid HLS video identifier');
+  if (!isCloudFrontSigningConfigured()) throw new Error('CloudFront signing is not configured');
 
   const domain = getCloudFrontDomain();
+  ttlSeconds = getValidatedTtl(ttlSeconds);
   const privateKey = getFormattedPrivateKey();
   const keyPairId = getKeyPairId();
   const epochTime = Math.floor(Date.now() / 1000) + Number(ttlSeconds || DEFAULT_TTL_SECONDS);
@@ -113,8 +124,7 @@ function generateHlsSignedCookies(videoId, ttlSeconds = DEFAULT_TTL_SECONDS) {
     });
     return cookies;
   } catch (err) {
-    console.warn('[CloudFront Signer] Failed to generate signed cookies:', err.message);
-    return null;
+    throw new Error('CloudFront signing failed');
   }
 }
 
@@ -128,9 +138,6 @@ function attachHlsCookiesToResponse(res, videoId, ttlSeconds = DEFAULT_TTL_SECON
   }
 
   const cookies = generateHlsSignedCookies(videoId, ttlSeconds);
-  if (!cookies) {
-    return false;
-  }
 
   const cookieDomain = getCookieDomain();
   const cookieOptions = {
@@ -194,4 +201,5 @@ module.exports = {
   getKeyPairId,
   getCookieDomain,
   getCloudFrontDomain,
+  getValidatedTtl,
 };
