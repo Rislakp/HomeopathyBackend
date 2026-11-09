@@ -47,11 +47,12 @@ function getPrivateKeyRaw() {
  * Resolves optional CloudFront cookie domain from config or environment variables.
  */
 function getCookieDomain() {
-  return (
+  const domain = (
     mediaConvertConfig.cookieDomain ||
     process.env.CLOUDFRONT_COOKIE_DOMAIN ||
     ''
-  ).trim();
+  ).trim().replace(/^["']|["']$/g, '');
+  return domain;
 }
 
 /**

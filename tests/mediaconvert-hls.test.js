@@ -934,6 +934,21 @@ test('15. Cookie security attributes and CLOUDFRONT_COOKIE_DOMAIN configuration 
       assert.equal(options.sameSite, 'None');
       assert.equal(options.path, '/');
     }
+
+    // 15.3 Quoted CLOUDFRONT_COOKIE_DOMAIN strips surrounding quotes
+    process.env.CLOUDFRONT_COOKIE_DOMAIN = '".whitecoat.academy"';
+    const resWithQuotedDomain = {
+      cookies: {},
+      cookie(name, val, options) {
+        this.cookies[name] = { val, options };
+      },
+    };
+    const successQuoted = attachHlsCookiesToResponse(resWithQuotedDomain, 'session-vid-1', 7200);
+    assert.equal(successQuoted, true);
+    for (const cookieName of expectedCookies) {
+      assert.ok(resWithQuotedDomain.cookies[cookieName]);
+      assert.equal(resWithQuotedDomain.cookies[cookieName].options.domain, '.whitecoat.academy');
+    }
   } finally {
     process.env.CLOUDFRONT_KEY_PAIR_ID = origKeyPairId;
     process.env.CLOUDFRONT_PRIVATE_KEY = origPrivateKey;
