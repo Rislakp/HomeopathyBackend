@@ -3,12 +3,18 @@ const { mediaConvertConfig } = require('../config/mediaconvert');
 
 const MIN_TTL_SECONDS = 60;
 const MAX_TTL_SECONDS = 86400;
-const DEFAULT_TTL_SECONDS = Number.parseInt(process.env.CLOUDFRONT_COOKIE_TTL || '3600', 10);
+// Default to 6 hours (21600s) to fully support long classes (> 2 hours) and scrubbing/seeking without session drops
+const DEFAULT_TTL_SECONDS = Number.parseInt(
+  process.env.CLOUDFRONT_COOKIE_TTL ||
+  process.env.S3_SIGNED_URL_EXPIRES_IN ||
+  '21600',
+  10
+);
 
 function getValidatedTtl(ttl = DEFAULT_TTL_SECONDS) {
-  const value = Number(ttl);
+  const value = Number(ttl || DEFAULT_TTL_SECONDS);
   if (!Number.isInteger(value) || value < MIN_TTL_SECONDS || value > MAX_TTL_SECONDS) {
-    throw new Error('Invalid CloudFront cookie TTL configuration');
+    return DEFAULT_TTL_SECONDS;
   }
   return value;
 }
@@ -55,10 +61,13 @@ function getCloudFrontDomain() {
   const domain = (
     mediaConvertConfig.cloudFrontDomain ||
     process.env.CLOUDFRONT_HLS_DOMAIN ||
-    process.env.CLOUDFRONT_DOMAIN || ''
+    process.env.CLOUDFRONT_DOMAIN ||
+    'media.whitecoat.academy'
   ).trim();
   const normalized = domain.replace(/^https?:\/\//i, '').replace(/\/+$/, '');
-  if (!/^(?:[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\.)+[a-z]{2,}$/i.test(normalized)) throw new Error('Invalid CloudFront media domain configuration');
+  if (!/^(?:[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\.)+[a-z]{2,}$/i.test(normalized)) {
+    return 'media.whitecoat.academy';
+  }
   return normalized;
 }
 
@@ -88,14 +97,40 @@ function getFormattedPrivateKey() {
 }
 
 /**
- * Generates CloudFront signed cookies for HLS streaming (master playlist and all segments).
+ * Normalizes/aligns a persisted HLS master playlist URL with the configured CloudFront domain,
+ * strictly preserving the persisted playlist filename, directory structure, and query params.
+ */
+function resolvePersistedHlsUrl(persistedUrl, videoId) {
+  const domain = getCloudFrontDomain();
+  const rawUrl = String(persistedUrl || '').trim();
+  if (rawUrl) {
+    try {
+      const parsed = new URL(rawUrl);
+      return `https://${domain}${parsed.pathname}${parsed.search || ''}`;
+    } catch (_) {
+      if (rawUrl.startsWith('/')) {
+        return `https://${domain}${rawUrl}`;
+      }
+      return rawUrl;
+    }
+  }
+  const cleanVid = encodeURIComponent(String(videoId || '').trim());
+  return `https://${domain}/hls/${cleanVid}/${cleanVid}.m3u8`;
+}
+
+/**
+ * Generates CloudFront signed cookies for HLS streaming (master playlist, variant playlists, and all segments).
  * An explicit CloudFront custom policy with wildcard resource path ensures all .m3u8 playlists
- * and .ts segments under https://{domain}/hls/{videoId}/* are authorized.
+ * and .ts segments under https://{domain}/{prefix}/* are authorized.
  * Generates all three cookies: CloudFront-Policy, CloudFront-Signature, and CloudFront-Key-Pair-Id.
  */
-function generateHlsSignedCookies(videoId, ttlSeconds = DEFAULT_TTL_SECONDS) {
-  if (!videoId || !/^[A-Za-z0-9_-]+$/.test(String(videoId))) throw new Error('Invalid HLS video identifier');
-  if (!isCloudFrontSigningConfigured()) throw new Error('CloudFront signing is not configured');
+function generateHlsSignedCookies(videoId, ttlSeconds = DEFAULT_TTL_SECONDS, customPrefix = null) {
+  if (!videoId || !/^[A-Za-z0-9_.-]+$/.test(String(videoId))) {
+    throw new Error('Invalid HLS video identifier');
+  }
+  if (!isCloudFrontSigningConfigured()) {
+    throw new Error('CloudFront signing is not configured');
+  }
 
   const domain = getCloudFrontDomain();
   ttlSeconds = getValidatedTtl(ttlSeconds);
@@ -103,10 +138,18 @@ function generateHlsSignedCookies(videoId, ttlSeconds = DEFAULT_TTL_SECONDS) {
   const keyPairId = getKeyPairId();
   const epochTime = Math.floor(Date.now() / 1000) + Number(ttlSeconds || DEFAULT_TTL_SECONDS);
 
+  let resourcePattern;
+  if (customPrefix && typeof customPrefix === 'string' && customPrefix.trim()) {
+    const cleanPrefix = customPrefix.trim().replace(/^\/+/, '').replace(/\/*$/, '/*');
+    resourcePattern = `https://${domain}/${cleanPrefix}`;
+  } else {
+    resourcePattern = `https://${domain}/hls/${videoId}/*`;
+  }
+
   const policy = JSON.stringify({
     Statement: [
       {
-        Resource: `https://${domain}/hls/${videoId}/*`,
+        Resource: resourcePattern,
         Condition: {
           DateLessThan: {
             'AWS:EpochTime': epochTime,
@@ -132,12 +175,16 @@ function generateHlsSignedCookies(videoId, ttlSeconds = DEFAULT_TTL_SECONDS) {
  * Attaches CloudFront signed cookies to an Express response object.
  * Preserves HttpOnly, Secure, SameSite=None, Path=/, and applies optional Domain.
  */
-function attachHlsCookiesToResponse(res, videoId, ttlSeconds = DEFAULT_TTL_SECONDS) {
+function attachHlsCookiesToResponse(res, videoId, ttlSeconds = DEFAULT_TTL_SECONDS, customPrefix = null) {
   if (!res || typeof res.cookie !== 'function') {
     return false;
   }
 
-  const cookies = generateHlsSignedCookies(videoId, ttlSeconds);
+  const cookies = generateHlsSignedCookies(videoId, ttlSeconds, customPrefix);
+
+  if (!cookies) {
+    return false;
+  }
 
   const cookieDomain = getCookieDomain();
   const cookieOptions = {
@@ -202,4 +249,5 @@ module.exports = {
   getCookieDomain,
   getCloudFrontDomain,
   getValidatedTtl,
+  resolvePersistedHlsUrl,
 };

@@ -1064,3 +1064,266 @@ test('18. getMediaAccessUrl attaches CloudFront signed cookies when signing is c
     s3.s3Client.send = origSend;
   }
 });
+
+test('19. Student s3Key-only access resolves course enrollment and serves HLS playback', async () => {
+  const restoreSigner = configureTestCloudFrontSigner();
+  const origFindOneCourse = Course.findOne;
+  const origFindCourse = Course.find;
+  const origFindByIdStudent = Student.findById;
+  const origFindOneVC = VideoConversion.findOne;
+  const origSend = s3.s3Client.send;
+
+  const studentObjectId = new mongoose.Types.ObjectId();
+  const courseObjectId = new mongoose.Types.ObjectId();
+
+  s3.s3Client.send = async () => ({ ContentLength: 5000000, ContentType: 'video/mp4' });
+
+  Student.findById = () => ({
+    lean: async () => ({
+      _id: studentObjectId,
+      name: 'Enrolled Student',
+      status: 'Active',
+      subscriptionStatus: 'active',
+      isActive: true,
+      courseIds: [courseObjectId.toString()],
+    }),
+  });
+
+  Course.find = () => ({
+    lean: async () => [
+      {
+        _id: courseObjectId,
+        courseId: 'CRS-STUDENT-S3ONLY',
+        status: 'published',
+        modules: [
+          {
+            lessons: [
+              {
+                _id: 'lesson-s3only-1',
+                lessonTitle: 'S3-Only Video Lesson',
+                s3Key: 'videos/student-s3only.mp4',
+                videoParts: [
+                  {
+                    title: 'Part 1',
+                    s3Key: 'videos/student-s3only.mp4',
+                    storageProvider: 's3',
+                  },
+                ],
+              },
+            ],
+          },
+        ],
+      },
+    ],
+  });
+
+  VideoConversion.findOne = () => ({
+    lean: async () => ({
+      originalS3Key: 'videos/student-s3only.mp4',
+      videoId: 'student-s3only',
+      hlsConversionStatus: 'COMPLETED',
+      hlsMasterUrl: 'https://media.whitecoat.academy/hls/student-s3only/student-s3only.m3u8',
+      hlsOutputPrefix: 'hls/student-s3only/',
+    }),
+  });
+
+  try {
+    const { req, res } = mockReqRes({
+      query: { s3Key: 'videos/student-s3only.mp4' }, // No courseId provided!
+      user: { role: 'student', studentId: studentObjectId.toString() },
+    });
+
+    await s3Controller.getMediaAccessUrl(req, res);
+
+    assert.equal(res.statusCode, 200);
+    assert.equal(res.responseBody.playbackType, 'hls');
+    assert.equal(res.responseBody.hlsConversionStatus, 'COMPLETED');
+    assert.ok(res.responseBody.hlsMasterUrl.includes('/hls/student-s3only/student-s3only.m3u8'));
+    assert.ok(res.cookies['CloudFront-Policy'], 'Cookies attached for s3Key-only student request');
+  } finally {
+    restoreSigner();
+    Course.findOne = origFindOneCourse;
+    Course.find = origFindCourse;
+    Student.findById = origFindByIdStudent;
+    VideoConversion.findOne = origFindOneVC;
+    s3.s3Client.send = origSend;
+  }
+});
+
+test('20. Preserves persisted master.m3u8 playlist filename and aligns domain', async () => {
+  const restoreSigner = configureTestCloudFrontSigner();
+  const origFindOneCourse = Course.findOne;
+  const origFindOneVC = VideoConversion.findOne;
+  const origSend = s3.s3Client.send;
+
+  s3.s3Client.send = async () => ({ ContentLength: 4096000, ContentType: 'video/mp4' });
+
+  Course.findOne = () => ({
+    lean: async () => ({
+      courseId: 'CRS-PERSISTED-MASTER',
+      status: 'published',
+      modules: [{ lessons: [{ s3Key: 'videos/persisted-master.mp4' }] }],
+    }),
+  });
+
+  VideoConversion.findOne = () => ({
+    lean: async () => ({
+      originalS3Key: 'videos/persisted-master.mp4',
+      videoId: 'persisted-master',
+      hlsConversionStatus: 'COMPLETED',
+      hlsMasterUrl: 'https://d9rfsgqgwn1wa.cloudfront.net/hls/persisted-master/master.m3u8',
+      hlsOutputPrefix: 'hls/persisted-master/',
+    }),
+  });
+
+  try {
+    const { req, res } = mockReqRes({
+      query: { s3Key: 'videos/persisted-master.mp4', courseId: 'CRS-PERSISTED-MASTER' },
+      user: { role: 'admin' },
+    });
+
+    await s3Controller.getMediaAccessUrl(req, res);
+
+    assert.equal(res.statusCode, 200);
+    assert.equal(res.responseBody.playbackType, 'hls');
+    assert.ok(
+      res.responseBody.hlsMasterUrl.endsWith('/master.m3u8'),
+      `Must preserve persisted master.m3u8 filename (got ${res.responseBody.hlsMasterUrl})`
+    );
+  } finally {
+    restoreSigner();
+    Course.findOne = origFindOneCourse;
+    VideoConversion.findOne = origFindOneVC;
+    s3.s3Client.send = origSend;
+  }
+});
+
+test('21. HLS readiness validator safely falls back to MP4 when S3 manifest or segments are missing', async () => {
+  const restoreSigner = configureTestCloudFrontSigner();
+  const { clearReadinessCache } = require('../utils/hlsReadinessValidator');
+  clearReadinessCache();
+
+  const origFindOneCourse = Course.findOne;
+  const origFindOneVC = VideoConversion.findOne;
+  const origSend = s3.s3Client.send;
+
+  // Simulate S3 missing the HLS manifests while original MP4 exists
+  s3.s3Client.send = async (cmd) => {
+    const key = cmd.input?.Key || '';
+    if (key.endsWith('.m3u8') || key.endsWith('.ts')) {
+      const err = new Error('NoSuchKey');
+      err.name = 'NoSuchKey';
+      throw err;
+    }
+    return { ContentLength: 5000000, ContentType: 'video/mp4' };
+  };
+
+  Course.findOne = () => ({
+    lean: async () => ({
+      courseId: 'CRS-READINESS-FAIL',
+      status: 'published',
+      modules: [{ lessons: [{ s3Key: 'videos/missing-hls-s3.mp4' }] }],
+    }),
+  });
+
+  VideoConversion.findOne = () => ({
+    lean: async () => ({
+      originalS3Key: 'videos/missing-hls-s3.mp4',
+      videoId: 'missing-hls-s3',
+      hlsConversionStatus: 'COMPLETED',
+      hlsMasterUrl: 'https://media.whitecoat.academy/hls/missing-hls-s3/missing-hls-s3.m3u8',
+      hlsOutputPrefix: 'hls/missing-hls-s3/',
+    }),
+  });
+
+  try {
+    const { req, res } = mockReqRes({
+      query: { s3Key: 'videos/missing-hls-s3.mp4', courseId: 'CRS-READINESS-FAIL' },
+      user: { role: 'admin' },
+    });
+
+    await s3Controller.getMediaAccessUrl(req, res);
+
+    assert.equal(res.statusCode, 200);
+    // When S3 objects are missing, fallback to MP4 is served seamlessly
+    assert.equal(res.responseBody.playbackType, 'mp4');
+    assert.match(res.responseBody.url, /X-Amz-Signature=/, 'Serves presigned MP4 fallback URL');
+  } finally {
+    clearReadinessCache();
+    restoreSigner();
+    Course.findOne = origFindOneCourse;
+    VideoConversion.findOne = origFindOneVC;
+    s3.s3Client.send = origSend;
+  }
+});
+
+test('22. refreshHlsCookies endpoint validates credentials, S3 readiness, and refreshes signed cookies', async () => {
+  const restoreSigner = configureTestCloudFrontSigner();
+  const { clearReadinessCache } = require('../utils/hlsReadinessValidator');
+  clearReadinessCache();
+
+  const origFindOneCourse = Course.findOne;
+  const origFindOneVC = VideoConversion.findOne;
+  const origSend = s3.s3Client.send;
+
+  s3.s3Client.send = async () => ({ ContentLength: 3000000, ContentType: 'video/mp4' });
+
+  Course.findOne = () => ({
+    lean: async () => ({
+      courseId: 'CRS-REFRESH-TEST',
+      status: 'published',
+      modules: [{ lessons: [{ s3Key: 'videos/refresh-video.mp4' }] }],
+    }),
+  });
+
+  VideoConversion.findOne = () => ({
+    lean: async () => ({
+      originalS3Key: 'videos/refresh-video.mp4',
+      videoId: 'refresh-video',
+      hlsConversionStatus: 'COMPLETED',
+      hlsMasterUrl: 'https://media.whitecoat.academy/hls/refresh-video/refresh-video.m3u8',
+      hlsOutputPrefix: 'hls/refresh-video/',
+    }),
+  });
+
+  try {
+    // 22.1 Missing params returns 400
+    const { req: req400, res: res400 } = mockReqRes({ user: { role: 'admin' } });
+    await s3Controller.refreshHlsCookies(req400, res400);
+    assert.equal(res400.statusCode, 400);
+
+    // 22.2 Successful refresh by videoId
+    const { req: reqByVid, res: resByVid } = mockReqRes({
+      query: { videoId: 'refresh-video' },
+      user: { role: 'admin' },
+    });
+    await s3Controller.refreshHlsCookies(reqByVid, resByVid);
+
+    assert.equal(resByVid.statusCode, 200);
+    assert.equal(resByVid.responseBody.success, true);
+    assert.equal(resByVid.responseBody.playbackType, 'hls');
+    assert.equal(resByVid.responseBody.videoId, 'refresh-video');
+    assert.equal(resByVid.responseBody.expiresIn, 21600);
+    assert.ok(resByVid.cookies['CloudFront-Policy'], 'CloudFront-Policy cookie refreshed');
+    assert.ok(resByVid.cookies['CloudFront-Signature'], 'CloudFront-Signature cookie refreshed');
+    assert.ok(resByVid.cookies['CloudFront-Key-Pair-Id'], 'CloudFront-Key-Pair-Id cookie refreshed');
+    assert.equal(resByVid.cookies['CloudFront-Policy'].options.maxAge, 21600 * 1000);
+
+    // 22.3 Successful refresh by s3Key
+    const { req: reqByKey, res: resByKey } = mockReqRes({
+      body: { s3Key: 'videos/refresh-video.mp4', courseId: 'CRS-REFRESH-TEST' },
+      user: { role: 'admin' },
+    });
+    await s3Controller.refreshHlsCookies(reqByKey, resByKey);
+
+    assert.equal(resByKey.statusCode, 200);
+    assert.equal(resByKey.responseBody.success, true);
+    assert.ok(resByKey.cookies['CloudFront-Policy'], 'Cookies refreshed via POST body');
+  } finally {
+    clearReadinessCache();
+    restoreSigner();
+    Course.findOne = origFindOneCourse;
+    VideoConversion.findOne = origFindOneVC;
+    s3.s3Client.send = origSend;
+  }
+});

@@ -679,8 +679,8 @@ async function getHlsConversionStatus(s3KeyOrVideoId) {
 
   let hlsMasterUrl = '';
   if (normStatus === 'COMPLETED') {
-    if (record.hlsMasterUrl && !record.hlsMasterUrl.endsWith('/master.m3u8')) {
-      hlsMasterUrl = record.hlsMasterUrl;
+    if (record.hlsMasterUrl && typeof record.hlsMasterUrl === 'string' && record.hlsMasterUrl.trim()) {
+      hlsMasterUrl = record.hlsMasterUrl.trim();
     } else {
       hlsMasterUrl = getCloudFrontHlsMasterUrl(videoId);
     }

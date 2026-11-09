@@ -65,15 +65,10 @@ const attachVerifiedHlsStream = async (resource) => {
   if (hlsOutputPrefix) output.hlsOutputPrefix = hlsOutputPrefix;
 
   if (hlsStatus === 'COMPLETED' && hlsMasterUrl) {
-    const { generateHlsSignedUrl } = require('../utils/cloudFrontSecurity');
-    let effectiveMasterUrl = hlsMasterUrl;
-    if (effectiveMasterUrl.endsWith('/master.m3u8')) {
-      const { deriveVideoIdFromKey } = require('../services/mediaConvertService');
-      const derivedId = (s3Key ? deriveVideoIdFromKey(s3Key) : '') || (effectiveMasterUrl.match(/\/hls\/([^/]+)\/master\.m3u8/i) || [])[1];
-      if (derivedId) {
-        effectiveMasterUrl = effectiveMasterUrl.replace(/\/master\.m3u8$/i, `/${derivedId}.m3u8`);
-      }
-    }
+    const { generateHlsSignedUrl, resolvePersistedHlsUrl } = require('../utils/cloudFrontSecurity');
+    const { deriveVideoIdFromKey } = require('../services/mediaConvertService');
+    const derivedId = (s3Key ? deriveVideoIdFromKey(s3Key) : '') || (hlsMasterUrl.match(/\/hls\/([^/]+)\//i) || [])[1];
+    const effectiveMasterUrl = resolvePersistedHlsUrl(hlsMasterUrl, derivedId);
     const signedUrl = generateHlsSignedUrl(effectiveMasterUrl);
     output.hlsMasterUrl = signedUrl;
     output.hlsPlaybackUrl = signedUrl;

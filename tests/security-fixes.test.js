@@ -1,6 +1,6 @@
 const assert = require('assert');
-const { forgotPassword, resetPassword, updatePassword } = require('../controllers/authController');
 const crypto = require('crypto');
+const User = require('../models/User');
 
 // Mock User Model
 const mockUser = {
@@ -11,18 +11,26 @@ const mockUser = {
   matchPassword: async function(pwd) { return pwd === this.password; }
 };
 
-global.User = {
-  findOne: async (query) => {
-    if (query.email === 'test@example.com') {
-      if (query.resetPasswordToken) {
-        if (query.resetPasswordToken !== mockUser.resetPasswordToken) return null;
-      }
-      return mockUser;
+User.findOne = async (query) => {
+  if (query.email === 'test@example.com') {
+    if (query.resetPasswordToken) {
+      if (query.resetPasswordToken !== mockUser.resetPasswordToken) return null;
     }
-    return null;
-  },
-  findById: async (id) => id === 'user123' ? mockUser : null
+    return mockUser;
+  }
+  return null;
 };
+User.findById = async (id) => id === 'user123' ? mockUser : null;
+
+// Mock Admin model to prevent offline Mongoose query buffering timeouts
+try {
+  const Admin = require('../models/admin.model');
+  Admin.findOne = async () => null;
+} catch (_) {}
+
+global.User = User;
+
+const { forgotPassword, resetPassword, updatePassword } = require('../controllers/authController');
 
 // Mock response object
 const mockRes = () => {
