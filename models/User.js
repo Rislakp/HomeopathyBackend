@@ -24,6 +24,8 @@ const userSchema = new mongoose.Schema(
       required: [true, 'Please add a password'],
       minlength: [6, 'Password must be at least 6 characters'],
     },
+    resetPasswordToken: String,
+    resetPasswordExpire: Date,
     role: {
       type: String,
       enum: ['student', 'admin', 'superadmin', 'teacher', 'staff'],
@@ -46,6 +48,11 @@ const userSchema = new mongoose.Schema(
     qualification: {
       type: String,
       trim: true,
+    },
+    collegeName: {
+      type: String,
+      trim: true,
+      default: '',
     },
     profileImage: {
       type: String,
@@ -98,12 +105,18 @@ const userSchema = new mongoose.Schema(
       type: Boolean,
       default: false,
     },
+    tokenVersion: {
+      type: Number,
+      default: 0,
+    },
   },
   {
     timestamps: true,
     toJSON: {
       transform: function (doc, ret) {
         ret.id = ret._id ? ret._id.toString() : ret.id;
+        ret.college_name = ret.collegeName || '';
+        ret.college = ret.collegeName || '';
         delete ret._id;
         delete ret.__v;
         delete ret.password;
@@ -113,6 +126,8 @@ const userSchema = new mongoose.Schema(
     toObject: {
       transform: function (doc, ret) {
         ret.id = ret._id ? ret._id.toString() : ret.id;
+        ret.college_name = ret.collegeName || '';
+        ret.college = ret.collegeName || '';
         delete ret._id;
         delete ret.__v;
         delete ret.password;

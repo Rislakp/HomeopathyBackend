@@ -17,6 +17,9 @@ const adminSchema = new mongoose.Schema({
     required: true
   },
 
+  resetPasswordToken: String,
+  resetPasswordExpire: Date,
+
   role: {
     type: String,
     enum: ['ADMIN', 'SUPERADMIN'],
@@ -26,6 +29,11 @@ const adminSchema = new mongoose.Schema({
   isActive: {
     type: Boolean,
     default: true
+  },
+
+  tokenVersion: {
+    type: Number,
+    default: 0
   }
 });
 

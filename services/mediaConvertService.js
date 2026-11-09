@@ -6,6 +6,7 @@ const { mediaConvertConfig, getMediaConvertClient } = require('../config/mediaco
 const Course = require('../models/Course');
 const Recording = require('../models/Recording');
 const VideoConversion = require('../models/VideoConversion');
+const DemoVideo = require('../models/DemoVideo');
 
 // In-memory set to prevent duplicate concurrent submissions for the same video
 const inFlightSubmissions = new Set();
@@ -49,6 +50,9 @@ function getCloudFrontHlsMasterUrl(videoId) {
   return `https://${domain}/hls/${cleanId}/${cleanId}.m3u8`;
 }
 
+/**
+ * Constructs the AWS Elemental MediaConvert Job specification for adaptive HLS outputs (480p and 360p).
+ */
 function parseMediaConvertS3Path(uri, videoId) {
   if (typeof uri !== 'string') return null;
   const match = uri.trim().match(/^s3:\/\/([^/]+)\/(.+)$/i);
@@ -269,6 +273,7 @@ async function validateHlsOutputFiles(detail, videoId) {
 /**
  * Constructs the AWS Elemental MediaConvert Job specification for adaptive HLS outputs (480p and 360p).
  */
+
 function buildHlsJobSettings({ inputS3Uri, outputS3Destination, videoId, userMetadata = {} }) {
   return {
     Role: mediaConvertConfig.roleArn,
@@ -304,13 +309,10 @@ function buildHlsJobSettings({ inputS3Uri, outputS3Destination, videoId, userMet
             Type: 'HLS_GROUP_SETTINGS',
             HlsGroupSettings: {
               SegmentLength: 6,
-              SegmentLengthControl: 'GOP_MULTIPLE',
-              SegmentControl: 'SEGMENTED_FILES',
               MinSegmentLength: 0,
               Destination: outputS3Destination,
               DirectoryStructure: 'SINGLE_DIRECTORY',
               ManifestDurationFormat: 'INTEGER',
-              TargetDurationCompatibilityMode: 'LEGACY',
               StreamInfResolution: 'INCLUDE',
               ClientCache: 'ENABLED',
               CaptionLanguageSetting: 'OMIT',
@@ -337,7 +339,8 @@ function buildHlsJobSettings({ inputS3Uri, outputS3Destination, videoId, userMet
                     QualityTuningLevel: 'SINGLE_PASS',
                     CodecProfile: 'MAIN',
                     CodecLevel: 'AUTO',
-                    GopSizeUnits: 'AUTO',
+                    GopSize: 2,
+                    GopSizeUnits: 'SECONDS',
                     NumberBFramesBetweenReferenceFrames: 2,
                     InterlaceMode: 'PROGRESSIVE',
                   },
@@ -378,7 +381,8 @@ function buildHlsJobSettings({ inputS3Uri, outputS3Destination, videoId, userMet
                     QualityTuningLevel: 'SINGLE_PASS',
                     CodecProfile: 'MAIN',
                     CodecLevel: 'AUTO',
-                    GopSizeUnits: 'AUTO',
+                    GopSize: 2,
+                    GopSizeUnits: 'SECONDS',
                     NumberBFramesBetweenReferenceFrames: 2,
                     InterlaceMode: 'PROGRESSIVE',
                   },
@@ -407,7 +411,7 @@ function buildHlsJobSettings({ inputS3Uri, outputS3Destination, videoId, userMet
 }
 
 /**
- * Synchronizes HLS fields across course lessons, recordings, and VideoConversion.
+ * Synchronizes HLS fields across Course, Recording, DemoVideo, and VideoConversion models.
  */
 async function syncHlsDatabaseRecords({
   s3Key,
@@ -423,25 +427,20 @@ async function syncHlsDatabaseRecords({
   const cleanKey = String(s3Key || '').trim();
   const cleanVideoId = String(videoId || deriveVideoIdFromKey(cleanKey)).trim();
   const normStatus = String(status || 'PENDING').toUpperCase();
-  const hlsOutputPrefix = normStatus === 'COMPLETED'
-    ? (String(reportedHlsOutputPrefix || '').trim() || `hls/${cleanVideoId}/`)
-    : `hls/${cleanVideoId}/`;
-  const hlsMasterUrl = normStatus === 'COMPLETED'
-    ? (String(reportedHlsMasterUrl || '').trim() || getCloudFrontHlsMasterUrl(cleanVideoId))
-    : '';
+  const hlsOutputPrefix = reportedHlsOutputPrefix || `hls/${cleanVideoId}/`;
+  const hlsMasterUrl = normStatus === 'COMPLETED' ? reportedHlsMasterUrl : '';
 
   const updateFields = {
     hlsConversionStatus: normStatus,
+    hlsMasterUrl,
     hlsOutputPrefix,
   };
   if (jobId) updateFields.mediaConvertJobId = jobId;
   if (error) updateFields.hlsConversionError = error;
   if (normStatus === 'COMPLETED') {
-    updateFields.hlsMasterUrl = hlsMasterUrl;
     updateFields.hlsConvertedAt = convertedAt || new Date();
     updateFields.hlsConversionError = '';
   }
-  if (normStatus === 'FAILED') updateFields.hlsMasterUrl = '';
   if (originalVideoUrl) updateFields.originalVideoUrl = originalVideoUrl;
 
   const isDbConnected = mongoose.connection?.readyState === 1;
@@ -529,6 +528,14 @@ async function syncHlsDatabaseRecords({
     // 3. Update Recording records
     if (cleanKey && (isDbConnected || (Recording.updateMany && Recording.updateMany !== mongoose.Model.updateMany))) {
       await Recording.updateMany(
+        { s3Key: cleanKey },
+        { $set: updateFields }
+      );
+    }
+
+    // 4. Update DemoVideo records
+    if (cleanKey && (isDbConnected || (DemoVideo.updateMany && DemoVideo.updateMany !== mongoose.Model.updateMany))) {
+      await DemoVideo.updateMany(
         { s3Key: cleanKey },
         { $set: updateFields }
       );
@@ -719,7 +726,8 @@ function enqueueHlsConversion(s3Key, options = {}) {
   // Asynchronously submit job to AWS Elemental MediaConvert
   setImmediate(async () => {
     try {
-      await submitHlsConversionJob({
+      const submitJob = typeof options.submitJob === 'function' ? options.submitJob : submitHlsConversionJob;
+      await submitJob({
         s3Key: cleanKey,
         videoId,
         userMetadata: options.userMetadata || {},
@@ -915,7 +923,11 @@ async function getHlsConversionStatus(s3KeyOrVideoId) {
 
   let hlsMasterUrl = '';
   if (normStatus === 'COMPLETED') {
-    hlsMasterUrl = record.hlsMasterUrl || '';
+    if (record.hlsMasterUrl && typeof record.hlsMasterUrl === 'string' && record.hlsMasterUrl.trim()) {
+      hlsMasterUrl = record.hlsMasterUrl.trim();
+    } else {
+      hlsMasterUrl = getCloudFrontHlsMasterUrl(videoId);
+    }
   }
 
   return {

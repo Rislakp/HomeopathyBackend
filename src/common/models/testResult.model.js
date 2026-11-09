@@ -15,6 +15,13 @@ const answerSchema = new mongoose.Schema({
     enum: ['A', 'B', 'C', 'D', null, ''],
     default: null
   },
+  questionText: { type: String, default: '' },
+  options: { type: mongoose.Schema.Types.Mixed, default: {} },
+  selectedAnswer: { type: String, default: null },
+  selectedOptionText: { type: String, default: null },
+  correctAnswer: { type: String, default: null },
+  correctOptionText: { type: String, default: null },
+  status: { type: String, enum: ['correct', 'wrong', 'unanswered'], default: 'unanswered' },
   isCorrect: {
     type: Boolean,
     required: true,
@@ -88,6 +95,11 @@ const testResultSchema = new mongoose.Schema({
     enum: ['Completed', 'In Progress', 'Attempted'],
     default: 'Completed'
   },
+  attemptNumber: {
+    type: Number,
+    required: false,
+    default: 1
+  },
   answers: [answerSchema]
 }, {
   timestamps: true
@@ -97,6 +109,7 @@ const testResultSchema = new mongoose.Schema({
 testResultSchema.index({ studentId: 1, createdAt: -1 });
 testResultSchema.index({ examId: 1, score: -1 });
 testResultSchema.index({ studentId: 1, examId: 1 });
+testResultSchema.index({ studentId: 1, examId: 1, attemptNumber: 1 });
 testResultSchema.index({ createdAt: -1 });
 
 module.exports = mongoose.models.TestResult || mongoose.model('TestResult', testResultSchema);

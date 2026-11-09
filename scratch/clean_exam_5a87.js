@@ -1,0 +1,1641 @@
+const mongoose = require('mongoose');
+const pdfParse = require('pdf-parse');
+const Tesseract = require('tesseract.js');
+const xlsx = require('xlsx');
+const sharp = require('sharp');
+const { GoogleGenAI } = require('@google/genai');
+const Exam = require('../models/Exam');
+const { verifyStudentCourseAccess } = require('../utils/courseAccessHelper');
+const {
+  getStudentCandidateIds,
+  getStudentExamAttemptMap,
+  computeExamAttemptMetrics
+} = require('../utils/examAttemptHelper');
+const { parsePaginationParams, buildPaginationResponse } = require('../utils/pagination');
+try { require('../models/Course'); } catch (e) {}
+
+/**
+ * Helper to resolve courseName and moduleName for an exam object (populated or plain).
+ * Used for single-exam endpoints where batch resolution is not practical.
+ */
+async function resolveCourseAndModuleNames(exam) {
+  if (!exam) return { courseName: null, moduleName: null };
+  let courseName = exam.courseName || null;
+  let moduleName = exam.moduleName || null;
+
+  if (exam.courseId) {
+    if (typeof exam.courseId === 'object' && !(exam.courseId instanceof mongoose.Types.ObjectId) && (exam.courseId.courseTitle || exam.courseId.title || exam.courseId.name)) {
+      if (!courseName) {
+        courseName = exam.courseId.courseTitle || exam.courseId.title || exam.courseId.name || null;
+      }
+      if (!moduleName && exam.moduleId && Array.isArray(exam.courseId.modules)) {
+        const modObj = exam.courseId.modules.find(
+          (m) => m && ((m._id && m._id.toString() === exam.moduleId.toString()) || m.moduleName === exam.moduleId)
+        );
+        if (modObj) {
+          moduleName = modObj.moduleName || null;
+        }
+      }
+    } else {
+      const rawCourseId = exam.courseId ? exam.courseId.toString().trim() : '';
+      const courseIdStr = (rawCourseId && rawCourseId !== 'null' && rawCourseId !== 'undefined') ? rawCourseId : null;
+      if (courseIdStr && (!courseName || !moduleName)) {
+        try {
+          const isObjId = mongoose.Types.ObjectId.isValid(courseIdStr);
+          const CourseModel = mongoose.models.Course || require('../models/Course');
+          const foundCourse = await CourseModel.findOne({
+            $or: [
+              ...(isObjId ? [{ _id: new mongoose.Types.ObjectId(courseIdStr) }] : []),
+              { courseId: courseIdStr },
+              { _id: courseIdStr }
+            ]
+          }).lean();
+
+          if (foundCourse) {
+            if (!courseName) courseName = foundCourse.courseTitle || foundCourse.title || foundCourse.name || null;
+            if (!moduleName && exam.moduleId && Array.isArray(foundCourse.modules)) {
+              const modObj = foundCourse.modules.find(
+                (m) => m && ((m._id && m._id.toString() === exam.moduleId.toString()) || m.moduleName === exam.moduleId)
+              );
+              if (modObj) {
+                moduleName = modObj.moduleName || null;
+              }
+            }
+          }
+        } catch (err) {
+          // Optional lookup error handled gracefully
+        }
+      }
+    }
+  }
+
+  return { courseName, moduleName };
+}
+
+/**
+ * Batch-resolve courseName and moduleName for a list of exams in ONE query.
+ * Eliminates the N+1 per-exam resolveCourseAndModuleNames pattern for listing endpoints.
+ * @param {Array} exams - lean exam documents
+ * @returns {Map<string, { courseName: string|null, moduleName: string|null }>} courseMap keyed by courseId string
+ */
+async function batchResolveCourseNames(exams) {
+  const courseIdsToFetch = new Set();
+  for (const exam of exams) {
+    if (exam.courseId && !exam.courseName) {
+      const raw = (typeof exam.courseId === 'object' && exam.courseId._id) ? exam.courseId._id.toString() : exam.courseId.toString();
+      if (raw && raw !== 'null' && raw !== 'undefined') courseIdsToFetch.add(raw.trim());
+    }
+  }
+
+  const courseMap = new Map();
+  if (courseIdsToFetch.size === 0) return courseMap;
+
+  try {
+    const CourseModel = mongoose.models.Course || require('../models/Course');
+    const ids = [...courseIdsToFetch];
+    const objIds = ids.filter(id => mongoose.Types.ObjectId.isValid(id)).map(id => new mongoose.Types.ObjectId(id));
+    const foundCourses = await CourseModel.find({
+      $or: [
+        ...(objIds.length > 0 ? [{ _id: { $in: objIds } }] : []),
+        { courseId: { $in: ids } }
+      ]
+    }).select('courseId courseTitle title name modules').lean();
+
+    for (const fc of foundCourses) {
+      if (fc._id) courseMap.set(fc._id.toString(), fc);
+      if (fc.courseId) courseMap.set(fc.courseId, fc);
+    }
+  } catch (err) {
+    // Batch course lookup failed gracefully
+  }
+
+  return courseMap;
+}
+
+/**
+ * Local regex-based fallback parser.
+ * Used when GEMINI_API_KEY is not available. Handles common MCQ formats from OCR text.
+ * Includes safe fallback: if OCR text is corrupted/gibberish, returns a clean placeholder
+ * instead of broken characters or crashing the UI.
+ */
+function parseRawTextLocal(rawText) {
+  if (!rawText || typeof rawText !== 'string') return [];
+  const mcqs = [];
+
+  // Clean up OCR artifacts
+  const cleanedText = rawText
+    .replace(/[\u2014\u2013\u2012_]{2,}/g, ' ')  // Remove dashed/underscored lines
+    .replace(/\r\n/g, '\n')
+    .replace(/[^\x20-\x7E\n]/g, '')              // Keep printable ASCII + newlines
+    .replace(/[ \t]+/g, ' ')                      // Collapse multiple spaces/tabs
+    .trim();
+
+  // Safety check: if cleaned text is too short or looks like gibberish, return a single
+  // placeholder MCQ so the frontend gets something reviewable instead of garbage.
+  const meaningfulWords = cleanedText.split(/\s+/).filter(w => w.length > 2);
+  if (!cleanedText || meaningfulWords.length < 5) {
+    console.warn('[OCR Fallback] OCR text too short or corrupted. Returning placeholder.');
+    return [{
+      questionText: 'Extracted from Image (Please review - OCR could not read this clearly)',
+      options: { A: '', B: '', C: '', D: '' },
+      correctOption: 'A'
+    }];
+  }
+
+  // Split by question start (e.g. "1.", "Q1:", "1)")
+  const blocks = cleanedText.split(/\n(?=(?:Q|q)?\d+[\.\):])/);  
+
+  for (const block of blocks) {
+    const lines = block.split('\n').map(l => l.trim()).filter(Boolean);
+    if (lines.length < 2) continue;
+
+    let questionText = '';
+    const options = { A: '', B: '', C: '', D: '' };
+    let correctOption = 'A';
+    let isFirstLine = true;
+
+    for (const line of lines) {
+      if (isFirstLine) {
+        const qMatch = line.match(/^(?:Q|q)?\d+[\.\):]?\s*(.*)/);
+        questionText = (qMatch ? qMatch[1].trim() : line.trim()) || '';
+        isFirstLine = false;
+        continue;
+      }
+
+      // Options: A), A., (A), a)
+      const optMatch = line.match(/^\(?([A-Da-d])[\.\)]\s+(.*)/);
+      if (optMatch) {
+        options[optMatch[1].toUpperCase()] = optMatch[2].trim();
+        continue;
+      }
+
+      // Answers: "Answer:", "Ans:", "Correct:"
+      const ansMatch = line.match(/(?:Ans(?:wer)?|Correct)\s*[:=\-]?\s*([A-D])/i);
+      if (ansMatch) {
+        correctOption = ansMatch[1].toUpperCase();
+      }
+    }
+
+    if (questionText) {
+      mcqs.push({ questionText, options, correctOption });
+    }
+  }
+
+  // If regex parsing found nothing usable, return a safe placeholder
+  if (mcqs.length === 0) {
+    console.warn('[OCR Fallback] Regex could not parse any MCQs. Returning raw text as placeholder.');
+    return [{
+      questionText: 'Extracted from Image (Please review - OCR could not read this clearly)',
+      options: { A: '', B: '', C: '', D: '' },
+      correctOption: 'A'
+    }];
+  }
+
+  return mcqs;
+}
+
+/**
+ * Primary MCQ parser. Uses Gemini LLM if GEMINI_API_KEY is available,
+ * otherwise falls back to local regex-based parsing.
+ */
+async function parseRawTextToMCQs(rawText) {
+  if (!rawText || typeof rawText !== 'string' || !rawText.trim()) return [];
+
+  // Fallback to local regex parser if no API key is configured
+  if (!process.env.GEMINI_API_KEY || process.env.GEMINI_API_KEY === 'your_gemini_api_key_here') {
+    console.log("[OCR] GEMINI_API_KEY not set. Using local regex parser.");
+    return parseRawTextLocal(rawText);
+  }
+
+  const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
+  const prompt = `You are an expert data extraction assistant. Extract multiple choice questions from the following OCR text.
+The text might be garbled, have typos, or lack formatting. Reconstruct the text into clear questions and options.
+
+Output exactly a JSON array of objects. Each object must follow this exact schema:
+[
+  {
+    "questionText": "Exact question string from image",
+    "options": {
+      "A": "Option A text",
+      "B": "Option B text",
+      "C": "Option C text",
+      "D": "Option D text"
+    },
+    "correctOption": "A" // The single capital letter of the correct answer (A, B, C, or D). Default to 'A' if unknown.
+  }
+]
+
+Do not include any other text or markdown block backticks outside the JSON array.
+
+OCR TEXT:
+${rawText}`;
+
+  try {
+    const response = await ai.models.generateContent({
+      model: 'gemini-2.5-flash',
+      contents: prompt,
+      config: {
+        responseMimeType: 'application/json',
+      }
+    });
+
+    const parsedData = JSON.parse(response.text);
+    return Array.isArray(parsedData) ? parsedData : [];
+  } catch (error) {
+    console.error("[LLM Parsing Error] Falling back to local parser.", error.message);
+    return parseRawTextLocal(rawText);
+  }
+}
+
+/**
+ * Helper to validate and sanitize a single question object.
+ * Supports multi-format fields: passage (String), imageUrl (String), tableData (JSON/Array).
+ * Returns { valid: boolean, error?: string, question?: object }
+ */
+function validateAndSanitizeQuestion(q, index = 0) {
+  if (!q || typeof q !== 'object') {
+    return { valid: false, error: `Question at index ${index} must be an object.` };
+  }
+
+  const rawQuestionText = q.questionText || q.text;
+  if (!rawQuestionText || typeof rawQuestionText !== 'string' || !rawQuestionText.trim()) {
+    return { valid: false, error: `Question ${index + 1} is missing a valid questionText.` };
+  }
+
+  if (!q.options || typeof q.options !== 'object') {
+    return { valid: false, error: `Question ${index + 1} is missing valid options.` };
+  }
+
+  const sanitizedOptions = {};
+  for (const opt of ['A', 'B', 'C', 'D']) {
+    const val = q.options[opt];
+    if (val === undefined || val === null || String(val).trim() === '') {
+      return { valid: false, error: `Question ${index + 1} is missing option ${opt}.` };
+    }
+    sanitizedOptions[opt] = String(val).trim();
+  }
+
+  const rawCorrect = q.correctOption !== undefined ? q.correctOption : q.correctAnswer;
+  const normalizedCorrect = rawCorrect ? String(rawCorrect).trim().toUpperCase() : '';
+  if (!['A', 'B', 'C', 'D'].includes(normalizedCorrect)) {
+    return { valid: false, error: `Question ${index + 1} must have correctOption as 'A', 'B', 'C', or 'D'.` };
+  }
+
+  const sanitizedQuestion = {
+    questionText: rawQuestionText.trim(),
+    options: sanitizedOptions,
+    correctOption: normalizedCorrect,
+    passage: null,
+    imageUrl: null,
+    tableData: null,
+    explanation: ''
+  };
+
+  if (q.explanation !== undefined && q.explanation !== null && q.explanation !== '') {
+    sanitizedQuestion.explanation = String(q.explanation).trim();
+  }
+
+  if (q._id && mongoose.Types.ObjectId.isValid(q._id)) {
+    sanitizedQuestion._id = q._id;
+  }
+
+  // passage (optional String)
+  if (q.passage !== undefined && q.passage !== null && q.passage !== '') {
+    if (typeof q.passage !== 'string') {
+      return { valid: false, error: `Question ${index + 1}: passage must be a string.` };
+    }
+    sanitizedQuestion.passage = q.passage.trim();
+  }
+
+  // imageUrl (optional String)
+  const rawImageUrl = (q.imageUrl !== undefined && q.imageUrl !== null && q.imageUrl !== '')
+    ? q.imageUrl
+    : (q.image_url || q.image || q.questionImage || q.imgUrl);
+
+  if (rawImageUrl !== undefined && rawImageUrl !== null && rawImageUrl !== '') {
+    if (typeof rawImageUrl !== 'string') {
+      return { valid: false, error: `Question ${index + 1}: imageUrl must be a string.` };
+    }
+    sanitizedQuestion.imageUrl = rawImageUrl.trim();
+  }
+
+  // tableData (optional JSON/Array structure)
+  if (q.tableData !== undefined && q.tableData !== null && q.tableData !== '') {
+    if (typeof q.tableData === 'string') {
+      try {
+        sanitizedQuestion.tableData = JSON.parse(q.tableData);
+      } catch (e) {
+        return { valid: false, error: `Question ${index + 1}: tableData must be a valid JSON or Array structure.` };
+      }
+    } else if (Array.isArray(q.tableData) || typeof q.tableData === 'object') {
+      sanitizedQuestion.tableData = q.tableData;
+    } else {
+      return { valid: false, error: `Question ${index + 1}: tableData must be a JSON object or Array.` };
+    }
+  }
+
+  return { valid: true, question: sanitizedQuestion };
+}
+
+/**
+ * Helper to validate an array of question objects.
+ */
+function validateAndSanitizeQuestions(questions) {
+  if (!Array.isArray(questions) || questions.length === 0) {
+    return { valid: false, error: 'questions field must be a non-empty array.' };
+  }
+
+  const sanitizedQuestions = [];
+  for (let i = 0; i < questions.length; i++) {
+    const res = validateAndSanitizeQuestion(questions[i], i);
+    if (!res.valid) {
+      return { valid: false, error: res.error };
+    }
+    sanitizedQuestions.push(res.question);
+  }
+
+  return { valid: true, questions: sanitizedQuestions };
+}
+
+// Concurrency control for expensive extractMCQs operations
+let activeExtractionCount = 0;
+const MAX_CONCURRENT_EXTRACTIONS = 1;
+const recentExtractions = new Map(); // key -> timestamp
+
+/**
+ * POST /api/exams/extract-mcqs
+ * Extracts MCQs from uploaded PDF file buffer.
+ */
+async function extractMCQs(req, res) {
+  const file = req.file || (req.files && req.files[0]);
+  if (!file) {
+    return res.status(400).json({ success: false, message: "No file uploaded." });
+  }
+
+  // 1. Guard against concurrent expensive extractions that could exhaust memory
+  if (activeExtractionCount >= MAX_CONCURRENT_EXTRACTIONS) {
+    return res.status(429).json({
+      success: false,
+      message: "An MCQ extraction is already processing. Please wait a few seconds and try again."
+    });
+  }
+
+  // 2. Guard against rapid duplicate submissions (within 10s window)
+  const extractionKey = `${req.user?._id || req.ip}_${file.size}_${file.originalname}`;
+  const now = Date.now();
+  const lastRun = recentExtractions.get(extractionKey);
+  if (lastRun && (now - lastRun) < 10000) {
+    return res.status(429).json({
+      success: false,
+      message: "Duplicate extraction detected. Please wait a moment before re-uploading the same file."
+    });
+  }
+  recentExtractions.set(extractionKey, now);
+  // Clean up old extraction keys
+  if (recentExtractions.size > 50) {
+    for (const [k, v] of recentExtractions) {
+      if (now - v > 60000) recentExtractions.delete(k);
+    }
+  }
+
+  activeExtractionCount++;
+  try {
+    const fileName = (file.originalname || '').toLowerCase();
+    const buffer = file.buffer;
+    let questions = [];
+
+    // A. Handle Excel & CSV Files
+    if (fileName.endsWith('.xlsx') || fileName.endsWith('.xls') || fileName.endsWith('.csv')) {
+      const workbook = xlsx.read(buffer, { type: 'buffer' });
+      const sheetName = workbook.SheetNames[0];
+      const rawRows = xlsx.utils.sheet_to_json(workbook.Sheets[sheetName], { defval: '' });
+
+      questions = rawRows.map((row) => {
+        // Safe key lookup (case-insensitive)
+        const getVal = (keys) => {
+          const foundKey = Object.keys(row).find(k => keys.includes(k.trim().toLowerCase()));
+          return foundKey ? String(row[foundKey]).trim() : '';
+        };
+
+        return {
+          questionText: getVal(['question', 'questiontext', 'question text', 'q']),
+          options: {
+            A: getVal(['optiona', 'option a', 'a']),
+            B: getVal(['optionb', 'option b', 'b']),
+            C: getVal(['optionc', 'option c', 'c']),
+            D: getVal(['optiond', 'option d', 'd']),
+          },
+          correctOption: (getVal(['correctoption', 'correct option', 'answer', 'correct answer']) || 'A').toUpperCase().charAt(0)
+        };
+      }).filter(q => q.questionText !== ''); // Filter empty rows
+    } 
+    // B. Handle Image Files (OCR)
+    else if (fileName.match(/\.(png|jpg|jpeg|webp)$/i)) {
+      // Step 1: Sharp image pre-processing for better OCR accuracy
+      const processedBuffer = await sharp(buffer)
+        .grayscale()
+        .normalize()
+        .sharpen()
+        .toBuffer();
+
+      let ocrText = '';
+      try {
+        const { data: { text } } = await Tesseract.recognize(processedBuffer, 'eng', {
+          tessedit_pageseg_mode: Tesseract.PSM ? Tesseract.PSM.SINGLE_BLOCK : '6'
+        });
+        ocrText = text || '';
+      } catch (ocrError) {
+        console.error('[OCR Error] Tesseract failed:', ocrError.message);
+        ocrText = '';
+      }
+
+      // Step 2: Parse with LLM (if available) or safe local fallback
+      questions = await parseRawTextToMCQs(ocrText);
+    } 
+    // C. Handle PDF Files
+    else if (fileName.endsWith('.pdf')) {
+      const pdfData = await pdfParse(buffer);
+      questions = await parseRawTextToMCQs(pdfData.text);
+    } else {
+      return res.status(400).json({ success: false, message: "Unsupported file extension." });
+    }
+
+    return res.status(200).json({
+      success: true,
+      message: `Successfully extracted ${questions.length} MCQs.`,
+      questions
+    });
+  } catch (error) {
+    console.error("Extraction Error:", error);
+    return res.status(500).json({
+      success: false,
+      message: "Failed to extract questions from file.",
+      error: error.message
+    });
+  } finally {
+    activeExtractionCount--;
+  }
+}
+
+/**
+ * Helper to normalize testType strings into canonical enum values ('grand_mock' | 'course_test').
+ * Automatically handles variations gracefully (e.g. "Course Test", "course-test", "course_test" -> "course_test").
+ * Defaults to "grand_mock" if missing or unrecognized.
+ */
+function normalizeTestType(input) {
+  if (!input || typeof input !== 'string') return 'grand_mock';
+  const clean = input.trim().toLowerCase().replace(/[\s-]+/g, '_');
+  if (clean === 'course_test' || clean === 'course' || clean.includes('course')) {
+    return 'course_test';
+  }
+  if (clean === 'grand_mock' || clean === 'mock' || clean.includes('grand') || clean.includes('mock')) {
+    return 'grand_mock';
+  }
+  return 'grand_mock';
+}
+
+/**
+ * POST /api/exams/grand-mock
+ * Saves the final, verified exam to database.
+ */
+async function createGrandMockExam(req, res) {
+  try {
+    const {
+      title,
+      testType,
+      courseId,
+      moduleId,
+      courseName,
+      moduleName,
+      marksPerQuestion,
+      negativeMark,
+      negativeMarks,
+      negativeMarkPenalty,
+      durationMinutes,
+      totalQuestions,
+      questions,
+    } = req.body;
+
+    const sanitizedCourseId = (courseId !== undefined && courseId !== null && String(courseId).trim() !== '')
+      ? String(courseId).trim()
+      : null;
+
+    let finalTestType;
+    if (testType && typeof testType === 'string' && testType.trim()) {
+      finalTestType = normalizeTestType(testType);
+    } else if (sanitizedCourseId) {
+      finalTestType = 'course_test';
+    } else {
+      finalTestType = 'grand_mock';
+    }
+
+    // Validate required fields
+    if (!title || marksPerQuestion === undefined || durationMinutes === undefined || totalQuestions === undefined || !questions) {
+      return res.status(400).json({
+        success: false,
+        message: 'All fields (title, marksPerQuestion, durationMinutes, totalQuestions, questions) are required.'
+      });
+    }
+
+    const parsedMarksPerQuestion = Number(marksPerQuestion);
+    if (isNaN(parsedMarksPerQuestion) || parsedMarksPerQuestion <= 0) {
+      return res.status(400).json({
+        success: false,
+        message: 'marksPerQuestion must be a positive number.'
+      });
+    }
+
+    const parsedDuration = Number(durationMinutes);
+    if (isNaN(parsedDuration) || parsedDuration <= 0) {
+      return res.status(400).json({
+        success: false,
+        message: 'durationMinutes must be a positive number.'
+      });
+    }
+
+    const parsedTotalQuestions = Number(totalQuestions);
+    if (isNaN(parsedTotalQuestions) || parsedTotalQuestions <= 0) {
+      return res.status(400).json({
+        success: false,
+        message: 'totalQuestions must be a positive number.'
+      });
+    }
+
+    // Validate negative mark parameter (supports negativeMark, negativeMarks, and negativeMarkPenalty)
+    const rawNegMark = negativeMark !== undefined ? negativeMark : (negativeMarks !== undefined ? negativeMarks : negativeMarkPenalty);
+    let parsedNegMark = 0;
+
+    if (rawNegMark !== undefined && rawNegMark !== null && rawNegMark !== '') {
+      parsedNegMark = Number(rawNegMark);
+      if (isNaN(parsedNegMark) || parsedNegMark < 0) {
+        return res.status(400).json({
+          success: false,
+          message: 'negativeMark must be a valid non-negative number.'
+        });
+      }
+    }
+
+    const questionValidation = validateAndSanitizeQuestions(questions);
+    if (!questionValidation.valid) {
+      return res.status(400).json({
+        success: false,
+        message: questionValidation.error
+      });
+    }
+
+    const sanitizedModuleId = (moduleId !== undefined && moduleId !== null && String(moduleId).trim() !== '')
+      ? String(moduleId).trim()
+      : null;
+
+    let sanitizedCourseName = courseName ? String(courseName).trim() : null;
+    let sanitizedModuleName = moduleName ? String(moduleName).trim() : null;
+
+    if (sanitizedCourseId && (!sanitizedCourseName || !sanitizedModuleName)) {
+      try {
+        const isObjId = mongoose.Types.ObjectId.isValid(sanitizedCourseId);
+        const CourseModel = mongoose.models.Course || require('../models/Course');
+        const foundCourse = await CourseModel.findOne({
+          $or: [
+            ...(isObjId ? [{ _id: sanitizedCourseId }] : []),
+            { courseId: sanitizedCourseId }
+          ]
+        }).lean();
+
+        if (foundCourse) {
+          if (!sanitizedCourseName) sanitizedCourseName = foundCourse.courseTitle || foundCourse.title || null;
+          if (sanitizedModuleId && !sanitizedModuleName && Array.isArray(foundCourse.modules)) {
+            const modObj = foundCourse.modules.find(
+              (m) => m && ((m._id && m._id.toString() === sanitizedModuleId) || m.moduleName === sanitizedModuleId)
+            );
+            if (modObj) {
+              sanitizedModuleName = modObj.moduleName || null;
+            }
+          }
+        }
+      } catch (err) {
+        // Optional lookup failure handled gracefully
+      }
+    }
+
+    // Create final exam in database
+    const newExam = await Exam.create({
+      title: title.trim(),
+      testType: finalTestType,
+      courseId: sanitizedCourseId,
+      moduleId: sanitizedModuleId,
+      courseName: sanitizedCourseName,
+      moduleName: sanitizedModuleName,
+      marksPerQuestion: parsedMarksPerQuestion,
+      negativeMark: parsedNegMark,
+      negativeMarkPenalty: parsedNegMark,
+      durationMinutes: parsedDuration,
+      totalQuestions: parsedTotalQuestions,
+      questions: questionValidation.questions
+    });
+
+    return res.status(201).json({
+      success: true,
+      message: 'Exam created successfully.',
+      exam: newExam
+    });
+  } catch (error) {
+    console.error('Error creating Exam:', error);
+    return res.status(500).json({
+      success: false,
+      message: 'Failed to save the Exam to database.',
+      error: error.message
+    });
+  }
+}
+
+/**
+ * GET /api/exams/grand-mock or /api/exams
+ * Fetches exams excluding the questions array for summary list.
+ * Supports /api/exams (returns all exams including course tests for admin test history),
+ * and /api/exams/grand-mock (returns grand mocks only).
+ */
+async function getAllGrandMocks(req, res) {
+  try {
+    const filter = {};
+    const reqQuery = req ? (req.query || {}) : {};
+    const queryType = reqQuery.testType || reqQuery.type;
+    const reqUrl = (req?.originalUrl || req?.baseUrl || req?.path || '').toLowerCase();
+    const isGrandMockEndpoint = reqUrl.includes('grand-mock');
+
+    const cleanQueryType = queryType ? String(queryType).trim().toLowerCase().replace(/[\s-]+/g, '_') : null;
+    const isExplicitCourseTest = cleanQueryType === 'course_test' || cleanQueryType === 'course';
+    const isExplicitGrandMock = cleanQueryType === 'grand_mock' || cleanQueryType === 'mock';
+
+    // Verify student account status if caller is an authenticated student
+    if (req.user && req.user.role === 'student') {
+      const Student = require('../models/Student');
+      const studentId = req.user.studentId || req.user.id || req.user._id;
+      let student = null;
+      if (studentId && mongoose.Types.ObjectId.isValid(studentId)) {
+        student = await Student.findOne({
+          $or: [
+            { _id: new mongoose.Types.ObjectId(studentId) },
+            { userId: new mongoose.Types.ObjectId(studentId) }
+          ]
+        });
+      }
+      if (!student && req.user.email) {
+        student = await Student.findOne({ email: req.user.email.toLowerCase() });
+      }
+
+      if (!student) {
+        return res.status(403).json({ success: false, message: 'Student profile not found.' });
+      }
+      if (student.accountStatus && !['Approved', 'Active', 'approved', 'active'].includes(student.accountStatus) &&
+          student.status && !['Approved', 'Active', 'approved', 'active'].includes(student.status)) {
+        return res.status(403).json({ success: false, message: 'Account is not active or approved.' });
+      }
+    }
+
+    if (isGrandMockEndpoint || isExplicitGrandMock) {
+      // Specifically Grand Mock query
+      filter.testType = { $ne: 'course_test' };
+      filter.$or = [
+        { testType: 'grand_mock' },
+        { testType: { $regex: /^(grand[-_ ]?mock|mock)$/i } },
+        { testType: { $exists: false } },
+        { testType: null },
+        { testType: '' }
+      ];
+    } else if (isExplicitCourseTest) {
+      filter.testType = 'course_test';
+      if (reqQuery.courseId && String(reqQuery.courseId).trim()) {
+        filter.courseId = String(reqQuery.courseId).trim();
+      }
+      // For explicit course tests, apply student course filtering if student
+      if (req.user && req.user.role === 'student') {
+        const Student = require('../models/Student');
+        const studentId = req.user.studentId || req.user.id || req.user._id;
+        let student = null;
+        if (studentId && mongoose.Types.ObjectId.isValid(studentId)) {
+          student = await Student.findOne({
+            $or: [
+              { _id: new mongoose.Types.ObjectId(studentId) },
+              { userId: new mongoose.Types.ObjectId(studentId) }
+            ]
+          });
+        }
+        if (!student && req.user.email) {
+          student = await Student.findOne({ email: req.user.email.toLowerCase() });
+        }
+
+        if (student) {
+          const courseOrFilter = [];
+          if (student.courseRef) {
+            courseOrFilter.push({ courseId: student.courseRef });
+            courseOrFilter.push({ courseId: student.courseRef.toString() });
+          }
+          if (student.courseId) {
+            courseOrFilter.push({ courseId: student.courseId });
+          }
+          if (courseOrFilter.length > 0) {
+            if (!filter.courseId) {
+              filter.$or = courseOrFilter;
+            }
+          } else {
+            return res.status(200).json({ success: true, count: 0, data: [] });
+          }
+        }
+      }
+    } else {
+      // General endpoint (e.g. GET /api/exams - Admin test history listing):
+      // Returns ALL tests including course tests and grand mocks!
+      if (reqQuery.courseId && String(reqQuery.courseId).trim()) {
+        filter.courseId = String(reqQuery.courseId).trim();
+      }
+      if (req.user && req.user.role === 'student') {
+        const Student = require('../models/Student');
+        const studentId = req.user.studentId || req.user.id || req.user._id;
+        let student = null;
+        if (studentId && mongoose.Types.ObjectId.isValid(studentId)) {
+          student = await Student.findOne({
+            $or: [
+              { _id: new mongoose.Types.ObjectId(studentId) },
+              { userId: new mongoose.Types.ObjectId(studentId) }
+            ]
+          });
+        }
+        if (!student && req.user.email) {
+          student = await Student.findOne({ email: req.user.email.toLowerCase() });
+        }
+
+        const courseOrFilter = [];
+        if (student?.courseRef) {
+          courseOrFilter.push({ courseId: student.courseRef });
+          courseOrFilter.push({ courseId: student.courseRef.toString() });
+        }
+        if (student?.courseId) {
+          courseOrFilter.push({ courseId: student.courseId });
+        }
+        filter.$or = [
+          ...courseOrFilter.map(c => ({ ...c, testType: 'course_test' })),
+          { testType: 'grand_mock' },
+          { testType: { $regex: /^(grand[-_ ]?mock|mock)$/i } },
+          { testType: { $exists: false } },
+          { testType: null },
+          { testType: '' }
+        ];
+      }
+      // For Admins / Staff: no testType restriction, so all tests are returned!
+    }
+
+    // Support search query on exam title, courseName & moduleName
+    if (reqQuery.search && typeof reqQuery.search === 'string' && reqQuery.search.trim()) {
+      const searchStr = reqQuery.search.trim().replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      const searchRegex = new RegExp(searchStr, 'i');
+      const searchCondition = [
+        { title: searchRegex },
+        { courseName: searchRegex },
+        { moduleName: searchRegex }
+      ];
+      if (filter.$or) {
+        filter.$and = [{ $or: filter.$or }, { $or: searchCondition }];
+        delete filter.$or;
+      } else {
+        filter.$or = searchCondition;
+      }
+    }
+
+    // ── Pagination ──
+    let page, limit, skip;
+    try {
+      ({ page, limit, skip } = parsePaginationParams(reqQuery, { defaultLimit: 20 }));
+    } catch (pErr) {
+      return res.status(pErr.statusCode || 400).json({ success: false, message: pErr.message });
+    }
+
+    // Run count + paginated find concurrently
+    const [total, exams] = await Promise.all([
+      Exam.countDocuments(filter),
+      Exam.find(filter)
+        .select('-questions')
+        .sort({ createdAt: -1 })
+        .skip(skip)
+        .limit(limit)
+        .lean()
+    ]);
+
+    const examIds = exams.map(e => e._id);
+
+    // Run attendance aggregation, attempt map, and batch course resolution concurrently
+    const TestResult = mongoose.models.TestResult || require('../src/common/models/testResult.model');
+    const candidateIds = req.user ? await getStudentCandidateIds(req.user) : [];
+
+    const [attendanceCounts, attemptMap, courseMap] = await Promise.all([
+      TestResult.aggregate([
+        { $match: { examId: { $in: examIds } } },
+        { $group: { _id: { examId: '$examId', studentId: '$studentId' } } },
+        { $group: { _id: '$_id.examId', studentsAttended: { $sum: 1 } } }
+      ]),
+      candidateIds.length > 0
+        ? getStudentExamAttemptMap(candidateIds, examIds)
+        : Promise.resolve(new Map()),
+      batchResolveCourseNames(exams)
+    ]);
+
+    const countMap = {};
+    attendanceCounts.forEach(item => {
+      countMap[item._id.toString()] = item.studentsAttended;
+    });
+
+    const formattedExams = exams.map((exam) => {
+      let courseName = exam.courseName || null;
+      let moduleName = exam.moduleName || null;
+      const rawCourseId = exam.courseId ? (typeof exam.courseId === 'object' && exam.courseId._id ? exam.courseId._id.toString() : exam.courseId.toString()).trim() : '';
+      const courseIdStr = (rawCourseId && rawCourseId !== 'null' && rawCourseId !== 'undefined') ? rawCourseId : null;
+      const rawModuleId = exam.moduleId ? (typeof exam.moduleId === 'object' && exam.moduleId._id ? exam.moduleId._id.toString() : exam.moduleId.toString()).trim() : '';
+      const moduleIdStr = (rawModuleId && rawModuleId !== 'null' && rawModuleId !== 'undefined') ? rawModuleId : null;
+
+      // Resolve from batch map instead of N+1 query
+      if (courseIdStr && (!courseName || !moduleName)) {
+        const foundCourse = courseMap.get(courseIdStr);
+        if (foundCourse) {
+          if (!courseName) courseName = foundCourse.courseTitle || foundCourse.title || foundCourse.name || null;
+          if (moduleIdStr && !moduleName && Array.isArray(foundCourse.modules)) {
+            const modObj = foundCourse.modules.find(
+              (m) => m && ((m._id && m._id.toString() === moduleIdStr) || m.moduleName === moduleIdStr)
+            );
+            if (modObj) moduleName = modObj.moduleName || null;
+          }
+        }
+      }
+
+      let normalizedType = exam.testType ? normalizeTestType(exam.testType) : null;
+      if (!normalizedType || normalizedType === 'grand_mock') {
+        if (courseIdStr && (exam.testType === 'course_test' || !exam.testType)) {
+          normalizedType = 'course_test';
+        }
+      }
+      if (!normalizedType) {
+        normalizedType = courseIdStr ? 'course_test' : 'grand_mock';
+      }
+
+      const finalCourseName = courseName || exam.courseName || null;
+      const finalModuleName = moduleName || exam.moduleName || null;
+      const resolvedTotalQuestions = exam.totalQuestions !== undefined && exam.totalQuestions !== null
+        ? exam.totalQuestions
+        : (Array.isArray(exam.questions) ? exam.questions.length : 0);
+
+      const resultsForExam = attemptMap.get(exam._id.toString()) || [];
+      const metrics = computeExamAttemptMetrics(exam, resultsForExam);
+
+      return {
+        ...exam,
+        courseId: courseIdStr,
+        courseName: finalCourseName,
+        moduleId: moduleIdStr,
+        moduleName: finalModuleName,
+        testType: normalizedType,
+        totalQuestions: resolvedTotalQuestions,
+        questionsCount: resolvedTotalQuestions,
+        durationMinutes: exam.durationMinutes ?? 0,
+        marksPerQuestion: exam.marksPerQuestion ?? 1,
+        negativeMark: exam.negativeMark !== undefined && exam.negativeMark !== null
+          ? exam.negativeMark
+          : (exam.negativeMarkPenalty ?? 0),
+        negativeMarkPenalty: exam.negativeMarkPenalty !== undefined && exam.negativeMarkPenalty !== null
+          ? exam.negativeMarkPenalty
+          : (exam.negativeMark ?? 0),
+        status: metrics.status,
+        attemptStatus: metrics.attemptStatus,
+        hasAttempted: metrics.hasAttempted,
+        isCompleted: metrics.isCompleted,
+        previousScore: metrics.previousScore,
+        score: metrics.score,
+        lastAttemptedAt: metrics.lastAttemptedAt,
+        submittedAt: metrics.submittedAt,
+        resultId: metrics.resultId,
+        course: courseIdStr ? {
+          _id: courseIdStr,
+          id: courseIdStr,
+          courseTitle: finalCourseName || '',
+          title: finalCourseName || '',
+          name: finalCourseName || ''
+        } : null,
+        studentsAttended: countMap[exam._id.toString()] || 0
+      };
+    });
+
+    const pagination = buildPaginationResponse(total, page, limit);
+
+    return res.status(200).json({
+      success: true,
+      count: formattedExams.length,
+      data: formattedExams,
+      pagination
+    });
+  } catch (error) {
+    console.error('Error fetching Grand Mock exams:', error);
+    return res.status(500).json({
+      success: false,
+      message: 'Failed to fetch Grand Mock exams.',
+      error: error.message
+    });
+  }
+}
+
+
+/**
+ * GET /api/exams/grand-mock/:id
+ * Fetches a single grand mock exam by ID including all questions.
+ */
+async function getGrandMockById(req, res) {
+  try {
+    const { id } = req.params;
+
+    if (!mongoose.Types.ObjectId.isValid(id)) {
+      return res.status(400).json({
+        success: false,
+        message: 'Invalid Exam ID format.'
+      });
+    }
+
+    const exam = await Exam.findById(id).lean();
+
+    if (!exam) {
+      return res.status(404).json({
+        success: false,
+        message: 'Grand Mock Exam not found.'
+      });
+    }
+
+    const { courseName, moduleName } = await resolveCourseAndModuleNames(exam);
+
+    // Add student authorization filter
+    if (req.user && req.user.role === 'student') {
+      const Student = require('../models/Student');
+      const studentId = req.user.studentId || req.user.id || req.user._id;
+      let student = null;
+      if (studentId && mongoose.Types.ObjectId.isValid(studentId)) {
+        student = await Student.findOne({
+          $or: [
+            { _id: new mongoose.Types.ObjectId(studentId) },
+            { userId: new mongoose.Types.ObjectId(studentId) }
+          ]
+        });
+      }
+      if (!student && req.user.email) {
+        student = await Student.findOne({ email: req.user.email.toLowerCase() });
+      }
+      
+      if (!student) {
+        return res.status(403).json({ success: false, message: 'Student profile not found.' });
+      }
+      if (student.accountStatus && !['Approved', 'Active', 'approved', 'active'].includes(student.accountStatus) &&
+          student.status && !['Approved', 'Active', 'approved', 'active'].includes(student.status)) {
+        return res.status(403).json({ success: false, message: 'Account is not active or approved.' });
+      }
+      
+      // Only verify course access if this exam is explicitly a course test
+      if (exam.courseId && normalizeTestType(exam.testType) === 'course_test') {
+        const hasAccess = await verifyStudentCourseAccess(req.user, exam.courseId);
+        if (!hasAccess) {
+          return res.status(403).json({ success: false, message: 'You are not authorized to access this exam.' });
+        }
+      }
+    }
+
+    const rawCourseId = exam.courseId ? (typeof exam.courseId === 'object' && exam.courseId._id ? exam.courseId._id.toString() : exam.courseId.toString()).trim() : '';
+    const courseIdStr = (rawCourseId && rawCourseId !== 'null' && rawCourseId !== 'undefined') ? rawCourseId : null;
+    const rawModuleId = exam.moduleId ? (typeof exam.moduleId === 'object' && exam.moduleId._id ? exam.moduleId._id.toString() : exam.moduleId.toString()).trim() : '';
+    const moduleIdStr = (rawModuleId && rawModuleId !== 'null' && rawModuleId !== 'undefined') ? rawModuleId : null;
+
+    let normalizedType = exam.testType ? normalizeTestType(exam.testType) : null;
+    if (!normalizedType || normalizedType === 'grand_mock') {
+      if (courseIdStr && (exam.testType === 'course_test' || !exam.testType)) {
+        normalizedType = 'course_test';
+      }
+    }
+    if (!normalizedType) {
+      normalizedType = courseIdStr ? 'course_test' : 'grand_mock';
+    }
+
+    const finalCourseName = courseName || exam.courseName || null;
+    const finalModuleName = moduleName || exam.moduleName || null;
+    const resolvedTotalQuestions = exam.totalQuestions !== undefined && exam.totalQuestions !== null
+      ? exam.totalQuestions
+      : (Array.isArray(exam.questions) ? exam.questions.length : 0);
+
+    const formattedQuestions = (exam.questions || []).map(q => {
+      const cOpt = q.correctOption ? q.correctOption.toString().toUpperCase() : null;
+      return {
+        ...q,
+        correctAnswer: cOpt,
+        correctOptionText: q.options && cOpt ? q.options[cOpt] : null,
+        correctAnswerText: q.options && cOpt ? q.options[cOpt] : null
+      };
+    });
+
+    const candidateIds = req.user ? await getStudentCandidateIds(req.user) : [];
+    const attemptMap = candidateIds.length > 0
+      ? await getStudentExamAttemptMap(candidateIds, [exam._id])
+      : new Map();
+    const resultsForExam = attemptMap.get(exam._id.toString()) || [];
+    const metrics = computeExamAttemptMetrics(exam, resultsForExam);
+
+    const formattedExam = {
+      ...exam,
+      questions: formattedQuestions,
+      courseId: courseIdStr,
+      courseName: finalCourseName,
+      moduleId: moduleIdStr,
+      moduleName: finalModuleName,
+      testType: normalizedType,
+      totalQuestions: resolvedTotalQuestions,
+      questionsCount: resolvedTotalQuestions,
+      durationMinutes: exam.durationMinutes ?? 0,
+      marksPerQuestion: exam.marksPerQuestion ?? 1,
+      negativeMark: exam.negativeMark !== undefined && exam.negativeMark !== null
+        ? exam.negativeMark
+        : (exam.negativeMarkPenalty ?? 0),
+      negativeMarkPenalty: exam.negativeMarkPenalty !== undefined && exam.negativeMarkPenalty !== null
+        ? exam.negativeMarkPenalty
+        : (exam.negativeMark ?? 0),
+      status: metrics.status,
+      attemptStatus: metrics.attemptStatus,
+      hasAttempted: metrics.hasAttempted,
+      isCompleted: metrics.isCompleted,
+      previousScore: metrics.previousScore,
+      score: metrics.score,
+      lastAttemptedAt: metrics.lastAttemptedAt,
+      submittedAt: metrics.submittedAt,
+      resultId: metrics.resultId,
+      course: courseIdStr ? {
+        _id: courseIdStr,
+        id: courseIdStr,
+        courseTitle: finalCourseName || '',
+        title: finalCourseName || '',
+        name: finalCourseName || ''
+      } : null
+    };
+
+    return res.status(200).json({
+      success: true,
+      data: formattedExam
+    });
+  } catch (error) {
+    console.error('Error fetching Grand Mock Exam by ID:', error);
+    return res.status(500).json({
+      success: false,
+      message: 'Failed to fetch Grand Mock Exam details.',
+      error: error.message
+    });
+  }
+}
+
+/**
+ * PUT /api/exams/grand-mock/:id
+ * Admin: Update an existing Grand Mock Exam's metadata and/or questions.
+ * All fields are optional — only the fields sent in the body will be updated.
+ */
+async function updateGrandMockExam(req, res) {
+  try {
+    const { id } = req.params;
+
+    if (!mongoose.Types.ObjectId.isValid(id)) {
+      return res.status(400).json({
+        success: false,
+        message: 'Invalid Exam ID format.'
+      });
+    }
+
+    const exam = await Exam.findById(id);
+    if (!exam) {
+      return res.status(404).json({
+        success: false,
+        message: 'Grand Mock Exam not found.'
+      });
+    }
+
+    const updates = {};
+
+    if (req.body.title !== undefined) updates.title = req.body.title.trim();
+    if (req.body.testType !== undefined && req.body.testType !== null && req.body.testType !== '') {
+      updates.testType = normalizeTestType(req.body.testType);
+    }
+    if (req.body.courseId !== undefined) {
+      updates.courseId = (req.body.courseId !== null && String(req.body.courseId).trim() !== '')
+        ? String(req.body.courseId).trim()
+        : null;
+    }
+    if (req.body.moduleId !== undefined) {
+      updates.moduleId = (req.body.moduleId !== null && String(req.body.moduleId).trim() !== '')
+        ? String(req.body.moduleId).trim()
+        : null;
+    }
+    if (req.body.courseName !== undefined) {
+      updates.courseName = req.body.courseName ? String(req.body.courseName).trim() : null;
+    }
+    if (req.body.moduleName !== undefined) {
+      updates.moduleName = req.body.moduleName ? String(req.body.moduleName).trim() : null;
+    }
+    if (req.body.courseId !== undefined) {
+      updates.courseId = req.body.courseId || null;
+    }
+    if (req.body.marksPerQuestion !== undefined) {
+      const parsedMarks = Number(req.body.marksPerQuestion);
+      if (isNaN(parsedMarks) || parsedMarks <= 0) {
+        return res.status(400).json({ success: false, message: 'marksPerQuestion must be a positive number.' });
+      }
+      updates.marksPerQuestion = parsedMarks;
+    }
+    if (req.body.durationMinutes !== undefined) {
+      const parsedDuration = Number(req.body.durationMinutes);
+      if (isNaN(parsedDuration) || parsedDuration <= 0) {
+        return res.status(400).json({ success: false, message: 'durationMinutes must be a positive number.' });
+      }
+      updates.durationMinutes = parsedDuration;
+    }
+    if (req.body.totalQuestions !== undefined) {
+      const parsedTotal = Number(req.body.totalQuestions);
+      if (isNaN(parsedTotal) || parsedTotal <= 0) {
+        return res.status(400).json({ success: false, message: 'totalQuestions must be a positive number.' });
+      }
+      updates.totalQuestions = parsedTotal;
+    }
+
+    const rawNegMark = req.body.negativeMark !== undefined
+      ? req.body.negativeMark
+      : (req.body.negativeMarks !== undefined ? req.body.negativeMarks : req.body.negativeMarkPenalty);
+
+    if (rawNegMark !== undefined && rawNegMark !== null && rawNegMark !== '') {
+      const parsedNegMark = Number(rawNegMark);
+      if (isNaN(parsedNegMark) || parsedNegMark < 0) {
+        return res.status(400).json({
+          success: false,
+          message: 'negativeMark must be a valid non-negative number.'
+        });
+      }
+      updates.negativeMark = parsedNegMark;
+      updates.negativeMarkPenalty = parsedNegMark;
+    }
+
+    if (req.body.questions !== undefined) {
+      const questionValidation = validateAndSanitizeQuestions(req.body.questions);
+      if (!questionValidation.valid) {
+        return res.status(400).json({
+          success: false,
+          message: questionValidation.error
+        });
+      }
+      updates.questions = questionValidation.questions;
+      if (!updates.totalQuestions && !req.body.totalQuestions) {
+        updates.totalQuestions = questionValidation.questions.length;
+      }
+    }
+
+    if (Object.keys(updates).length === 0) {
+      return res.status(400).json({
+        success: false,
+        message: 'No valid fields provided for update.'
+      });
+    }
+
+    const updatedExam = await Exam.findByIdAndUpdate(
+      id,
+      { $set: updates },
+      { new: true, runValidators: true }
+    );
+
+    return res.status(200).json({
+      success: true,
+      message: 'Grand Mock Exam updated successfully.',
+      exam: updatedExam
+    });
+  } catch (error) {
+    console.error('Error updating Grand Mock Exam:', error);
+    return res.status(500).json({
+      success: false,
+      message: 'Failed to update Grand Mock Exam.',
+      error: error.message
+    });
+  }
+}
+
+/**
+ * DELETE /api/exams/:id or /api/exams/grand-mock/:id
+ * Admin: Permanently delete a Grand Mock Exam from the database.
+ */
+async function deleteGrandMockExam(req, res) {
+  try {
+    const { id } = req.params;
+
+    if (!mongoose.Types.ObjectId.isValid(id)) {
+      return res.status(400).json({
+        success: false,
+        message: 'Invalid Exam ID format.'
+      });
+    }
+
+    const exam = await Exam.findByIdAndDelete(id);
+
+    if (!exam) {
+      return res.status(404).json({
+        success: false,
+        message: 'Exam not found.'
+      });
+    }
+
+    // Clean up any associated test results asynchronously
+    try {
+      const TestResult = mongoose.models.TestResult || require('../src/common/models/testResult.model');
+      if (TestResult) {
+        await TestResult.deleteMany({ examId: id });
+      }
+    } catch (cleanupError) {
+      console.warn('[deleteExam] Could not clean up associated test results:', cleanupError.message);
+    }
+
+    return res.status(200).json({
+      success: true,
+      message: 'Exam deleted successfully.',
+      deletedExamId: id,
+      data: exam
+    });
+  } catch (error) {
+    console.error('Error deleting Exam:', error);
+    return res.status(500).json({
+      success: false,
+      message: 'Failed to delete Exam.',
+      error: error.message
+    });
+  }
+}
+
+/**
+ * POST /api/exams/:id/questions
+ * Add a single multi-format question to an existing exam.
+ */
+async function addQuestionToExam(req, res) {
+  try {
+    const { id } = req.params;
+    if (!mongoose.Types.ObjectId.isValid(id)) {
+      return res.status(400).json({ success: false, message: 'Invalid Exam ID format.' });
+    }
+
+    const exam = await Exam.findById(id);
+    if (!exam) {
+      return res.status(404).json({ success: false, message: 'Grand Mock Exam not found.' });
+    }
+
+    const validation = validateAndSanitizeQuestion(req.body, exam.questions.length);
+    if (!validation.valid) {
+      return res.status(400).json({ success: false, message: validation.error });
+    }
+
+    exam.questions.push(validation.question);
+    exam.totalQuestions = exam.questions.length;
+    await exam.save();
+
+    const addedQuestion = exam.questions[exam.questions.length - 1];
+
+    return res.status(201).json({
+      success: true,
+      message: 'Question added successfully.',
+      question: addedQuestion,
+      totalQuestions: exam.totalQuestions
+    });
+  } catch (error) {
+    console.error('Error adding question to exam:', error);
+    return res.status(500).json({ success: false, message: 'Failed to add question to exam.', error: error.message });
+  }
+}
+
+/**
+ * PUT /api/exams/:id/questions/:questionId
+ * Edit a specific question within an exam.
+ */
+async function updateQuestionInExam(req, res) {
+  try {
+    const { id, questionId } = req.params;
+    if (!mongoose.Types.ObjectId.isValid(id) || !mongoose.Types.ObjectId.isValid(questionId)) {
+      return res.status(400).json({ success: false, message: 'Invalid Exam ID or Question ID format.' });
+    }
+
+    const exam = await Exam.findById(id);
+    if (!exam) {
+      return res.status(404).json({ success: false, message: 'Grand Mock Exam not found.' });
+    }
+
+    const qSubDoc = exam.questions.id(questionId);
+    if (!qSubDoc) {
+      return res.status(404).json({ success: false, message: 'Question not found in exam.' });
+    }
+
+    const mergedInput = {
+      ...qSubDoc.toObject(),
+      ...req.body
+    };
+
+    const validation = validateAndSanitizeQuestion(mergedInput);
+    if (!validation.valid) {
+      return res.status(400).json({ success: false, message: validation.error });
+    }
+
+    qSubDoc.questionText = validation.question.questionText;
+    qSubDoc.options = validation.question.options;
+    qSubDoc.correctOption = validation.question.correctOption;
+    qSubDoc.passage = validation.question.passage;
+    qSubDoc.imageUrl = validation.question.imageUrl;
+    qSubDoc.tableData = validation.question.tableData;
+    qSubDoc.explanation = validation.question.explanation;
+
+    await exam.save();
+
+    return res.status(200).json({
+      success: true,
+      message: 'Question updated successfully.',
+      question: qSubDoc
+    });
+  } catch (error) {
+    console.error('Error updating question in exam:', error);
+    return res.status(500).json({ success: false, message: 'Failed to update question in exam.', error: error.message });
+  }
+}
+
+/**
+ * DELETE /api/exams/:id/questions/:questionId
+ * Delete a specific question from an exam.
+ */
+async function deleteQuestionFromExam(req, res) {
+  try {
+    const { id, questionId } = req.params;
+    if (!mongoose.Types.ObjectId.isValid(id) || !mongoose.Types.ObjectId.isValid(questionId)) {
+      return res.status(400).json({ success: false, message: 'Invalid Exam ID or Question ID format.' });
+    }
+
+    const exam = await Exam.findById(id);
+    if (!exam) {
+      return res.status(404).json({ success: false, message: 'Grand Mock Exam not found.' });
+    }
+
+    const qSubDoc = exam.questions.id(questionId);
+    if (!qSubDoc) {
+      return res.status(404).json({ success: false, message: 'Question not found in exam.' });
+    }
+
+    qSubDoc.deleteOne();
+    exam.totalQuestions = exam.questions.length;
+    await exam.save();
+
+    return res.status(200).json({
+      success: true,
+      message: 'Question deleted successfully.',
+      totalQuestions: exam.totalQuestions
+    });
+  } catch (error) {
+    console.error('Error deleting question from exam:', error);
+    return res.status(500).json({ success: false, message: 'Failed to delete question from exam.', error: error.message });
+  }
+}
+
+/**
+ * GET /api/v1/admin/exams/:examId/results
+ * Fetches student results/submissions for a specific exam with pagination and search.
+ * Enforces admin authorization.
+ */
+async function getAdminExamResults(req, res) {
+  try {
+    const rawExamId = req.params.examId || req.params.id;
+    const cleanExamId = (rawExamId || '').trim();
+
+    if (!cleanExamId || !mongoose.Types.ObjectId.isValid(cleanExamId)) {
+      return res.status(400).json({
+        success: false,
+        message: 'Invalid Exam ID format'
+      });
+    }
+
+    const exam = await Exam.findById(cleanExamId)
+      .select('_id title testType courseId moduleId marksPerQuestion totalQuestions durationMinutes')
+      .lean();
+
+    if (!exam) {
+      return res.status(404).json({
+        success: false,
+        message: 'Exam not found'
+      });
+    }
+
+    // Parse pagination parameters (safe defaults: page=1, limit=20, maxLimit=100)
+    let page, limit, skip;
+    try {
+      ({ page, limit, skip } = parsePaginationParams(req.query, { defaultLimit: 20, maxLimit: 100 }));
+    } catch (pErr) {
+      return res.status(pErr.statusCode || 400).json({
+        success: false,
+        message: pErr.message
+      });
+    }
+
+    const TestResult = mongoose.models.TestResult || require('../src/common/models/testResult.model');
+    const StudentModel = mongoose.models.Student || require('../models/Student');
+    const UserModel = mongoose.models.User || require('../models/User');
+
+    const filter = { examId: exam._id };
+
+    // Search filter (by student name or email)
+    const searchQuery = req.query.search;
+    if (searchQuery && typeof searchQuery === 'string' && searchQuery.trim()) {
+      const cleanSearch = searchQuery.trim();
+      const escaped = cleanSearch.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      const searchRegex = new RegExp(escaped, 'i');
+
+      const [matchingStudents, matchingUsers] = await Promise.all([
+        StudentModel.find({
+          $or: [{ name: searchRegex }, { email: searchRegex }]
+        }).select('_id userId').lean(),
+        UserModel.find({
+          $or: [{ name: searchRegex }, { email: searchRegex }]
+        }).select('_id').lean()
+      ]);
+
+      const matchingCandidateIds = new Set();
+      matchingStudents.forEach((s) => {
+        if (s._id) matchingCandidateIds.add(s._id.toString());
+        if (s.userId) matchingCandidateIds.add(s.userId.toString());
+      });
+      matchingUsers.forEach((u) => {
+        if (u._id) matchingCandidateIds.add(u._id.toString());
+      });
+
+      const candidateObjectIds = Array.from(matchingCandidateIds)
+        .filter((id) => mongoose.Types.ObjectId.isValid(id))
+        .map((id) => new mongoose.Types.ObjectId(id));
+
+      if (candidateObjectIds.length === 0) {
+        const pagination = buildPaginationResponse(0, page, limit);
+        return res.status(200).json({
+          success: true,
+          message: 'Exam results retrieved successfully',
+          data: [],
+          results: [],
+          pagination,
+          total: 0
+        });
+      }
+
+      filter.studentId = { $in: candidateObjectIds };
+    }
+
+    const [total, rawResults] = await Promise.all([
+      TestResult.countDocuments(filter),
+      TestResult.find(filter)
+        .select('_id studentId examId score totalMarks totalAttempted totalCorrect totalWrong unansweredQuestions positiveMarks negativeMarks maximumScore percentage status createdAt updatedAt')
+        .sort({ score: -1, createdAt: -1 })
+        .skip(skip)
+        .limit(limit)
+        .lean()
+    ]);
+
+    if (!rawResults || rawResults.length === 0) {
+      const pagination = buildPaginationResponse(total, page, limit);
+      return res.status(200).json({
+        success: true,
+        message: 'Exam results retrieved successfully',
+        data: [],
+        results: [],
+        pagination,
+        total
+      });
+    }
+
+    // Batch resolve Student / User details for the page
+    const studentIds = rawResults
+      .map((r) => r.studentId)
+      .filter((id) => id && mongoose.Types.ObjectId.isValid(id))
+      .map((id) => new mongoose.Types.ObjectId(id));
+
+    const [studentsById, studentsByUserId, usersById] = await Promise.all([
+      StudentModel.find({ _id: { $in: studentIds } }).select('_id userId name email phone').lean(),
+      StudentModel.find({ userId: { $in: studentIds } }).select('_id userId name email phone').lean(),
+      UserModel.find({ _id: { $in: studentIds } }).select('_id name email phone').lean()
+    ]);
+
+    const studentMap = new Map();
+    studentsById.forEach((s) => studentMap.set(s._id.toString(), s));
+    studentsByUserId.forEach((s) => {
+      if (s.userId) studentMap.set(s.userId.toString(), s);
+    });
+
+    const userMap = new Map();
+    usersById.forEach((u) => userMap.set(u._id.toString(), u));
+
+    const formattedResults = rawResults.map((result) => {
+      const sIdStr = result.studentId ? result.studentId.toString() : '';
+      const matchedStudent = studentMap.get(sIdStr);
+      const matchedUser = userMap.get(sIdStr);
+
+      const studentName = matchedStudent?.name || matchedUser?.name || 'Student';
+      const studentEmail = matchedStudent?.email || matchedUser?.email || '';
+
+      const score = typeof result.score === 'number' ? result.score : 0;
+      const totalMarks = typeof result.totalMarks === 'number' && result.totalMarks > 0
+        ? result.totalMarks
+        : ((exam.totalQuestions && exam.marksPerQuestion) ? exam.totalQuestions * exam.marksPerQuestion : 0);
+
+      const percentage = typeof result.percentage === 'number'
+        ? result.percentage
+        : (totalMarks > 0 ? Math.round((score / totalMarks) * 10000) / 100 : 0);
+
+      const correct = typeof result.totalCorrect === 'number' ? result.totalCorrect : 0;
+      const wrong = typeof result.totalWrong === 'number' ? result.totalWrong : 0;
+      const unanswered = typeof result.unansweredQuestions === 'number' ? result.unansweredQuestions : 0;
+      const totalAttempted = typeof result.totalAttempted === 'number' ? result.totalAttempted : (correct + wrong);
+      const status = result.status || 'Completed';
+
+      return {
+        _id: result._id.toString(),
+        id: result._id.toString(),
+        resultId: result._id.toString(),
+        examId: exam._id.toString(),
+        studentId: sIdStr,
+        studentName,
+        studentEmail,
+        name: studentName,
+        email: studentEmail,
+        student: {
+          _id: sIdStr,
+          id: sIdStr,
+          name: studentName,
+          email: studentEmail
+        },
+        score,
+        marksObtained: score,
+        totalScore: score,
+        totalMarks,
+        maxMarks: totalMarks,
+        percentage,
+        totalAttempted,
+        attempted: totalAttempted,
+        questionsAttempted: totalAttempted,
+        correct,
+        totalCorrect: correct,
+        correctAnswers: correct,
+        wrong,
+        totalWrong: wrong,
+        wrongAnswers: wrong,
+        unanswered,
+        totalUnanswered: unanswered,
+        unansweredQuestions: unanswered,
+        attemptStatus: status,
+        status,
+        submittedAt: result.createdAt ? result.createdAt.toISOString() : null,
+        submitted_at: result.createdAt ? result.createdAt.toISOString() : null,
+        submittedDate: result.createdAt ? result.createdAt.toISOString() : null,
+        createdAt: result.createdAt ? result.createdAt.toISOString() : null
+      };
+    });
+
+    const pagination = buildPaginationResponse(total, page, limit);
+
+    return res.status(200).json({
+      success: true,
+      message: 'Exam results retrieved successfully',
+      data: formattedResults,
+      results: formattedResults,
+      pagination,
+      total
+    });
+  } catch (error) {
+    console.error('Error fetching admin exam results:', error);
+    return res.status(500).json({
+      success: false,
+      message: 'Failed to retrieve exam results.',
+      error: error.message
+    });
+  }
+}
+
+const deleteExam = deleteGrandMockExam;
+const createExam = createGrandMockExam;
+const saveGrandMock = createGrandMockExam;
+const getExamById = getGrandMockById;
+
+module.exports = {
+  extractMCQs,
+  createGrandMockExam,
+  createExam,
+  saveGrandMock,
+  getAllGrandMocks,
+  getGrandMockById,
+  getExamById,
+  updateGrandMockExam,
+  deleteGrandMockExam,
+  deleteExam,
+  addQuestionToExam,
+  updateQuestionInExam,
+  deleteQuestionFromExam,
+  getAdminExamResults,
+  validateAndSanitizeQuestion,
+  validateAndSanitizeQuestions,
+  normalizeTestType,
+  parseRawTextToMCQs,
+  parseMCQText: parseRawTextToMCQs // Exported for test verification
+};
+

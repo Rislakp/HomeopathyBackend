@@ -3,10 +3,9 @@ const bcrypt = require('bcryptjs');
 const Admin = require('../models/admin.model');
 
 const getJwtSecret = () => {
-  return (
-    process.env.JWT_SECRET ||
-    'white_coat_academy_secret_jwt_key_2026_super_secure'
-  );
+  const secret = process.env.JWT_SECRET || (process.env.NODE_ENV !== 'production' ? 'white_coat_academy_secret_jwt_key_2026_super_secure' : undefined);
+  if (!secret) throw new Error('JWT_SECRET is not configured');
+  return secret;
 };
 
 const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
@@ -129,8 +128,22 @@ const adminLogin = async (req, res) => {
       },
       getJwtSecret(),
       {
-        expiresIn: process.env.JWT_EXPIRES_IN || '30d',
+        expiresIn: process.env.JWT_EXPIRES_IN || '15m',
       }
+    );
+
+    const refreshSecret = process.env.JWT_REFRESH_SECRET || (getJwtSecret() + '_refresh');
+    const refreshToken = jwt.sign(
+      {
+        userId: admin._id.toString(),
+        id: admin._id.toString(),
+        adminId: admin._id.toString(),
+        role: adminRole.toLowerCase() === 'superadmin' ? 'superadmin' : 'admin',
+        tokenVersion: admin.tokenVersion || 0,
+        type: 'refresh',
+      },
+      refreshSecret,
+      { expiresIn: process.env.JWT_REFRESH_EXPIRES_IN || '30d' }
     );
 
     // 7. Return admin details (excluding password) and JWT token
@@ -153,8 +166,13 @@ const adminLogin = async (req, res) => {
           role: adminRole,
         },
         token,
+        accessToken: token,
+        refreshToken,
       },
       token,
+      accessToken: token,
+      refreshToken,
+      expiresIn: process.env.JWT_EXPIRES_IN || '15m',
       user: {
         _id: admin._id.toString(),
         id: admin._id.toString(),

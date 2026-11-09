@@ -1,0 +1,2466 @@
+{
+  "courseVideos": [
+    {
+      "courseId": "CRS-000040",
+      "moduleId": "6ac1e3178a32529699cdded8",
+      "lessonId": "6ac1e3b58a32529699cddf0a",
+      "lessonTitle": "INTRODUCTION",
+      "videoUrl": "",
+      "videoS3Key": "videos/1791091513421-cee79365-6193-48da-8210-975a9e7e6a8a-pharmacy-1.mp4",
+      "s3Key": "videos/1791091513421-cee79365-6193-48da-8210-975a9e7e6a8a-pharmacy-1.mp4",
+      "m4vS3Key": "videos/1791091513421-cee79365-6193-48da-8210-975a9e7e6a8a-pharmacy-1_ios.m4v",
+      "m4vConversionStatus": "completed",
+      "videoParts": [
+        {
+          "s3Key": "videos/1791091513421-cee79365-6193-48da-8210-975a9e7e6a8a-pharmacy-1.mp4",
+          "m4vS3Key": "videos/1791091513421-cee79365-6193-48da-8210-975a9e7e6a8a-pharmacy-1_ios.m4v",
+          "url": "",
+          "fileName": "pharmacy-1.mp4",
+          "originalFileName": "pharmacy-1.mp4",
+          "contentType": "",
+          "storageProvider": "s3"
+        }
+      ]
+    },
+    {
+      "courseId": "CRS-000040",
+      "moduleId": "6ac1e3178a32529699cdded8",
+      "lessonId": "6ad2345d1d1d06b448cc81f7",
+      "lessonTitle": "PART 2",
+      "videoUrl": "",
+      "videoS3Key": "videos/1792821074022-ca59de93-427e-4fba-97c9-7a301044c493-PHARMACY-PART-2.mp4",
+      "s3Key": "videos/1792821074022-ca59de93-427e-4fba-97c9-7a301044c493-PHARMACY-PART-2.mp4",
+      "videoParts": [
+        {
+          "s3Key": "videos/1792821074022-ca59de93-427e-4fba-97c9-7a301044c493-PHARMACY-PART-2.mp4",
+          "url": "",
+          "fileName": "PHARMACY PART 2.mp4",
+          "originalFileName": "1792821074022-ca59de93-427e-4fba-97c9-7a301044c493-PHARMACY-PART-2.mp4",
+          "contentType": "video/mp4",
+          "storageProvider": "s3"
+        }
+      ]
+    },
+    {
+      "courseId": "CRS-000040",
+      "moduleId": "6ac1e3178a32529699cdded8",
+      "lessonId": "6ad234c21d1d06b448cc8347",
+      "lessonTitle": "PART 3",
+      "videoUrl": "",
+      "videoS3Key": "videos/1792828847737-77d94ce3-63b3-4a93-a376-b7794f2c13ae-pharmacy-3.mp4",
+      "s3Key": "videos/1792828847737-77d94ce3-63b3-4a93-a376-b7794f2c13ae-pharmacy-3.mp4",
+      "videoParts": [
+        {
+          "s3Key": "videos/1792828847737-77d94ce3-63b3-4a93-a376-b7794f2c13ae-pharmacy-3.mp4",
+          "url": "",
+          "fileName": "pharmacy-3.mp4",
+          "originalFileName": "1792828847737-77d94ce3-63b3-4a93-a376-b7794f2c13ae-pharmacy-3.mp4",
+          "contentType": "video/mp4",
+          "storageProvider": "s3"
+        }
+      ]
+    },
+    {
+      "courseId": "CRS-000040",
+      "moduleId": "6ac1e3178a32529699cdded8",
+      "lessonId": "6ad9c26b1d1d06b448da761b",
+      "lessonTitle": "Part-4",
+      "videoUrl": "",
+      "videoS3Key": "videos/1792655031349-816ceb78-a84d-4f79-86ba-a45f07bdb846-PHARMACY-4.mp4",
+      "s3Key": "videos/1792655031349-816ceb78-a84d-4f79-86ba-a45f07bdb846-PHARMACY-4.mp4",
+      "videoParts": [
+        {
+          "s3Key": "videos/1792655031349-816ceb78-a84d-4f79-86ba-a45f07bdb846-PHARMACY-4.mp4",
+          "url": "",
+          "fileName": "PHARMACY-4.mp4",
+          "originalFileName": "PHARMACY-4.mp4",
+          "contentType": "video/mp4",
+          "storageProvider": "s3"
+        }
+      ]
+    },
+    {
+      "courseId": "CRS-000040",
+      "moduleId": "6ac1e3178a32529699cdded8",
+      "lessonId": "6add86082cea39ee852ada81",
+      "lessonTitle": "PART 5",
+      "videoUrl": "",
+      "videoS3Key": "videos/1792902184026-c4f9d847-f9cc-40d0-8182-12b2ab343dee-pharmacy-5.mp4",
+      "s3Key": "videos/1792902184026-c4f9d847-f9cc-40d0-8182-12b2ab343dee-pharmacy-5.mp4",
+      "videoParts": [
+        {
+          "s3Key": "videos/1792902184026-c4f9d847-f9cc-40d0-8182-12b2ab343dee-pharmacy-5.mp4",
+          "url": "",
+          "fileName": "pharmacy-5.mp4",
+          "originalFileName": "pharmacy-5.mp4",
+          "contentType": "video/mp4",
+          "storageProvider": "s3"
+        }
+      ]
+    },
+    {
+      "courseId": "CRS-000040",
+      "moduleId": "6ac1e3178a32529699cdded8",
+      "lessonId": "6adf190d2cea39ee852c3d07",
+      "lessonTitle": "part-6",
+      "videoUrl": "",
+      "videoS3Key": "videos/1793003835374-fc45a34f-bac7-44ec-b670-31762e816bce-pharmacy-6.mp4",
+      "s3Key": "videos/1793003835374-fc45a34f-bac7-44ec-b670-31762e816bce-pharmacy-6.mp4",
+      "videoParts": [
+        {
+          "s3Key": "videos/1793003835374-fc45a34f-bac7-44ec-b670-31762e816bce-pharmacy-6.mp4",
+          "url": "",
+          "fileName": "pharmacy-6.mp4",
+          "originalFileName": "pharmacy-6.mp4",
+          "contentType": "video/mp4",
+          "storageProvider": "s3"
+        }
+      ]
+    },
+    {
+      "courseId": "CRS-000040",
+      "moduleId": "6ac1e3178a32529699cdded8",
+      "lessonId": "6ae2ff1867d43f51ec22d740",
+      "lessonTitle": "Part-7",
+      "videoUrl": "",
+      "videoS3Key": "videos/1793255216796-2f294651-637d-489b-9c19-23b71593c520-pharmacy-7.mp4",
+      "s3Key": "videos/1793255216796-2f294651-637d-489b-9c19-23b71593c520-pharmacy-7.mp4",
+      "videoParts": [
+        {
+          "s3Key": "videos/1793255216796-2f294651-637d-489b-9c19-23b71593c520-pharmacy-7.mp4",
+          "url": "",
+          "fileName": "pharmacy-7.mp4",
+          "originalFileName": "pharmacy-7.mp4",
+          "contentType": "video/mp4",
+          "storageProvider": "s3"
+        }
+      ]
+    },
+    {
+      "courseId": "CRS-000040",
+      "moduleId": "6ac63f56ed6d8ba441a19c7c",
+      "lessonId": "6ac63f98ed6d8ba441a19cb7",
+      "lessonTitle": "PART 1",
+      "videoUrl": "https://tel.meet/ktg-eikg-sxq?pin=3389651305386",
+      "videoS3Key": "videos/1792162686897-599e9778-19a9-48a9-9769-915fc78de75c-RESPIRATORY-1.webm",
+      "s3Key": "videos/1792162686897-599e9778-19a9-48a9-9769-915fc78de75c-RESPIRATORY-1.webm",
+      "videoParts": [
+        {
+          "s3Key": "videos/1792162686897-599e9778-19a9-48a9-9769-915fc78de75c-RESPIRATORY-1.webm",
+          "url": "",
+          "fileName": "RESPIRATORY 1.webm",
+          "originalFileName": "1792162686897-599e9778-19a9-48a9-9769-915fc78de75c-RESPIRATORY-1.webm",
+          "contentType": "video/webm",
+          "storageProvider": "s3"
+        }
+      ]
+    },
+    {
+      "courseId": "CRS-000040",
+      "moduleId": "6ac63f56ed6d8ba441a19c7c",
+      "lessonId": "6acf7b8ae226c27ca058f2dd",
+      "lessonTitle": "PART 2",
+      "videoUrl": "",
+      "videoS3Key": "videos/1791980638147-fded4ce0-6f6b-4635-8102-e57a4c1921a7-Respiratory-2.mp4",
+      "s3Key": "videos/1791980638147-fded4ce0-6f6b-4635-8102-e57a4c1921a7-Respiratory-2.mp4",
+      "videoParts": [
+        {
+          "s3Key": "videos/1791980638147-fded4ce0-6f6b-4635-8102-e57a4c1921a7-Respiratory-2.mp4",
+          "url": "",
+          "fileName": "Respiratory-2.mp4",
+          "originalFileName": "Respiratory-2.mp4",
+          "contentType": "video/mp4",
+          "storageProvider": "s3"
+        }
+      ]
+    },
+    {
+      "courseId": "CRS-000040",
+      "moduleId": "6ad22eec1d1d06b448cc6c88",
+      "lessonId": "6ad22fd61d1d06b448cc6d00",
+      "lessonTitle": "BTP",
+      "videoUrl": "",
+      "videoS3Key": "videos/1792821032732-810f354a-8343-4794-8026-d910d3c39607-BTP-PART-1.mp4",
+      "s3Key": "videos/1792821032732-810f354a-8343-4794-8026-d910d3c39607-BTP-PART-1.mp4",
+      "videoParts": [
+        {
+          "s3Key": "videos/1792821032732-810f354a-8343-4794-8026-d910d3c39607-BTP-PART-1.mp4",
+          "url": "",
+          "fileName": "BTP PART 1.mp4",
+          "originalFileName": "1792821032732-810f354a-8343-4794-8026-d910d3c39607-BTP-PART-1.mp4",
+          "contentType": "video/mp4",
+          "storageProvider": "s3"
+        }
+      ]
+    },
+    {
+      "courseId": "CRS-000040",
+      "moduleId": "6ad22eec1d1d06b448cc6c88",
+      "lessonId": "6ad4c0601d1d06b448ce3785",
+      "lessonTitle": "BTP",
+      "videoUrl": "",
+      "videoS3Key": "videos/1792510679227-16378318-dddd-4d1f-be54-dc442132d434-BTP-2.mp4",
+      "s3Key": "videos/1792510679227-16378318-dddd-4d1f-be54-dc442132d434-BTP-2.mp4",
+      "videoParts": [
+        {
+          "s3Key": "videos/1792510679227-16378318-dddd-4d1f-be54-dc442132d434-BTP-2.mp4",
+          "url": "",
+          "fileName": "BTP-2.mp4",
+          "originalFileName": "BTP-2.mp4",
+          "contentType": "video/mp4",
+          "storageProvider": "s3"
+        }
+      ]
+    },
+    {
+      "courseId": "CRS-000040",
+      "moduleId": "6ad22eec1d1d06b448cc6c88",
+      "lessonId": "6ae5a6b0b76cb62502b8bfef",
+      "lessonTitle": "KENT-Mind-Part-1",
+      "videoUrl": "",
+      "videoS3Key": "videos/1793433504166-de026f00-0295-4a8d-af68-fad7e6ee50bd-kent-mind-1.mp4",
+      "s3Key": "videos/1793433504166-de026f00-0295-4a8d-af68-fad7e6ee50bd-kent-mind-1.mp4",
+      "videoParts": [
+        {
+          "s3Key": "videos/1793433504166-de026f00-0295-4a8d-af68-fad7e6ee50bd-kent-mind-1.mp4",
+          "url": "",
+          "fileName": "kent-mind-1.mp4",
+          "originalFileName": "1793433504166-de026f00-0295-4a8d-af68-fad7e6ee50bd-kent-mind-1.mp4",
+          "contentType": "video/mp4",
+          "storageProvider": "s3"
+        }
+      ]
+    },
+    {
+      "courseId": "CRS-000040",
+      "moduleId": "6ad22eec1d1d06b448cc6c88",
+      "lessonId": "6ae73f8bb76cb62502ba496f",
+      "lessonTitle": "KENT-MIND-Part-2",
+      "videoUrl": "",
+      "videoS3Key": "videos/1793533970738-99b8a0b7-d875-4229-83ac-b56148efa61b-kent-mind-2.mp4",
+      "s3Key": "videos/1793533970738-99b8a0b7-d875-4229-83ac-b56148efa61b-kent-mind-2.mp4",
+      "videoParts": [
+        {
+          "s3Key": "videos/1793533970738-99b8a0b7-d875-4229-83ac-b56148efa61b-kent-mind-2.mp4",
+          "url": "",
+          "fileName": "kent-mind-2.mp4",
+          "originalFileName": "1793533970738-99b8a0b7-d875-4229-83ac-b56148efa61b-kent-mind-2.mp4",
+          "contentType": "video/mp4",
+          "storageProvider": "s3"
+        }
+      ]
+    },
+    {
+      "courseId": "CRS-000041",
+      "moduleId": "6ac1e4048a32529699cddf5c",
+      "lessonId": "6ac1e4b68a32529699cddf6e",
+      "lessonTitle": "INTRODUCTION",
+      "videoUrl": "",
+      "videoS3Key": "videos/1791091749307-3959ce23-2419-44c5-a007-a20ec5dc1721-pharmacy-1.mp4",
+      "s3Key": "videos/1791091749307-3959ce23-2419-44c5-a007-a20ec5dc1721-pharmacy-1.mp4",
+      "videoParts": [
+        {
+          "s3Key": "videos/1791091749307-3959ce23-2419-44c5-a007-a20ec5dc1721-pharmacy-1.mp4",
+          "url": "",
+          "fileName": "pharmacy-1.mp4",
+          "originalFileName": "pharmacy-1.mp4",
+          "contentType": "",
+          "storageProvider": "s3"
+        }
+      ]
+    },
+    {
+      "courseId": "CRS-000041",
+      "moduleId": "6ac1e4048a32529699cddf5c",
+      "lessonId": "6ad215ce1d1d06b448cc63a6",
+      "lessonTitle": "PART 2",
+      "videoUrl": "",
+      "videoS3Key": "videos/1792817297402-e2b60177-48e6-4b30-8e2e-6fb0352fa61d-PHARMACY-PART-2.mp4",
+      "s3Key": "videos/1792817297402-e2b60177-48e6-4b30-8e2e-6fb0352fa61d-PHARMACY-PART-2.mp4",
+      "videoParts": [
+        {
+          "s3Key": "videos/1792817297402-e2b60177-48e6-4b30-8e2e-6fb0352fa61d-PHARMACY-PART-2.mp4",
+          "url": "",
+          "fileName": "PHARMACY PART 2.mp4",
+          "originalFileName": "1792817297402-e2b60177-48e6-4b30-8e2e-6fb0352fa61d-PHARMACY-PART-2.mp4",
+          "contentType": "video/mp4",
+          "storageProvider": "s3"
+        }
+      ]
+    },
+    {
+      "courseId": "CRS-000041",
+      "moduleId": "6ac1e4048a32529699cddf5c",
+      "lessonId": "6ad9a5261d1d06b448d9d0e7",
+      "lessonTitle": "Part 4",
+      "videoUrl": "",
+      "videoS3Key": "videos/1792646336243-cd382b58-b74b-439b-a662-4ee16630dd1e-PHARMACY-4.mp4",
+      "s3Key": "videos/1792646336243-cd382b58-b74b-439b-a662-4ee16630dd1e-PHARMACY-4.mp4",
+      "videoParts": [
+        {
+          "s3Key": "videos/1792646336243-cd382b58-b74b-439b-a662-4ee16630dd1e-PHARMACY-4.mp4",
+          "url": "",
+          "fileName": "PHARMACY-4.mp4",
+          "originalFileName": "PHARMACY-4.mp4",
+          "contentType": "video/mp4",
+          "storageProvider": "s3"
+        }
+      ]
+    },
+    {
+      "courseId": "CRS-000041",
+      "moduleId": "6ac1e4048a32529699cddf5c",
+      "lessonId": "6adba0fd2cea39ee8528c2bf",
+      "lessonTitle": "Part-3",
+      "videoUrl": "",
+      "videoS3Key": "videos/1792777109895-1917218b-2461-4951-a245-438f9b459015-pharmacy-3.mp4",
+      "s3Key": "videos/1792777109895-1917218b-2461-4951-a245-438f9b459015-pharmacy-3.mp4",
+      "videoParts": [
+        {
+          "s3Key": "videos/1792777109895-1917218b-2461-4951-a245-438f9b459015-pharmacy-3.mp4",
+          "url": "",
+          "fileName": "pharmacy-3.mp4",
+          "originalFileName": "pharmacy-3.mp4",
+          "contentType": "video/mp4",
+          "storageProvider": "s3"
+        }
+      ]
+    },
+    {
+      "courseId": "CRS-000041",
+      "moduleId": "6ac1e4048a32529699cddf5c",
+      "lessonId": "6add83352cea39ee852ad586",
+      "lessonTitle": "Part 5",
+      "videoUrl": "",
+      "videoS3Key": "videos/1792901482685-b6f9f03b-2170-4039-80b6-fc503a2d5593-pharmacy-5.mp4",
+      "s3Key": "videos/1792901482685-b6f9f03b-2170-4039-80b6-fc503a2d5593-pharmacy-5.mp4",
+      "videoParts": [
+        {
+          "s3Key": "videos/1792901482685-b6f9f03b-2170-4039-80b6-fc503a2d5593-pharmacy-5.mp4",
+          "url": "",
+          "fileName": "pharmacy-5.mp4",
+          "originalFileName": "pharmacy-5.mp4",
+          "contentType": "video/mp4",
+          "storageProvider": "s3"
+        }
+      ]
+    },
+    {
+      "courseId": "CRS-000041",
+      "moduleId": "6ac1e4048a32529699cddf5c",
+      "lessonId": "6adf08c82cea39ee852c25b0",
+      "lessonTitle": "part-6",
+      "videoUrl": "",
+      "videoS3Key": "videos/1792998461736-a4321c31-bdb1-41eb-97cd-0372a7f9836e-pharmacy-6.mp4",
+      "s3Key": "videos/1792998461736-a4321c31-bdb1-41eb-97cd-0372a7f9836e-pharmacy-6.mp4",
+      "videoParts": [
+        {
+          "s3Key": "videos/1792998461736-a4321c31-bdb1-41eb-97cd-0372a7f9836e-pharmacy-6.mp4",
+          "url": "",
+          "fileName": "pharmacy-6.mp4",
+          "originalFileName": "pharmacy-6.mp4",
+          "contentType": "video/mp4",
+          "storageProvider": "s3"
+        }
+      ]
+    },
+    {
+      "courseId": "CRS-000041",
+      "moduleId": "6ac1e4048a32529699cddf5c",
+      "lessonId": "6ae2eca967d43f51ec2294bb",
+      "lessonTitle": "Part-7",
+      "videoUrl": "",
+      "videoS3Key": "videos/1793254762637-c65ea029-0ee5-49a6-b5ed-053df1092574-pharmacy-7.mp4",
+      "s3Key": "videos/1793254762637-c65ea029-0ee5-49a6-b5ed-053df1092574-pharmacy-7.mp4",
+      "videoParts": [
+        {
+          "s3Key": "videos/1793254762637-c65ea029-0ee5-49a6-b5ed-053df1092574-pharmacy-7.mp4",
+          "url": "",
+          "fileName": "pharmacy-7.mp4",
+          "originalFileName": "pharmacy-7.mp4",
+          "contentType": "video/mp4",
+          "storageProvider": "s3"
+        }
+      ]
+    },
+    {
+      "courseId": "CRS-000041",
+      "moduleId": "6ac63e8ded6d8ba441a19b59",
+      "lessonId": "6ac63ef1ed6d8ba441a19b94",
+      "lessonTitle": "PART 1",
+      "videoUrl": "https://tel.meet/ktg-eikg-sxq?pin=3389651305386",
+      "videoS3Key": "videos/1792113542651-ad796afa-0766-445d-a2d1-6d119438e7cc-screen-capture-4-.mp4",
+      "s3Key": "videos/1792113542651-ad796afa-0766-445d-a2d1-6d119438e7cc-screen-capture-4-.mp4",
+      "videoParts": [
+        {
+          "s3Key": "videos/1792113542651-ad796afa-0766-445d-a2d1-6d119438e7cc-screen-capture-4-.mp4",
+          "url": "",
+          "fileName": "screen-capture (4).mp4",
+          "originalFileName": "1792113542651-ad796afa-0766-445d-a2d1-6d119438e7cc-screen-capture-4-.mp4",
+          "contentType": "video/mp4",
+          "storageProvider": "s3"
+        }
+      ]
+    },
+    {
+      "courseId": "CRS-000041",
+      "moduleId": "6ac63e8ded6d8ba441a19b59",
+      "lessonId": "6acf6cd0e226c27ca058e7de",
+      "lessonTitle": "PART 2",
+      "videoUrl": "",
+      "videoS3Key": "videos/1791978547582-49c099db-c373-4ad1-80f6-d6c44dd87b10-Respiratory-2.mp4",
+      "s3Key": "videos/1791978547582-49c099db-c373-4ad1-80f6-d6c44dd87b10-Respiratory-2.mp4",
+      "videoParts": [
+        {
+          "s3Key": "videos/1791978547582-49c099db-c373-4ad1-80f6-d6c44dd87b10-Respiratory-2.mp4",
+          "url": "",
+          "fileName": "Respiratory-2.mp4",
+          "originalFileName": "Respiratory-2.mp4",
+          "contentType": "video/mp4",
+          "storageProvider": "s3"
+        }
+      ]
+    },
+    {
+      "courseId": "CRS-000041",
+      "moduleId": "6ad22b6d1d1d06b448cc6a1c",
+      "lessonId": "6ad22ddc1d1d06b448cc6acc",
+      "lessonTitle": "BTP",
+      "videoUrl": "",
+      "videoS3Key": "videos/1792819786472-965e766e-b885-47ae-8c47-f2cacbb690d6-BTP-PART-1.mp4",
+      "s3Key": "videos/1792819786472-965e766e-b885-47ae-8c47-f2cacbb690d6-BTP-PART-1.mp4",
+      "videoParts": [
+        {
+          "s3Key": "videos/1792819786472-965e766e-b885-47ae-8c47-f2cacbb690d6-BTP-PART-1.mp4",
+          "url": "",
+          "fileName": "BTP PART 1.mp4",
+          "originalFileName": "1792819786472-965e766e-b885-47ae-8c47-f2cacbb690d6-BTP-PART-1.mp4",
+          "contentType": "video/mp4",
+          "storageProvider": "s3"
+        }
+      ]
+    },
+    {
+      "courseId": "CRS-000041",
+      "moduleId": "6ad22b6d1d1d06b448cc6a1c",
+      "lessonId": "6ad4b9261d1d06b448ce3492",
+      "lessonTitle": "BTP-2",
+      "videoUrl": "",
+      "videoS3Key": "videos/1792510265684-3dbac5f7-2175-4790-ae90-239c9b526677-BTP-2.mp4",
+      "s3Key": "videos/1792510265684-3dbac5f7-2175-4790-ae90-239c9b526677-BTP-2.mp4",
+      "videoParts": [
+        {
+          "s3Key": "videos/1792510265684-3dbac5f7-2175-4790-ae90-239c9b526677-BTP-2.mp4",
+          "url": "",
+          "fileName": "BTP-2.mp4",
+          "originalFileName": "BTP-2.mp4",
+          "contentType": "video/mp4",
+          "storageProvider": "s3"
+        }
+      ]
+    },
+    {
+      "courseId": "CRS-000041",
+      "moduleId": "6ad22b6d1d1d06b448cc6a1c",
+      "lessonId": "6ae59f26b76cb62502b8ac06",
+      "lessonTitle": "KENT-Mind-Part 1",
+      "videoUrl": "",
+      "videoS3Key": "videos/1793432296164-3bccecec-a30c-456f-b81c-04f0adc9a530-kent-mind-1.mp4",
+      "s3Key": "videos/1793432296164-3bccecec-a30c-456f-b81c-04f0adc9a530-kent-mind-1.mp4",
+      "videoParts": [
+        {
+          "s3Key": "videos/1793432296164-3bccecec-a30c-456f-b81c-04f0adc9a530-kent-mind-1.mp4",
+          "url": "",
+          "fileName": "kent-mind-1.mp4",
+          "originalFileName": "1793432296164-3bccecec-a30c-456f-b81c-04f0adc9a530-kent-mind-1.mp4",
+          "contentType": "video/mp4",
+          "storageProvider": "s3"
+        }
+      ]
+    },
+    {
+      "courseId": "CRS-000041",
+      "moduleId": "6ad22b6d1d1d06b448cc6a1c",
+      "lessonId": "6ae63482b76cb62502b9caf3",
+      "lessonTitle": "KENT-MIND-Part-2",
+      "videoUrl": "",
+      "videoS3Key": "videos/1793468811141-c46459ef-2cf6-4548-ac15-91db6b3ef0c6-kent-mind-2.mp4",
+      "s3Key": "videos/1793468811141-c46459ef-2cf6-4548-ac15-91db6b3ef0c6-kent-mind-2.mp4",
+      "videoParts": [
+        {
+          "s3Key": "videos/1793468811141-c46459ef-2cf6-4548-ac15-91db6b3ef0c6-kent-mind-2.mp4",
+          "url": "",
+          "fileName": "kent-mind-2.mp4",
+          "originalFileName": "1793468811141-c46459ef-2cf6-4548-ac15-91db6b3ef0c6-kent-mind-2.mp4",
+          "contentType": "video/mp4",
+          "storageProvider": "s3"
+        }
+      ]
+    },
+    {
+      "courseId": "CRS-000042",
+      "moduleId": "6ac1e13f8a32529699cddde5",
+      "lessonId": "6ac1e24c8a32529699cdde4b",
+      "lessonTitle": "INTRODUCTION",
+      "videoUrl": "",
+      "videoS3Key": "videos/1791091138088-30f17235-16ca-4572-80ae-37832efbbc54-pharmacy-1.mp4",
+      "s3Key": "videos/1791091138088-30f17235-16ca-4572-80ae-37832efbbc54-pharmacy-1.mp4",
+      "videoParts": [
+        {
+          "s3Key": "videos/1791091138088-30f17235-16ca-4572-80ae-37832efbbc54-pharmacy-1.mp4",
+          "url": "",
+          "fileName": "pharmacy-1.mp4",
+          "originalFileName": "pharmacy-1.mp4",
+          "contentType": "",
+          "storageProvider": "s3"
+        }
+      ]
+    },
+    {
+      "courseId": "CRS-000042",
+      "moduleId": "6ac1e13f8a32529699cddde5",
+      "lessonId": "6ad2324d1d1d06b448cc750b",
+      "lessonTitle": "PART 2",
+      "videoUrl": "",
+      "videoS3Key": "videos/1792818027865-f837c06f-960c-4cd6-904d-720d0bad63e9-PHARMACY-PART-2.mp4",
+      "s3Key": "videos/1792818027865-f837c06f-960c-4cd6-904d-720d0bad63e9-PHARMACY-PART-2.mp4",
+      "videoParts": [
+        {
+          "s3Key": "videos/1792818027865-f837c06f-960c-4cd6-904d-720d0bad63e9-PHARMACY-PART-2.mp4",
+          "url": "",
+          "fileName": "PHARMACY PART 2.mp4",
+          "originalFileName": "1792818027865-f837c06f-960c-4cd6-904d-720d0bad63e9-PHARMACY-PART-2.mp4",
+          "contentType": "video/mp4",
+          "storageProvider": "s3"
+        }
+      ]
+    },
+    {
+      "courseId": "CRS-000042",
+      "moduleId": "6ac1e13f8a32529699cddde5",
+      "lessonId": "6ad2332f1d1d06b448cc7a3b",
+      "lessonTitle": "PART 3",
+      "videoUrl": "",
+      "videoS3Key": "videos/1792778942878-d9afb55a-0c68-42e8-8f6a-e5230da8d919-pharmacy-3.mp4",
+      "s3Key": "videos/1792778942878-d9afb55a-0c68-42e8-8f6a-e5230da8d919-pharmacy-3.mp4",
+      "videoParts": [
+        {
+          "s3Key": "videos/1792778942878-d9afb55a-0c68-42e8-8f6a-e5230da8d919-pharmacy-3.mp4",
+          "url": "",
+          "fileName": "pharmacy-3.mp4",
+          "originalFileName": "1792778942878-d9afb55a-0c68-42e8-8f6a-e5230da8d919-pharmacy-3.mp4",
+          "contentType": "video/mp4",
+          "storageProvider": "s3"
+        }
+      ]
+    },
+    {
+      "courseId": "CRS-000042",
+      "moduleId": "6ac1e13f8a32529699cddde5",
+      "lessonId": "6ad9c9aa1d1d06b448da8a99",
+      "lessonTitle": "part-4",
+      "videoUrl": "",
+      "videoS3Key": "videos/1792656200653-bd6ed086-e4d4-4356-9ff7-d35487f204ff-PHARMACY-4.mp4",
+      "s3Key": "videos/1792656200653-bd6ed086-e4d4-4356-9ff7-d35487f204ff-PHARMACY-4.mp4",
+      "videoParts": [
+        {
+          "s3Key": "videos/1792656200653-bd6ed086-e4d4-4356-9ff7-d35487f204ff-PHARMACY-4.mp4",
+          "url": "",
+          "fileName": "PHARMACY-4.mp4",
+          "originalFileName": "PHARMACY-4.mp4",
+          "contentType": "video/mp4",
+          "storageProvider": "s3"
+        }
+      ]
+    },
+    {
+      "courseId": "CRS-000042",
+      "moduleId": "6ac1e13f8a32529699cddde5",
+      "lessonId": "6add85af2cea39ee852ad850",
+      "lessonTitle": "PART 5",
+      "videoUrl": "",
+      "videoS3Key": "videos/1792902075327-24ece0f7-3d32-44b5-a584-ed854e62d94d-pharmacy-5.mp4",
+      "s3Key": "videos/1792902075327-24ece0f7-3d32-44b5-a584-ed854e62d94d-pharmacy-5.mp4",
+      "videoParts": [
+        {
+          "s3Key": "videos/1792902075327-24ece0f7-3d32-44b5-a584-ed854e62d94d-pharmacy-5.mp4",
+          "url": "",
+          "fileName": "pharmacy-5.mp4",
+          "originalFileName": "pharmacy-5.mp4",
+          "contentType": "video/mp4",
+          "storageProvider": "s3"
+        }
+      ]
+    },
+    {
+      "courseId": "CRS-000042",
+      "moduleId": "6ac1e13f8a32529699cddde5",
+      "lessonId": "6adf1afb2cea39ee852c3ed9",
+      "lessonTitle": "part-6",
+      "videoUrl": "",
+      "videoS3Key": "videos/1793004027927-cb155ede-f71b-4cb6-93ca-0c8c59392c4b-pharmacy-6.mp4",
+      "s3Key": "videos/1793004027927-cb155ede-f71b-4cb6-93ca-0c8c59392c4b-pharmacy-6.mp4",
+      "videoParts": [
+        {
+          "s3Key": "videos/1793004027927-cb155ede-f71b-4cb6-93ca-0c8c59392c4b-pharmacy-6.mp4",
+          "url": "",
+          "fileName": "pharmacy-6.mp4",
+          "originalFileName": "pharmacy-6.mp4",
+          "contentType": "video/mp4",
+          "storageProvider": "s3"
+        }
+      ]
+    },
+    {
+      "courseId": "CRS-000042",
+      "moduleId": "6ac1e13f8a32529699cddde5",
+      "lessonId": "6ae43cb1b76cb62502b7cd65",
+      "lessonTitle": "PART 7",
+      "videoUrl": "",
+      "videoS3Key": "videos/1793342203483-c2f8729a-3cf2-4b44-9d5f-61d9e6dcb4ba-pharmacy-7.mp4",
+      "s3Key": "videos/1793342203483-c2f8729a-3cf2-4b44-9d5f-61d9e6dcb4ba-pharmacy-7.mp4",
+      "videoParts": [
+        {
+          "s3Key": "videos/1793342203483-c2f8729a-3cf2-4b44-9d5f-61d9e6dcb4ba-pharmacy-7.mp4",
+          "url": "",
+          "fileName": "pharmacy-7.mp4",
+          "originalFileName": "pharmacy-7.mp4",
+          "contentType": "video/mp4",
+          "storageProvider": "s3"
+        }
+      ]
+    },
+    {
+      "courseId": "CRS-000042",
+      "moduleId": "6ac63fc0ed6d8ba441a19d91",
+      "lessonId": "6ac6407aed6d8ba441a19e0c",
+      "lessonTitle": "PART 1",
+      "videoUrl": "https://tel.meet/ktg-eikg-sxq?pin=3389651305386",
+      "videoS3Key": "videos/1792112959054-1362767c-190c-4b10-bdcf-8bae5d951f1d-screen-capture-4-.mp4",
+      "s3Key": "videos/1792112959054-1362767c-190c-4b10-bdcf-8bae5d951f1d-screen-capture-4-.mp4",
+      "videoParts": [
+        {
+          "s3Key": "videos/1792112959054-1362767c-190c-4b10-bdcf-8bae5d951f1d-screen-capture-4-.mp4",
+          "url": "",
+          "fileName": "screen-capture (4).mp4",
+          "originalFileName": "screen-capture (4).mp4",
+          "contentType": "video/mp4",
+          "storageProvider": "s3"
+        }
+      ]
+    },
+    {
+      "courseId": "CRS-000042",
+      "moduleId": "6ac63fc0ed6d8ba441a19d91",
+      "lessonId": "6acfa27be226c27ca05a28b4",
+      "lessonTitle": "PART 2",
+      "videoUrl": "",
+      "videoS3Key": "videos/1791991130018-c65f6b1d-6b6f-43e0-88db-4988bec08f31-Respiratory-2.mp4",
+      "s3Key": "videos/1791991130018-c65f6b1d-6b6f-43e0-88db-4988bec08f31-Respiratory-2.mp4",
+      "videoParts": [
+        {
+          "s3Key": "videos/1791991130018-c65f6b1d-6b6f-43e0-88db-4988bec08f31-Respiratory-2.mp4",
+          "url": "",
+          "fileName": "Respiratory-2.mp4",
+          "originalFileName": "Respiratory-2.mp4",
+          "contentType": "video/mp4",
+          "storageProvider": "s3"
+        }
+      ]
+    },
+    {
+      "courseId": "CRS-000042",
+      "moduleId": "6ad0264036d74953855e976d",
+      "lessonId": "6ad026d836d74953855e97dd",
+      "lessonTitle": "CNS",
+      "videoUrl": "",
+      "videoS3Key": "videos/1792026215130-04a262c4-07e9-42bb-8d64-a18a0d3368f9-LRR-CNS-LECT-1.mp4",
+      "s3Key": "videos/1792026215130-04a262c4-07e9-42bb-8d64-a18a0d3368f9-LRR-CNS-LECT-1.mp4",
+      "videoParts": [
+        {
+          "s3Key": "videos/1792026215130-04a262c4-07e9-42bb-8d64-a18a0d3368f9-LRR-CNS-LECT-1.mp4",
+          "url": "",
+          "fileName": "LRR CNS LECT 1.mp4",
+          "originalFileName": "1792026215130-04a262c4-07e9-42bb-8d64-a18a0d3368f9-LRR-CNS-LECT-1.mp4",
+          "contentType": "video/mp4",
+          "storageProvider": "s3"
+        }
+      ]
+    },
+    {
+      "courseId": "CRS-000042",
+      "moduleId": "6ad0264036d74953855e976d",
+      "lessonId": "6ad02bc236d74953855e9b09",
+      "lessonTitle": "ENDOCRINOLOGY",
+      "videoUrl": "",
+      "videoS3Key": "videos/1792027431469-36f969dc-d7a9-4dc2-a5db-d2578947afd9-screen-capture-5-.mp4",
+      "s3Key": "videos/1792027431469-36f969dc-d7a9-4dc2-a5db-d2578947afd9-screen-capture-5-.mp4",
+      "videoParts": [
+        {
+          "s3Key": "videos/1792027431469-36f969dc-d7a9-4dc2-a5db-d2578947afd9-screen-capture-5-.mp4",
+          "url": "",
+          "fileName": "screen-capture (5).mp4",
+          "originalFileName": "screen-capture (5).mp4",
+          "contentType": "video/mp4",
+          "storageProvider": "s3"
+        },
+        {
+          "s3Key": "videos/1792122230341-0982806e-083c-49e3-97f1-3ab457075e35-screen-capture-endo-1-.mp4",
+          "url": "",
+          "fileName": "screen-capture - endo (1).mp4",
+          "originalFileName": "screen-capture - endo (1).mp4",
+          "contentType": "video/mp4",
+          "storageProvider": "s3"
+        }
+      ]
+    },
+    {
+      "courseId": "CRS-000042",
+      "moduleId": "6ad0264036d74953855e976d",
+      "lessonId": "6ad0f3d8b3d7f41baf3588e0",
+      "lessonTitle": "SPM",
+      "videoUrl": "",
+      "videoS3Key": "videos/1792077965619-7688e3d5-598a-4f27-ac4c-d06dabc3ddf0-cm.mp4",
+      "s3Key": "videos/1792077965619-7688e3d5-598a-4f27-ac4c-d06dabc3ddf0-cm.mp4",
+      "videoParts": [
+        {
+          "s3Key": "videos/1792077965619-7688e3d5-598a-4f27-ac4c-d06dabc3ddf0-cm.mp4",
+          "url": "",
+          "fileName": "cm.mp4",
+          "originalFileName": "cm.mp4",
+          "contentType": "video/mp4",
+          "storageProvider": "s3"
+        },
+        {
+          "s3Key": "videos/1792115421401-0a96c502-5749-488f-bd18-de48a4378f6a-screen-capture-cm.mp4",
+          "url": "",
+          "fileName": "screen-capture cm.mp4",
+          "originalFileName": "screen-capture cm.mp4",
+          "contentType": "video/mp4",
+          "storageProvider": "s3"
+        },
+        {
+          "s3Key": "videos/1792123269422-ec8dba20-497e-4232-894f-fe97e1eb5265-LRR-CM-1-DEMO.mp4",
+          "url": "",
+          "fileName": "LRR CM 1 DEMO.mp4",
+          "originalFileName": "LRR CM 1 DEMO.mp4",
+          "contentType": "video/mp4",
+          "storageProvider": "s3"
+        }
+      ]
+    },
+    {
+      "courseId": "CRS-000042",
+      "moduleId": "6ad0264036d74953855e976d",
+      "lessonId": "6ad1779fb3d7f41baf35e2e4",
+      "lessonTitle": "REPERTORY 1",
+      "videoUrl": "",
+      "videoS3Key": "videos/1792112100076-0875b876-5f13-448d-83db-e09d87673b31-screen-capture-rep-1.mp4",
+      "s3Key": "videos/1792112100076-0875b876-5f13-448d-83db-e09d87673b31-screen-capture-rep-1.mp4",
+      "videoParts": [
+        {
+          "s3Key": "videos/1792112100076-0875b876-5f13-448d-83db-e09d87673b31-screen-capture-rep-1.mp4",
+          "url": "",
+          "fileName": "screen-capture-  rep 1.mp4",
+          "originalFileName": "screen-capture-  rep 1.mp4",
+          "contentType": "video/mp4",
+          "storageProvider": "s3"
+        },
+        {
+          "s3Key": "videos/1792114265225-810fb2d6-9868-4305-9f29-255322e13e84-screen-capture-rep2.mp4",
+          "url": "",
+          "fileName": "screen-capture-rep2.mp4",
+          "originalFileName": "1792114265225-810fb2d6-9868-4305-9f29-255322e13e84-screen-capture-rep2.mp4",
+          "contentType": "video/mp4",
+          "storageProvider": "s3"
+        },
+        {
+          "s3Key": "videos/1792114463840-30f46479-5d62-40a3-8d6f-7592f8b3dfa1-screen-capture-REP-3.mp4",
+          "url": "",
+          "fileName": "screen-capture-REP 3.mp4",
+          "originalFileName": "1792114463840-30f46479-5d62-40a3-8d6f-7592f8b3dfa1-screen-capture-REP-3.mp4",
+          "contentType": "video/mp4",
+          "storageProvider": "s3"
+        },
+        {
+          "s3Key": "videos/1792114806750-b8cd5cd0-7d1d-45d5-927e-90a1bc2b7c31-screen-capture-rep4.mp4",
+          "url": "",
+          "fileName": "screen-capture rep4.mp4",
+          "originalFileName": "1792114806750-b8cd5cd0-7d1d-45d5-927e-90a1bc2b7c31-screen-capture-rep4.mp4",
+          "contentType": "video/mp4",
+          "storageProvider": "s3"
+        },
+        {
+          "s3Key": "videos/1792115056212-70c43ab1-bcd9-48e8-b0f3-2f489e9d460c-screen-capture-rep-5.mp4",
+          "url": "",
+          "fileName": "screen-capture rep 5.mp4",
+          "originalFileName": "1792115056212-70c43ab1-bcd9-48e8-b0f3-2f489e9d460c-screen-capture-rep-5.mp4",
+          "contentType": "video/mp4",
+          "storageProvider": "s3"
+        }
+      ]
+    },
+    {
+      "courseId": "CRS-000042",
+      "moduleId": "6ad0264036d74953855e976d",
+      "lessonId": "6ad19462b3d7f41baf36aa08",
+      "lessonTitle": "GYNECOLOGY",
+      "videoUrl": "",
+      "videoS3Key": "videos/1792116779532-914d6497-ad12-4cf9-96b3-84ead65f5faf-screen-capture-gyn.mp4",
+      "s3Key": "videos/1792116779532-914d6497-ad12-4cf9-96b3-84ead65f5faf-screen-capture-gyn.mp4",
+      "videoParts": [
+        {
+          "s3Key": "videos/1792116779532-914d6497-ad12-4cf9-96b3-84ead65f5faf-screen-capture-gyn.mp4",
+          "url": "",
+          "fileName": "screen-capture gyn.mp4",
+          "originalFileName": "screen-capture gyn.mp4",
+          "contentType": "video/mp4",
+          "storageProvider": "s3"
+        }
+      ]
+    },
+    {
+      "courseId": "CRS-000042",
+      "moduleId": "6ad0264036d74953855e976d",
+      "lessonId": "6ad19d30b3d7f41baf36ab43",
+      "lessonTitle": "MAT MED",
+      "videoUrl": "",
+      "videoS3Key": "videos/1792119943384-cf4a94b7-ba2c-417d-8c56-06b722b6fb1f-screen-capture-mm.mp4",
+      "s3Key": "videos/1792119943384-cf4a94b7-ba2c-417d-8c56-06b722b6fb1f-screen-capture-mm.mp4",
+      "videoParts": [
+        {
+          "s3Key": "videos/1792119943384-cf4a94b7-ba2c-417d-8c56-06b722b6fb1f-screen-capture-mm.mp4",
+          "url": "",
+          "fileName": "screen-capture mm.mp4",
+          "originalFileName": "1792119943384-cf4a94b7-ba2c-417d-8c56-06b722b6fb1f-screen-capture-mm.mp4",
+          "contentType": "video/mp4",
+          "storageProvider": "s3"
+        }
+      ]
+    },
+    {
+      "courseId": "CRS-000042",
+      "moduleId": "6ad0264036d74953855e976d",
+      "lessonId": "6ad1a9fcb3d7f41baf36b082",
+      "lessonTitle": "DERMA",
+      "videoUrl": "",
+      "videoS3Key": "videos/1792124939100-cdbedaaa-7ec8-41b5-88d8-bf3993c80838-LRR-DERMA.mp4",
+      "s3Key": "videos/1792124939100-cdbedaaa-7ec8-41b5-88d8-bf3993c80838-LRR-DERMA.mp4",
+      "videoParts": [
+        {
+          "s3Key": "videos/1792124939100-cdbedaaa-7ec8-41b5-88d8-bf3993c80838-LRR-DERMA.mp4",
+          "url": "",
+          "fileName": "LRR DERMA.mp4",
+          "originalFileName": "LRR DERMA.mp4",
+          "contentType": "video/mp4",
+          "storageProvider": "s3"
+        }
+      ]
+    },
+    {
+      "courseId": "CRS-000042",
+      "moduleId": "6ad0264036d74953855e976d",
+      "lessonId": "6ad1b3ddb3d7f41baf36b53f",
+      "lessonTitle": "NEPHROLOGY",
+      "videoUrl": "",
+      "videoS3Key": "videos/1792127621557-781f9c3a-349e-443d-ae51-2a70c9434762-LRR-NEPHRO.mp4",
+      "s3Key": "videos/1792127621557-781f9c3a-349e-443d-ae51-2a70c9434762-LRR-NEPHRO.mp4",
+      "videoParts": [
+        {
+          "s3Key": "videos/1792127621557-781f9c3a-349e-443d-ae51-2a70c9434762-LRR-NEPHRO.mp4",
+          "url": "",
+          "fileName": "LRR NEPHRO.mp4",
+          "originalFileName": "LRR NEPHRO.mp4",
+          "contentType": "video/mp4",
+          "storageProvider": "s3"
+        }
+      ]
+    },
+    {
+      "courseId": "CRS-000042",
+      "moduleId": "6ad0264036d74953855e976d",
+      "lessonId": "6ad1ba45b3d7f41baf36ba24",
+      "lessonTitle": "OBSTETRICS",
+      "videoUrl": "",
+      "videoS3Key": "videos/1792129019713-8e654702-b8c2-4362-a94b-13487436012a-LRR-OBS.mp4",
+      "s3Key": "videos/1792129019713-8e654702-b8c2-4362-a94b-13487436012a-LRR-OBS.mp4",
+      "videoParts": [
+        {
+          "s3Key": "videos/1792129019713-8e654702-b8c2-4362-a94b-13487436012a-LRR-OBS.mp4",
+          "url": "",
+          "fileName": "LRR OBS.mp4",
+          "originalFileName": "LRR OBS.mp4",
+          "contentType": "video/mp4",
+          "storageProvider": "s3"
+        },
+        {
+          "s3Key": "videos/1792129626672-48bc0d6a-9307-43d6-a096-a3162a52a460-LRR-OBS-2.mp4",
+          "url": "",
+          "fileName": "LRR OBS-2.mp4",
+          "originalFileName": "LRR OBS-2.mp4",
+          "contentType": "video/mp4",
+          "storageProvider": "s3"
+        }
+      ]
+    },
+    {
+      "courseId": "CRS-000042",
+      "moduleId": "6ad0264036d74953855e976d",
+      "lessonId": "6ad1d7d4a6211373a7f84972",
+      "lessonTitle": "ORGANON",
+      "videoUrl": "",
+      "videoS3Key": "videos/1792136652217-b8e26d3c-215d-442e-8504-d9339f7a1837-LRR-ORGANON-PART-1-1-.mp4",
+      "s3Key": "videos/1792136652217-b8e26d3c-215d-442e-8504-d9339f7a1837-LRR-ORGANON-PART-1-1-.mp4",
+      "videoParts": [
+        {
+          "s3Key": "videos/1792136652217-b8e26d3c-215d-442e-8504-d9339f7a1837-LRR-ORGANON-PART-1-1-.mp4",
+          "url": "",
+          "fileName": "LRR ORGANON PART 1 (1).mp4",
+          "originalFileName": "LRR ORGANON PART 1 (1).mp4",
+          "contentType": "video/mp4",
+          "storageProvider": "s3"
+        },
+        {
+          "s3Key": "videos/1792137195920-2a6367f9-2235-40c3-844a-078575af1b5f-LRR-ORGANON-PT2.mp4",
+          "url": "",
+          "fileName": "LRR ORGANON PT2.mp4",
+          "originalFileName": "LRR ORGANON PT2.mp4",
+          "contentType": "video/mp4",
+          "storageProvider": "s3"
+        }
+      ]
+    },
+    {
+      "courseId": "CRS-000042",
+      "moduleId": "6ad230121d1d06b448cc6eb2",
+      "lessonId": "6ad231461d1d06b448cc7208",
+      "lessonTitle": "BTP",
+      "videoUrl": "",
+      "videoS3Key": "videos/1792822243587-ca9ce537-e16e-4c64-a15c-79ca5c2babc2-BTP-PART-1.mp4",
+      "s3Key": "videos/1792822243587-ca9ce537-e16e-4c64-a15c-79ca5c2babc2-BTP-PART-1.mp4",
+      "videoParts": [
+        {
+          "s3Key": "videos/1792822243587-ca9ce537-e16e-4c64-a15c-79ca5c2babc2-BTP-PART-1.mp4",
+          "url": "",
+          "fileName": "BTP PART 1.mp4",
+          "originalFileName": "1792822243587-ca9ce537-e16e-4c64-a15c-79ca5c2babc2-BTP-PART-1.mp4",
+          "contentType": "video/mp4",
+          "storageProvider": "s3"
+        }
+      ]
+    },
+    {
+      "courseId": "CRS-000042",
+      "moduleId": "6ad230121d1d06b448cc6eb2",
+      "lessonId": "6ad4cc871d1d06b448ce3b25",
+      "lessonTitle": "BTP-2",
+      "videoUrl": "",
+      "videoS3Key": "videos/1792510757212-f794c332-2c8e-4daa-bf1b-1f94ca1c046a-BTP-2.mp4",
+      "s3Key": "videos/1792510757212-f794c332-2c8e-4daa-bf1b-1f94ca1c046a-BTP-2.mp4",
+      "videoParts": [
+        {
+          "s3Key": "videos/1792510757212-f794c332-2c8e-4daa-bf1b-1f94ca1c046a-BTP-2.mp4",
+          "url": "",
+          "fileName": "BTP-2.mp4",
+          "originalFileName": "BTP-2.mp4",
+          "contentType": "video/mp4",
+          "storageProvider": "s3"
+        }
+      ]
+    },
+    {
+      "courseId": "CRS-000042",
+      "moduleId": "6ad230121d1d06b448cc6eb2",
+      "lessonId": "6ae5bd67b76cb62502b917d6",
+      "lessonTitle": "KENT-MIND",
+      "videoUrl": "",
+      "videoS3Key": "videos/1793440692061-9483a3c1-9b7b-4dcf-9eef-53f69d8d76f5-kent-mind-1.mp4",
+      "s3Key": "videos/1793440692061-9483a3c1-9b7b-4dcf-9eef-53f69d8d76f5-kent-mind-1.mp4",
+      "videoParts": [
+        {
+          "s3Key": "videos/1793440692061-9483a3c1-9b7b-4dcf-9eef-53f69d8d76f5-kent-mind-1.mp4",
+          "url": "",
+          "fileName": "kent-mind-1.mp4",
+          "originalFileName": "1793440692061-9483a3c1-9b7b-4dcf-9eef-53f69d8d76f5-kent-mind-1.mp4",
+          "contentType": "video/mp4",
+          "storageProvider": "s3"
+        }
+      ]
+    },
+    {
+      "courseId": "CRS-000042",
+      "moduleId": "6ad230121d1d06b448cc6eb2",
+      "lessonId": "6ae74106b76cb62502ba4dec",
+      "lessonTitle": "KENT-MIND-2",
+      "videoUrl": "",
+      "videoS3Key": "videos/1793534085963-5c5a1cdb-1959-4220-933d-c561266fe96a-kent-mind-2.mp4",
+      "s3Key": "videos/1793534085963-5c5a1cdb-1959-4220-933d-c561266fe96a-kent-mind-2.mp4",
+      "videoParts": [
+        {
+          "s3Key": "videos/1793534085963-5c5a1cdb-1959-4220-933d-c561266fe96a-kent-mind-2.mp4",
+          "url": "",
+          "fileName": "kent-mind-2.mp4",
+          "originalFileName": "1793534085963-5c5a1cdb-1959-4220-933d-c561266fe96a-kent-mind-2.mp4",
+          "contentType": "video/mp4",
+          "storageProvider": "s3"
+        }
+      ]
+    },
+    {
+      "courseId": "CRS-000070",
+      "moduleId": "6ac0efcdbce3dc3b2f5fa3e8",
+      "lessonId": "6ac0f0d4bce3dc3b2f5fa441",
+      "lessonTitle": "PART 1",
+      "videoUrl": "meet.google.com/nyp-prid-pct",
+      "videoS3Key": "videos/1791088299310-028d42b0-172e-4243-bdab-8b03e4b8332e-pharmacy-1.mp4",
+      "s3Key": "videos/1791088299310-028d42b0-172e-4243-bdab-8b03e4b8332e-pharmacy-1.mp4",
+      "videoParts": [
+        {
+          "s3Key": "videos/1791088299310-028d42b0-172e-4243-bdab-8b03e4b8332e-pharmacy-1.mp4",
+          "url": "",
+          "fileName": "pharmacy-1.mp4",
+          "originalFileName": "pharmacy-1.mp4",
+          "contentType": "video/mp4",
+          "storageProvider": "s3"
+        }
+      ]
+    },
+    {
+      "courseId": "CRS-000070",
+      "moduleId": "6ac0efcdbce3dc3b2f5fa3e8",
+      "lessonId": "6ad231a11d1d06b448cc7367",
+      "lessonTitle": "PART 2",
+      "videoUrl": "",
+      "videoS3Key": "videos/1792821765370-7152c21a-12b6-4536-ae49-2b5bd7e07480-PHARMACY-PART-2.mp4",
+      "s3Key": "videos/1792821765370-7152c21a-12b6-4536-ae49-2b5bd7e07480-PHARMACY-PART-2.mp4",
+      "videoParts": [
+        {
+          "s3Key": "videos/1792821765370-7152c21a-12b6-4536-ae49-2b5bd7e07480-PHARMACY-PART-2.mp4",
+          "url": "",
+          "fileName": "PHARMACY PART 2.mp4",
+          "originalFileName": "1792821765370-7152c21a-12b6-4536-ae49-2b5bd7e07480-PHARMACY-PART-2.mp4",
+          "contentType": "video/mp4",
+          "storageProvider": "s3"
+        }
+      ]
+    },
+    {
+      "courseId": "CRS-000070",
+      "moduleId": "6ac0efcdbce3dc3b2f5fa3e8",
+      "lessonId": "6ad232471d1d06b448cc7486",
+      "lessonTitle": "PART 3",
+      "videoUrl": "",
+      "videoS3Key": "videos/1792160185067-83d7ed83-05a7-4698-8944-72fdc142cc8c-PHARMACY-PART-3.webm",
+      "s3Key": "videos/1792160185067-83d7ed83-05a7-4698-8944-72fdc142cc8c-PHARMACY-PART-3.webm",
+      "videoParts": [
+        {
+          "s3Key": "videos/1792160185067-83d7ed83-05a7-4698-8944-72fdc142cc8c-PHARMACY-PART-3.webm",
+          "url": "",
+          "fileName": "PHARMACY PART 3.webm",
+          "originalFileName": "1792160185067-83d7ed83-05a7-4698-8944-72fdc142cc8c-PHARMACY-PART-3.webm",
+          "contentType": "video/webm",
+          "storageProvider": "s3"
+        }
+      ]
+    },
+    {
+      "courseId": "CRS-000070",
+      "moduleId": "6ac0efcdbce3dc3b2f5fa3e8",
+      "lessonId": "6ad9c15a1d1d06b448da72f8",
+      "lessonTitle": "PART 4",
+      "videoUrl": "",
+      "videoS3Key": "videos/1792655168739-8bc5294f-15a1-49d8-8ad8-d3d75094365c-PHARMACY-4.mp4",
+      "s3Key": "videos/1792655168739-8bc5294f-15a1-49d8-8ad8-d3d75094365c-PHARMACY-4.mp4",
+      "videoParts": [
+        {
+          "s3Key": "videos/1792655168739-8bc5294f-15a1-49d8-8ad8-d3d75094365c-PHARMACY-4.mp4",
+          "url": "",
+          "fileName": "PHARMACY-4.mp4",
+          "originalFileName": "PHARMACY-4.mp4",
+          "contentType": "video/mp4",
+          "storageProvider": "s3"
+        }
+      ]
+    },
+    {
+      "courseId": "CRS-000070",
+      "moduleId": "6ac0efcdbce3dc3b2f5fa3e8",
+      "lessonId": "6add88062cea39ee852ae213",
+      "lessonTitle": "PART 5",
+      "videoUrl": "",
+      "videoS3Key": "videos/1792902657064-bdf23c77-0a88-4a38-bee9-20e63d706f9f-pharmacy-5.mp4",
+      "s3Key": "videos/1792902657064-bdf23c77-0a88-4a38-bee9-20e63d706f9f-pharmacy-5.mp4",
+      "videoParts": [
+        {
+          "s3Key": "videos/1792902657064-bdf23c77-0a88-4a38-bee9-20e63d706f9f-pharmacy-5.mp4",
+          "url": "",
+          "fileName": "pharmacy-5.mp4",
+          "originalFileName": "pharmacy-5.mp4",
+          "contentType": "video/mp4",
+          "storageProvider": "s3"
+        }
+      ]
+    },
+    {
+      "courseId": "CRS-000070",
+      "moduleId": "6ac0efcdbce3dc3b2f5fa3e8",
+      "lessonId": "6ae316590cb975b06f54689e",
+      "lessonTitle": "Part-6",
+      "videoUrl": "",
+      "videoS3Key": "videos/1793257058689-5dc6044a-f41d-4c50-aa7d-e166c762b253-pharmacy-6.mp4",
+      "s3Key": "videos/1793257058689-5dc6044a-f41d-4c50-aa7d-e166c762b253-pharmacy-6.mp4",
+      "videoParts": [
+        {
+          "s3Key": "videos/1793257058689-5dc6044a-f41d-4c50-aa7d-e166c762b253-pharmacy-6.mp4",
+          "url": "",
+          "fileName": "pharmacy-6.mp4",
+          "originalFileName": "pharmacy-6.mp4",
+          "contentType": "video/mp4",
+          "storageProvider": "s3"
+        }
+      ]
+    },
+    {
+      "courseId": "CRS-000070",
+      "moduleId": "6ac0efcdbce3dc3b2f5fa3e8",
+      "lessonId": "6ae43ed5b76cb62502b7d233",
+      "lessonTitle": "PART 7",
+      "videoUrl": "",
+      "videoS3Key": "videos/1793342834620-c855b738-e0a6-4887-acf2-67101ee53979-pharmacy-7.mp4",
+      "s3Key": "videos/1793342834620-c855b738-e0a6-4887-acf2-67101ee53979-pharmacy-7.mp4",
+      "videoParts": [
+        {
+          "s3Key": "videos/1793342834620-c855b738-e0a6-4887-acf2-67101ee53979-pharmacy-7.mp4",
+          "url": "",
+          "fileName": "pharmacy-7.mp4",
+          "originalFileName": "pharmacy-7.mp4",
+          "contentType": "video/mp4",
+          "storageProvider": "s3"
+        }
+      ]
+    },
+    {
+      "courseId": "CRS-000070",
+      "moduleId": "6ac640b6ed6d8ba441a19ebb",
+      "lessonId": "6acf8073e226c27ca058f63b",
+      "lessonTitle": "PART 2",
+      "videoUrl": "",
+      "videoS3Key": "videos/1791983398165-72d16e2b-5d15-432d-a79d-eba0901b8e80-Respiratory-2.mp4",
+      "s3Key": "videos/1791983398165-72d16e2b-5d15-432d-a79d-eba0901b8e80-Respiratory-2.mp4",
+      "videoParts": [
+        {
+          "s3Key": "videos/1791983398165-72d16e2b-5d15-432d-a79d-eba0901b8e80-Respiratory-2.mp4",
+          "url": "",
+          "fileName": "Respiratory-2.mp4",
+          "originalFileName": "Respiratory-2.mp4",
+          "contentType": "video/mp4",
+          "storageProvider": "s3"
+        }
+      ]
+    },
+    {
+      "courseId": "CRS-000070",
+      "moduleId": "6ac640b6ed6d8ba441a19ebb",
+      "lessonId": "6ad23ee41d1d06b448cce00b",
+      "lessonTitle": "PART 1",
+      "videoUrl": "",
+      "videoS3Key": "videos/1792163009954-d6a9fb79-f8b2-44ba-8761-04a133914add-RESPIRATORY-1.webm",
+      "s3Key": "videos/1792163009954-d6a9fb79-f8b2-44ba-8761-04a133914add-RESPIRATORY-1.webm",
+      "videoParts": [
+        {
+          "s3Key": "videos/1792163009954-d6a9fb79-f8b2-44ba-8761-04a133914add-RESPIRATORY-1.webm",
+          "url": "",
+          "fileName": "RESPIRATORY 1.webm",
+          "originalFileName": "1792163009954-d6a9fb79-f8b2-44ba-8761-04a133914add-RESPIRATORY-1.webm",
+          "contentType": "video/webm",
+          "storageProvider": "s3"
+        }
+      ]
+    },
+    {
+      "courseId": "CRS-000070",
+      "moduleId": "6ae5bdbab76cb62502b91b82",
+      "lessonId": "6ae5c131b76cb62502b928a5",
+      "lessonTitle": "KENT-MIND",
+      "videoUrl": "",
+      "videoS3Key": "videos/1793441246142-ecbb4255-c3b7-43cf-b346-0cfe3c36c26a-kent-mind-1.mp4",
+      "s3Key": "videos/1793441246142-ecbb4255-c3b7-43cf-b346-0cfe3c36c26a-kent-mind-1.mp4",
+      "videoParts": [
+        {
+          "s3Key": "videos/1793441246142-ecbb4255-c3b7-43cf-b346-0cfe3c36c26a-kent-mind-1.mp4",
+          "url": "",
+          "fileName": "kent-mind-1.mp4",
+          "originalFileName": "1793441246142-ecbb4255-c3b7-43cf-b346-0cfe3c36c26a-kent-mind-1.mp4",
+          "contentType": "video/mp4",
+          "storageProvider": "s3"
+        }
+      ]
+    }
+  ],
+  "standaloneVideos": [],
+  "demoVideos": [
+    {
+      "_id": "6aabceaa13396bc06b74d63a",
+      "title": "Demo",
+      "description": "ghj",
+      "videoUrl": "https://res.cloudinary.com/vadgpisw/video/upload/v1789644455/homeopathy-media/videos/video1-1789644453280-766590.mp4",
+      "duration": "",
+      "courseId": null,
+      "createdAt": "2026-09-17T11:27:38.176Z",
+      "updatedAt": "2026-09-17T11:27:38.176Z",
+      "__v": 0
+    },
+    {
+      "_id": "6ab249207673467c98bb3b75",
+      "title": "Demo",
+      "description": "fhfhj",
+      "videoUrl": "https://res.cloudinary.com/vadgpisw/video/upload/v1790069022/homeopathy-media/videos/video2-1790069018714-865812.mp4",
+      "thumbnailUrl": "",
+      "thumbnail": "",
+      "duration": "",
+      "courseId": "CRS-000039",
+      "courseRef": "6aa7d55338f6fbef4dd6d1f6",
+      "createdAt": "2026-09-22T09:23:44.866Z",
+      "updatedAt": "2026-09-22T09:23:44.866Z",
+      "__v": 0
+    },
+    {
+      "_id": "6abf3d12252879fb09fa6b3d",
+      "title": "demo",
+      "description": "dhgjg",
+      "videoUrl": "https://whitecoat-media-prod.s3.us-east-1.amazonaws.com/videos/1790917904909-4e79a17b-video2.mp4",
+      "thumbnailUrl": "",
+      "thumbnail": "",
+      "duration": "",
+      "courseId": "CRS-000061",
+      "courseRef": "6abe7e5be80fc5c83f81749b",
+      "storageProvider": "s3",
+      "s3Key": "videos/1790917904909-4e79a17b-video2.mp4",
+      "createdAt": "2026-10-02T05:11:46.802Z",
+      "updatedAt": "2026-10-02T05:11:46.802Z",
+      "__v": 0
+    },
+    {
+      "_id": "6abf3d4c252879fb09fa6b6a",
+      "title": "demo video",
+      "description": "demo",
+      "videoUrl": "https://whitecoat-media-prod.s3.us-east-1.amazonaws.com/videos/1790917963406-0c036483-Recording-2026-08-20-135459.mp4",
+      "thumbnailUrl": "",
+      "thumbnail": "",
+      "duration": "",
+      "courseId": "CRS-000062",
+      "courseRef": "6abf3d2b252879fb09fa6b47",
+      "storageProvider": "s3",
+      "s3Key": "videos/1790917963406-0c036483-Recording-2026-08-20-135459.mp4",
+      "createdAt": "2026-10-02T05:12:44.992Z",
+      "updatedAt": "2026-10-02T05:12:44.992Z",
+      "__v": 0
+    },
+    {
+      "_id": "6abf64e8d52645a396779db0",
+      "title": "demo",
+      "description": "hdjfsgh,",
+      "videoUrl": "https://whitecoat-media-prod.s3.us-east-1.amazonaws.com/videos/1790928102150-a5704a13-video2.mp4",
+      "thumbnailUrl": "",
+      "thumbnail": "",
+      "duration": "",
+      "courseId": "CRS-000064",
+      "courseRef": "6abf61e613d2db2625029b76",
+      "storageProvider": "s3",
+      "s3Key": "videos/1790928102150-a5704a13-video2.mp4",
+      "createdAt": "2026-10-02T08:01:44.038Z",
+      "updatedAt": "2026-10-02T08:01:44.038Z",
+      "__v": 0
+    }
+  ],
+  "recordings": [
+    {
+      "_id": "6ac0e8c7c05b398f42a78b5e",
+      "courseName": "KPSC",
+      "moduleName": "MODULE 1 - PHARMACY",
+      "lessonTitle": "PHARMACY PART 1",
+      "streamUrl": "meet.google.com/nyp-prid-pct",
+      "recordedVideoUrl": "",
+      "width": 1920,
+      "height": 1080,
+      "bytes": 0,
+      "format": "mp4",
+      "resolution": "1920x1080",
+      "qualityTag": "1080p FHD",
+      "courseId": "6aab7f3954d18fda4f673a0d",
+      "moduleId": "6ac0e861c05b398f42a78b4d",
+      "liveClassUrl": "meet.google.com/nyp-prid-pct",
+      "recordingFileUrl": "",
+      "storageProvider": "",
+      "s3Key": "",
+      "duration": "",
+      "status": "pending",
+      "createdAt": "2026-10-03T11:36:39.999Z",
+      "updatedAt": "2026-10-03T11:36:39.999Z",
+      "__v": 0
+    },
+    {
+      "_id": "6ac0f05abce3dc3b2f5fa3f9",
+      "courseName": "COMBO COURSE",
+      "moduleName": "PHARMACY LECTURE",
+      "lessonTitle": "PART 1",
+      "streamUrl": "meet.google.com/nyp-prid-pct",
+      "recordedVideoUrl": "",
+      "width": 1920,
+      "height": 1080,
+      "bytes": 0,
+      "format": "mp4",
+      "resolution": "1920x1080",
+      "qualityTag": "1080p FHD",
+      "courseId": "6ac0ef52bce3dc3b2f5fa37f",
+      "moduleId": "6ac0efcdbce3dc3b2f5fa3e8",
+      "liveClassUrl": "meet.google.com/nyp-prid-pct",
+      "recordingFileUrl": "",
+      "storageProvider": "",
+      "s3Key": "",
+      "duration": "",
+      "status": "pending",
+      "createdAt": "2026-10-03T12:08:58.993Z",
+      "updatedAt": "2026-10-03T12:08:58.993Z",
+      "__v": 0
+    },
+    {
+      "_id": "6ac0f0d5bce3dc3b2f5fa448",
+      "courseName": "COMBO COURSE",
+      "moduleName": "PHARMACY LECTURE",
+      "lessonTitle": "PART 1",
+      "streamUrl": "meet.google.com/nyp-prid-pct",
+      "recordedVideoUrl": "",
+      "width": 1920,
+      "height": 1080,
+      "bytes": 0,
+      "format": "mp4",
+      "resolution": "1920x1080",
+      "qualityTag": "1080p FHD",
+      "courseId": "6ac0ef52bce3dc3b2f5fa37f",
+      "moduleId": "6ac0efcdbce3dc3b2f5fa3e8",
+      "liveClassUrl": "meet.google.com/nyp-prid-pct",
+      "recordingFileUrl": "",
+      "storageProvider": "",
+      "s3Key": "",
+      "duration": "",
+      "status": "pending",
+      "createdAt": "2026-10-03T12:11:01.765Z",
+      "updatedAt": "2026-10-03T12:11:01.765Z",
+      "__v": 0
+    },
+    {
+      "_id": "6ac0f0fdbce3dc3b2f5fa466",
+      "courseName": "COMBO COURSE",
+      "moduleName": "PHARMACY LECTURE",
+      "lessonTitle": "PART 1",
+      "streamUrl": "meet.google.com/nyp-prid-pct",
+      "recordedVideoUrl": "",
+      "width": 1920,
+      "height": 1080,
+      "bytes": 0,
+      "format": "mp4",
+      "resolution": "1920x1080",
+      "qualityTag": "1080p FHD",
+      "courseId": "6ac0ef52bce3dc3b2f5fa37f",
+      "moduleId": "6ac0efcdbce3dc3b2f5fa3e8",
+      "liveClassUrl": "meet.google.com/nyp-prid-pct",
+      "recordingFileUrl": "",
+      "storageProvider": "",
+      "s3Key": "",
+      "duration": "",
+      "status": "pending",
+      "createdAt": "2026-10-03T12:11:41.918Z",
+      "updatedAt": "2026-10-03T12:11:41.918Z",
+      "__v": 0
+    },
+    {
+      "_id": "6ac63ef2ed6d8ba441a19ba4",
+      "courseName": "KPSC",
+      "moduleName": "RESPIRATORY SYSTEM",
+      "lessonTitle": "PART 1",
+      "streamUrl": "https://tel.meet/ktg-eikg-sxq?pin=3389651305386",
+      "recordedVideoUrl": "",
+      "width": 1920,
+      "height": 1080,
+      "bytes": 0,
+      "format": "mp4",
+      "resolution": "1920x1080",
+      "qualityTag": "1080p FHD",
+      "courseId": "6aab7f3954d18fda4f673a0d",
+      "moduleId": "6ac63e8ded6d8ba441a19b59",
+      "liveClassUrl": "https://tel.meet/ktg-eikg-sxq?pin=3389651305386",
+      "recordingFileUrl": "",
+      "storageProvider": "",
+      "s3Key": "",
+      "duration": "",
+      "status": "pending",
+      "createdAt": "2026-10-07T12:45:38.744Z",
+      "updatedAt": "2026-10-07T12:45:38.744Z",
+      "__v": 0
+    },
+    {
+      "_id": "6ac63f9aed6d8ba441a19cc7",
+      "courseName": "AIAPGET",
+      "moduleName": "MODULE 3 - RESPIRATORY SYSTEM",
+      "lessonTitle": "PART 1",
+      "streamUrl": "https://tel.meet/ktg-eikg-sxq?pin=3389651305386",
+      "recordedVideoUrl": "",
+      "width": 1920,
+      "height": 1080,
+      "bytes": 0,
+      "format": "mp4",
+      "resolution": "1920x1080",
+      "qualityTag": "1080p FHD",
+      "courseId": "6aab7ed254d18fda4f673a08",
+      "moduleId": "6ac63f56ed6d8ba441a19c7c",
+      "liveClassUrl": "https://tel.meet/ktg-eikg-sxq?pin=3389651305386",
+      "recordingFileUrl": "",
+      "storageProvider": "",
+      "s3Key": "",
+      "duration": "",
+      "status": "pending",
+      "createdAt": "2026-10-07T12:48:26.025Z",
+      "updatedAt": "2026-10-07T12:48:26.025Z",
+      "__v": 0
+    },
+    {
+      "_id": "6ac6407bed6d8ba441a19e1c",
+      "courseName": "UPSC",
+      "moduleName": "MODULE 3 - RESPIRATORY SYSTEM",
+      "lessonTitle": "PART 1",
+      "streamUrl": "https://tel.meet/ktg-eikg-sxq?pin=3389651305386",
+      "recordedVideoUrl": "",
+      "width": 1920,
+      "height": 1080,
+      "bytes": 0,
+      "format": "mp4",
+      "resolution": "1920x1080",
+      "qualityTag": "1080p FHD",
+      "courseId": "6aab7fbc54d18fda4f673a4a",
+      "moduleId": "6ac63fc0ed6d8ba441a19d91",
+      "liveClassUrl": "https://tel.meet/ktg-eikg-sxq?pin=3389651305386",
+      "recordingFileUrl": "",
+      "storageProvider": "",
+      "s3Key": "",
+      "duration": "",
+      "status": "pending",
+      "createdAt": "2026-10-07T12:52:11.295Z",
+      "updatedAt": "2026-10-07T12:52:11.295Z",
+      "__v": 0
+    },
+    {
+      "_id": "6ac640d8ed6d8ba441a19f06",
+      "courseName": "COMBO COURSE",
+      "moduleName": "MODULE 3 - RESPIRATORY SYSTEM",
+      "lessonTitle": "PART 1",
+      "streamUrl": "https://tel.meet/ktg-eikg-sxq?pin=3389651305386",
+      "recordedVideoUrl": "https://whitecoat-media-prod.s3.us-east-1.amazonaws.com/videos/1791471476238-24b212e5-PART-1_recording.webm",
+      "width": 1920,
+      "height": 1080,
+      "bytes": 0,
+      "format": "webm",
+      "resolution": "1920x1080 (1080p)",
+      "qualityTag": "1080p FHD",
+      "courseId": "6ac0ef52bce3dc3b2f5fa37f",
+      "moduleId": "6ac640b6ed6d8ba441a19ebb",
+      "liveClassUrl": "https://tel.meet/ktg-eikg-sxq?pin=3389651305386",
+      "recordingFileUrl": "https://whitecoat-media-prod.s3.us-east-1.amazonaws.com/videos/1791471476238-24b212e5-PART-1_recording.webm",
+      "storageProvider": "s3",
+      "s3Key": "videos/1791471476238-24b212e5-PART-1_recording.webm",
+      "duration": "6875",
+      "status": "completed",
+      "createdAt": "2026-10-07T12:53:44.567Z",
+      "updatedAt": "2026-10-08T14:57:57.800Z",
+      "__v": 0
+    }
+  ],
+  "conversions": [
+    {
+      "_id": "6ae9799b9a763b3ee28e1c2d",
+      "originalS3Key": "videos/1791091513421-cee79365-6193-48da-8210-975a9e7e6a8a-pharmacy-1.mp4",
+      "__v": 0,
+      "attempts": 1,
+      "completedAt": "2026-11-03T06:09:18.833Z",
+      "createdAt": "2026-11-03T06:05:15.740Z",
+      "duration": 5192.883,
+      "error": "",
+      "fileSize": 197621535,
+      "lastAttemptAt": "2026-11-03T06:05:15.735Z",
+      "m4vS3Key": "videos/1791091513421-cee79365-6193-48da-8210-975a9e7e6a8a-pharmacy-1_ios.m4v",
+      "originalContentType": "video/mp4",
+      "status": "completed",
+      "updatedAt": "2026-11-03T06:09:18.835Z"
+    }
+  ],
+  "s3Videos": [
+    {
+      "Key": "videos/1790917904909-4e79a17b-video2.mp4",
+      "Size": 17873522,
+      "LastModified": "2026-10-02T05:11:46.000Z",
+      "ETag": "\"4ef42f83a3aadff751203651c27cb2ee\""
+    },
+    {
+      "Key": "videos/1790917963406-0c036483-Recording-2026-08-20-135459.mp4",
+      "Size": 5216661,
+      "LastModified": "2026-10-02T05:12:45.000Z",
+      "ETag": "\"073343fed2e900901124cd358fde4489\""
+    },
+    {
+      "Key": "videos/1790918129772-0b571513-92a8-438c-9d95-643c173a7e0a-Recording-2026-08-20-135459.mp4",
+      "Size": 5216661,
+      "LastModified": "2026-10-02T05:15:30.000Z",
+      "ETag": "\"8c130802f9e78496cd80a5e3c8fad601-1\""
+    },
+    {
+      "Key": "videos/1790927380765-8ca749f4-4659-453b-af2f-994f1c5310b3-videdo3.mp4",
+      "Size": 2873689,
+      "LastModified": "2026-10-02T07:49:41.000Z",
+      "ETag": "\"77560556a23611be248956a80d5cf331-1\""
+    },
+    {
+      "Key": "videos/1790928102150-a5704a13-video2.mp4",
+      "Size": 17873522,
+      "LastModified": "2026-10-02T08:01:43.000Z",
+      "ETag": "\"4ef42f83a3aadff751203651c27cb2ee\""
+    },
+    {
+      "Key": "videos/1790928166813-226a9292-a95a-487c-84a4-95751be08933-7014814-uhd_2160_4096_25fps.mp4",
+      "Size": 170500622,
+      "LastModified": "2026-10-02T08:02:47.000Z",
+      "ETag": "\"1e100af867382aeeb74048b16768315d-21\""
+    },
+    {
+      "Key": "videos/1790932752304-763b7e9c-5f16-4717-802a-d00daad865d4-Recording-2026-08-20-135459.mp4",
+      "Size": 5216661,
+      "LastModified": "2026-10-02T09:19:13.000Z",
+      "ETag": "\"8c130802f9e78496cd80a5e3c8fad601-1\""
+    },
+    {
+      "Key": "videos/1790935237579-c25c5612-test_recording.webm",
+      "Size": 370907,
+      "LastModified": "2026-10-02T10:00:39.000Z",
+      "ETag": "\"44dfe18dfdd3dd5b7e3304afac40ffb5\""
+    },
+    {
+      "Key": "videos/1791038127892-1aa5ee10-PART-1_recording.webm",
+      "Size": 33469,
+      "LastModified": "2026-10-03T14:35:29.000Z",
+      "ETag": "\"ad1e2be43ceffcd8df622651af398699\""
+    },
+    {
+      "Key": "videos/1791088299310-028d42b0-172e-4243-bdab-8b03e4b8332e-pharmacy-1.mp4",
+      "Size": 197621535,
+      "LastModified": "2026-10-04T04:31:40.000Z",
+      "ETag": "\"91fd398ca4383cbefe33801b9044349c-24\""
+    },
+    {
+      "Key": "videos/1791091138088-30f17235-16ca-4572-80ae-37832efbbc54-pharmacy-1.mp4",
+      "Size": 197621535,
+      "LastModified": "2026-10-04T05:18:59.000Z",
+      "ETag": "\"91fd398ca4383cbefe33801b9044349c-24\""
+    },
+    {
+      "Key": "videos/1791091513421-cee79365-6193-48da-8210-975a9e7e6a8a-pharmacy-1.mp4",
+      "Size": 197621535,
+      "LastModified": "2026-10-04T05:25:14.000Z",
+      "ETag": "\"91fd398ca4383cbefe33801b9044349c-24\""
+    },
+    {
+      "Key": "videos/1791091513421-cee79365-6193-48da-8210-975a9e7e6a8a-pharmacy-1_ios.m4v",
+      "Size": 197621535,
+      "LastModified": "2026-11-03T06:06:18.000Z",
+      "ETag": "\"a106271c4f0b4755e9ac1f66d3fc8a72-19\""
+    },
+    {
+      "Key": "videos/1791091749307-3959ce23-2419-44c5-a007-a20ec5dc1721-pharmacy-1.mp4",
+      "Size": 197621535,
+      "LastModified": "2026-10-04T05:29:10.000Z",
+      "ETag": "\"91fd398ca4383cbefe33801b9044349c-24\""
+    },
+    {
+      "Key": "videos/1791093143418-d089df45-fce7-4f66-aa87-5a9b430e82f3-7014814-uhd_2160_4096_25fps.mp4",
+      "Size": 170500622,
+      "LastModified": "2026-10-04T05:52:24.000Z",
+      "ETag": "\"1e100af867382aeeb74048b16768315d-21\""
+    },
+    {
+      "Key": "videos/1791093367886-4d01b667-edc5-44dd-8fee-79bcfccc16a1-video1.mp4",
+      "Size": 7734893,
+      "LastModified": "2026-10-04T05:56:09.000Z",
+      "ETag": "\"2bd0b4699b3de9ac64ec4e1e61d661bd-1\""
+    },
+    {
+      "Key": "videos/1791132351680-d58c95e3-c32e-4c70-adc7-42bfc3f707c1-video2.mp4",
+      "Size": 17873522,
+      "LastModified": "2026-10-04T16:45:52.000Z",
+      "ETag": "\"ebda982cc178f5cc4b7852f2b00ee3ca-3\""
+    },
+    {
+      "Key": "videos/1791471476238-24b212e5-PART-1_recording.webm",
+      "Size": 0,
+      "LastModified": "2026-10-08T14:57:57.000Z",
+      "ETag": "\"d41d8cd98f00b204e9800998ecf8427e\""
+    },
+    {
+      "Key": "videos/1791519090696-254bd41a-0658-49cf-bb5d-f950cc886848-screen-capture-5-1-.mp4",
+      "Size": 248503687,
+      "LastModified": "2026-10-09T04:11:31.000Z",
+      "ETag": "\"c4c6e1d9247a1ffe7c043529904afd36-30\""
+    },
+    {
+      "Key": "videos/1791519287084-faf2eb12-bf27-4317-976f-0fc560c01aa7-screen-capture-5-1-.mp4",
+      "Size": 248503687,
+      "LastModified": "2026-10-09T04:14:48.000Z",
+      "ETag": "\"c4c6e1d9247a1ffe7c043529904afd36-30\""
+    },
+    {
+      "Key": "videos/1791519319021-077ee493-b478-4d50-8bad-1ce5f399c4a9-screen-capture-5-1-.mp4",
+      "Size": 248503687,
+      "LastModified": "2026-10-09T04:15:20.000Z",
+      "ETag": "\"c4c6e1d9247a1ffe7c043529904afd36-30\""
+    },
+    {
+      "Key": "videos/1791519914570-da51086a-104b-4bd0-81cd-ca984a98c4c1-screen-capture-5-1-.mp4",
+      "Size": 248503687,
+      "LastModified": "2026-10-09T04:25:15.000Z",
+      "ETag": "\"c4c6e1d9247a1ffe7c043529904afd36-30\""
+    },
+    {
+      "Key": "videos/1791788204839-6fb73d4b-f0b0-4139-a6bf-5055cf82307e-video1.mp4",
+      "Size": 7734893,
+      "LastModified": "2026-10-12T06:56:46.000Z",
+      "ETag": "\"2bd0b4699b3de9ac64ec4e1e61d661bd-1\""
+    },
+    {
+      "Key": "videos/1791805109660-7c064c51-311f-4a00-9f2e-71e51fd45614-video4.mp4",
+      "Size": 2873689,
+      "LastModified": "2026-10-12T11:38:30.000Z",
+      "ETag": "\"77560556a23611be248956a80d5cf331-1\""
+    },
+    {
+      "Key": "videos/1791805241644-0148f278-b852-4004-bd13-5918cc9522ae-video1.mp4",
+      "Size": 7734893,
+      "LastModified": "2026-10-12T11:40:42.000Z",
+      "ETag": "\"2bd0b4699b3de9ac64ec4e1e61d661bd-1\""
+    },
+    {
+      "Key": "videos/1791805295712-78571803-e1a1-431d-8ad2-1361351d7c3e-video2.mp4",
+      "Size": 17873522,
+      "LastModified": "2026-10-12T11:41:36.000Z",
+      "ETag": "\"ebda982cc178f5cc4b7852f2b00ee3ca-3\""
+    },
+    {
+      "Key": "videos/1791805335901-18a0816d-90bc-47c8-89c2-2deabf8a1e20-video1.mp4",
+      "Size": 7734893,
+      "LastModified": "2026-10-12T11:42:16.000Z",
+      "ETag": "\"2bd0b4699b3de9ac64ec4e1e61d661bd-1\""
+    },
+    {
+      "Key": "videos/1791808274124-d5bc943f-e3b1-41bf-8386-cf90419bded4-video1.mp4",
+      "Size": 7734893,
+      "LastModified": "2026-10-12T12:31:15.000Z",
+      "ETag": "\"2bd0b4699b3de9ac64ec4e1e61d661bd-1\""
+    },
+    {
+      "Key": "videos/1791808596404-f8e1d508-51ef-47c2-9a3a-1d47b734fed5-video1.mp4",
+      "Size": 7734893,
+      "LastModified": "2026-10-12T12:36:37.000Z",
+      "ETag": "\"2bd0b4699b3de9ac64ec4e1e61d661bd-1\""
+    },
+    {
+      "Key": "videos/1791886521461-da8d2651-2bcb-431b-8667-e2d3a367686f-lesson_recording.mp4",
+      "Size": 340556,
+      "LastModified": "2026-10-13T10:15:22.000Z",
+      "ETag": "\"7f81caf52dc19c8c89d42669fc9c9a12-1\""
+    },
+    {
+      "Key": "videos/1791964251766-ff502319-d9eb-4928-9914-aba7b2ee6999-video1.mp4",
+      "Size": 7734893,
+      "LastModified": "2026-10-14T07:50:52.000Z",
+      "ETag": "\"2bd0b4699b3de9ac64ec4e1e61d661bd-1\""
+    },
+    {
+      "Key": "videos/1791976040561-c11f5e46-ca12-4781-81c8-88a6c6f3eacc-video2.mp4",
+      "Size": 17873522,
+      "LastModified": "2026-10-14T11:07:21.000Z",
+      "ETag": "\"ebda982cc178f5cc4b7852f2b00ee3ca-3\""
+    },
+    {
+      "Key": "videos/1791978547582-49c099db-c373-4ad1-80f6-d6c44dd87b10-Respiratory-2.mp4",
+      "Size": 183641610,
+      "LastModified": "2026-10-14T11:49:08.000Z",
+      "ETag": "\"dfc26c1b592d96af1ee198049d341f0c-22\""
+    },
+    {
+      "Key": "videos/1791978868093-58c4028e-e30f-4600-8ef9-1036c34bf279-Respiratory-2.mp4",
+      "Size": 183641610,
+      "LastModified": "2026-10-14T11:54:29.000Z",
+      "ETag": "\"dfc26c1b592d96af1ee198049d341f0c-22\""
+    },
+    {
+      "Key": "videos/1791980638147-fded4ce0-6f6b-4635-8102-e57a4c1921a7-Respiratory-2.mp4",
+      "Size": 183641610,
+      "LastModified": "2026-10-14T12:23:59.000Z",
+      "ETag": "\"dfc26c1b592d96af1ee198049d341f0c-22\""
+    },
+    {
+      "Key": "videos/1791983398165-72d16e2b-5d15-432d-a79d-eba0901b8e80-Respiratory-2.mp4",
+      "Size": 183641610,
+      "LastModified": "2026-10-14T13:09:59.000Z",
+      "ETag": "\"dfc26c1b592d96af1ee198049d341f0c-22\""
+    },
+    {
+      "Key": "videos/1791991130018-c65f6b1d-6b6f-43e0-88db-4988bec08f31-Respiratory-2.mp4",
+      "Size": 183641610,
+      "LastModified": "2026-10-14T15:18:51.000Z",
+      "ETag": "\"dfc26c1b592d96af1ee198049d341f0c-22\""
+    },
+    {
+      "Key": "videos/1791993770105-f5d7326c-e866-4efd-a57d-45baa87bee43-RESPIRATORY.mp4",
+      "Size": 248503687,
+      "LastModified": "2026-10-14T16:02:51.000Z",
+      "ETag": "\"c4c6e1d9247a1ffe7c043529904afd36-30\""
+    },
+    {
+      "Key": "videos/1791994073986-11c93237-666d-4919-9d48-bd9102e52b7e-RESPIRATORY.mp4",
+      "Size": 248503687,
+      "LastModified": "2026-10-14T16:07:54.000Z",
+      "ETag": "\"c4c6e1d9247a1ffe7c043529904afd36-30\""
+    },
+    {
+      "Key": "videos/1791994539499-97b3a51b-dcb0-4e33-88fa-b39408caec4c-RESPIRATORY.mp4",
+      "Size": 248503687,
+      "LastModified": "2026-10-14T16:15:40.000Z",
+      "ETag": "\"c4c6e1d9247a1ffe7c043529904afd36-30\""
+    },
+    {
+      "Key": "videos/1792026215130-04a262c4-07e9-42bb-8d64-a18a0d3368f9-LRR-CNS-LECT-1.mp4",
+      "Size": 214338757,
+      "LastModified": "2026-10-15T01:03:36.000Z",
+      "ETag": "\"b4d7632dfae440f3fd6cbd902e7fef77-26\""
+    },
+    {
+      "Key": "videos/1792027431469-36f969dc-d7a9-4dc2-a5db-d2578947afd9-screen-capture-5-.mp4",
+      "Size": 307165565,
+      "LastModified": "2026-10-15T01:23:52.000Z",
+      "ETag": "\"953761e013bbe14908a6136f41f666e7-37\""
+    },
+    {
+      "Key": "videos/1792042957225-fb2d17d8-0d62-4922-8bb2-4c1bffbb56de-video2.mp4",
+      "Size": 17873522,
+      "LastModified": "2026-10-15T05:42:38.000Z",
+      "ETag": "\"ebda982cc178f5cc4b7852f2b00ee3ca-3\""
+    },
+    {
+      "Key": "videos/1792043483738-557a4a03-3228-4e3d-b4a6-e27b6c999552-video2.mp4",
+      "Size": 17873522,
+      "LastModified": "2026-10-15T05:51:24.000Z",
+      "ETag": "\"ebda982cc178f5cc4b7852f2b00ee3ca-3\""
+    },
+    {
+      "Key": "videos/1792077965619-7688e3d5-598a-4f27-ac4c-d06dabc3ddf0-cm.mp4",
+      "Size": 142071887,
+      "LastModified": "2026-10-15T15:26:06.000Z",
+      "ETag": "\"8888b019bd58e9615e553091b56349a3-17\""
+    },
+    {
+      "Key": "videos/1792112100076-0875b876-5f13-448d-83db-e09d87673b31-screen-capture-rep-1.mp4",
+      "Size": 515243399,
+      "LastModified": "2026-10-16T00:55:01.000Z",
+      "ETag": "\"1722f392f1fac0abf827863c964a87e0-62\""
+    },
+    {
+      "Key": "videos/1792112959054-1362767c-190c-4b10-bdcf-8bae5d951f1d-screen-capture-4-.mp4",
+      "Size": 190988429,
+      "LastModified": "2026-10-16T01:09:20.000Z",
+      "ETag": "\"8b7bae43f0bbd6e9372c5fd781150977-23\""
+    },
+    {
+      "Key": "videos/1792113542651-ad796afa-0766-445d-a2d1-6d119438e7cc-screen-capture-4-.mp4",
+      "Size": 190988429,
+      "LastModified": "2026-10-16T01:19:03.000Z",
+      "ETag": "\"8b7bae43f0bbd6e9372c5fd781150977-23\""
+    },
+    {
+      "Key": "videos/1792113740053-2c72de6f-b5bf-4913-bc87-d9a58a1d0709-screen-capture-4-.mp4",
+      "Size": 190988429,
+      "LastModified": "2026-10-16T01:22:21.000Z",
+      "ETag": "\"8b7bae43f0bbd6e9372c5fd781150977-23\""
+    },
+    {
+      "Key": "videos/1792114265225-810fb2d6-9868-4305-9f29-255322e13e84-screen-capture-rep2.mp4",
+      "Size": 274247984,
+      "LastModified": "2026-10-16T01:31:06.000Z",
+      "ETag": "\"f749e8c6c82cdad971eb719ce187980a-33\""
+    },
+    {
+      "Key": "videos/1792114463840-30f46479-5d62-40a3-8d6f-7592f8b3dfa1-screen-capture-REP-3.mp4",
+      "Size": 269554439,
+      "LastModified": "2026-10-16T01:34:24.000Z",
+      "ETag": "\"02bcba5ce50b5736e2fe986b9a3163d6-33\""
+    },
+    {
+      "Key": "videos/1792114806750-b8cd5cd0-7d1d-45d5-927e-90a1bc2b7c31-screen-capture-rep4.mp4",
+      "Size": 324692296,
+      "LastModified": "2026-10-16T01:40:07.000Z",
+      "ETag": "\"62964d10f3bd019e289a8f35590e530e-39\""
+    },
+    {
+      "Key": "videos/1792115056212-70c43ab1-bcd9-48e8-b0f3-2f489e9d460c-screen-capture-rep-5.mp4",
+      "Size": 383428117,
+      "LastModified": "2026-10-16T01:44:17.000Z",
+      "ETag": "\"40c209649fbaac87fe810ae2ba46863c-46\""
+    },
+    {
+      "Key": "videos/1792115421401-0a96c502-5749-488f-bd18-de48a4378f6a-screen-capture-cm.mp4",
+      "Size": 496678324,
+      "LastModified": "2026-10-16T01:50:22.000Z",
+      "ETag": "\"77f28cc484d9ca92dead607b157945bb-60\""
+    },
+    {
+      "Key": "videos/1792115777715-cbbe488b-7b0c-464d-a36b-a627841eabd2-screen-capture-gyn.mp4",
+      "Size": 433886461,
+      "LastModified": "2026-10-16T01:56:18.000Z",
+      "ETag": "\"3e4e535db27eb3b4294ddebcb97a518b-52\""
+    },
+    {
+      "Key": "videos/1792116779532-914d6497-ad12-4cf9-96b3-84ead65f5faf-screen-capture-gyn.mp4",
+      "Size": 433886461,
+      "LastModified": "2026-10-16T02:13:00.000Z",
+      "ETag": "\"3e4e535db27eb3b4294ddebcb97a518b-52\""
+    },
+    {
+      "Key": "videos/1792119943384-cf4a94b7-ba2c-417d-8c56-06b722b6fb1f-screen-capture-mm.mp4",
+      "Size": 313111353,
+      "LastModified": "2026-10-16T03:05:44.000Z",
+      "ETag": "\"98f25ebfe8ca1a94157c77ca4aa56081-38\""
+    },
+    {
+      "Key": "videos/1792122230341-0982806e-083c-49e3-97f1-3ab457075e35-screen-capture-endo-1-.mp4",
+      "Size": 473566666,
+      "LastModified": "2026-10-16T03:43:51.000Z",
+      "ETag": "\"3e5aa139ce3a2771629b24d7d9be921a-57\""
+    },
+    {
+      "Key": "videos/1792123269422-ec8dba20-497e-4232-894f-fe97e1eb5265-LRR-CM-1-DEMO.mp4",
+      "Size": 732915282,
+      "LastModified": "2026-10-16T04:01:10.000Z",
+      "ETag": "\"ea594eb4f262e2a40430721b745bf948-88\""
+    },
+    {
+      "Key": "videos/1792124939100-cdbedaaa-7ec8-41b5-88d8-bf3993c80838-LRR-DERMA.mp4",
+      "Size": 510191865,
+      "LastModified": "2026-10-16T04:29:00.000Z",
+      "ETag": "\"5818473b829a100257f4da3261fce824-61\""
+    },
+    {
+      "Key": "videos/1792126870016-80d80469-0884-4b54-ae65-f4e1ef5c060c-LRR-GYNEC-part2.mp4",
+      "Size": 388389041,
+      "LastModified": "2026-10-16T05:01:11.000Z",
+      "ETag": "\"ca464779748863edf0c58ac99f73e585-47\""
+    },
+    {
+      "Key": "videos/1792127621557-781f9c3a-349e-443d-ae51-2a70c9434762-LRR-NEPHRO.mp4",
+      "Size": 409550507,
+      "LastModified": "2026-10-16T05:13:42.000Z",
+      "ETag": "\"2d1a50ae56a5818757804026af403308-49\""
+    },
+    {
+      "Key": "videos/1792129019713-8e654702-b8c2-4362-a94b-13487436012a-LRR-OBS.mp4",
+      "Size": 399894491,
+      "LastModified": "2026-10-16T05:37:00.000Z",
+      "ETag": "\"69fd7b9b4f30303c37c85d933d651b59-48\""
+    },
+    {
+      "Key": "videos/1792129626672-48bc0d6a-9307-43d6-a096-a3162a52a460-LRR-OBS-2.mp4",
+      "Size": 448327622,
+      "LastModified": "2026-10-16T05:47:07.000Z",
+      "ETag": "\"2a35edcbb15f033cf37e6767365a4b1e-54\""
+    },
+    {
+      "Key": "videos/1792131649939-0555ef43-bf6c-4941-992d-6abb42d0dc15-video2.mp4",
+      "Size": 17873522,
+      "LastModified": "2026-10-16T06:20:50.000Z",
+      "ETag": "\"ebda982cc178f5cc4b7852f2b00ee3ca-3\""
+    },
+    {
+      "Key": "videos/1792131911181-70f2abd4-9700-4387-90fd-9f4a97870ff7-file_example_WEBM_480_900KB.webm",
+      "Size": 901185,
+      "LastModified": "2026-10-16T06:25:12.000Z",
+      "ETag": "\"9255021fe5dd08f672a6a3f89c79452a-1\""
+    },
+    {
+      "Key": "videos/1792132005895-5f87cccd-4cdf-4944-82eb-53e38d7488b0-video1.mp4",
+      "Size": 7734893,
+      "LastModified": "2026-10-16T06:26:46.000Z",
+      "ETag": "\"2bd0b4699b3de9ac64ec4e1e61d661bd-1\""
+    },
+    {
+      "Key": "videos/1792132209394-de983cba-f3b2-426a-b27d-1863114a59da-video2.mp4",
+      "Size": 17873522,
+      "LastModified": "2026-10-16T06:30:10.000Z",
+      "ETag": "\"ebda982cc178f5cc4b7852f2b00ee3ca-3\""
+    },
+    {
+      "Key": "videos/1792132252442-4ec32a22-5da6-49c3-9752-3898f6f591e3-video2.mp4",
+      "Size": 17873522,
+      "LastModified": "2026-10-16T06:30:53.000Z",
+      "ETag": "\"ebda982cc178f5cc4b7852f2b00ee3ca-3\""
+    },
+    {
+      "Key": "videos/1792132495233-ee493c18-0dd9-420b-bc0e-18e3ae093b74-video1.mp4",
+      "Size": 7734893,
+      "LastModified": "2026-10-16T06:34:56.000Z",
+      "ETag": "\"2bd0b4699b3de9ac64ec4e1e61d661bd-1\""
+    },
+    {
+      "Key": "videos/1792132560538-6468b03a-fdba-4e46-b9c3-02eddb5d5c84-video1.mp4",
+      "Size": 7734893,
+      "LastModified": "2026-10-16T06:36:01.000Z",
+      "ETag": "\"2bd0b4699b3de9ac64ec4e1e61d661bd-1\""
+    },
+    {
+      "Key": "videos/1792132649809-44c13b79-c676-41d0-8d3a-1d7611e148e0-video2.mp4",
+      "Size": 17873522,
+      "LastModified": "2026-10-16T06:37:30.000Z",
+      "ETag": "\"ebda982cc178f5cc4b7852f2b00ee3ca-3\""
+    },
+    {
+      "Key": "videos/1792133101530-fd53cc88-3b26-48c2-a2ef-08ca296fc310-file_example_WEBM_480_900KB.webm",
+      "Size": 901185,
+      "LastModified": "2026-10-16T06:45:02.000Z",
+      "ETag": "\"9255021fe5dd08f672a6a3f89c79452a-1\""
+    },
+    {
+      "Key": "videos/1792135925477-41bb77c3-7d7b-4158-9a2f-51a754c5cc6a-video2.mp4",
+      "Size": 17873522,
+      "LastModified": "2026-10-16T07:32:06.000Z",
+      "ETag": "\"ebda982cc178f5cc4b7852f2b00ee3ca-3\""
+    },
+    {
+      "Key": "videos/1792136652217-b8e26d3c-215d-442e-8504-d9339f7a1837-LRR-ORGANON-PART-1-1-.mp4",
+      "Size": 391573920,
+      "LastModified": "2026-10-16T07:44:13.000Z",
+      "ETag": "\"82af944a5b75ad7baff515fe8bd818d7-47\""
+    },
+    {
+      "Key": "videos/1792137195920-2a6367f9-2235-40c3-844a-078575af1b5f-LRR-ORGANON-PT2.mp4",
+      "Size": 582570945,
+      "LastModified": "2026-10-16T07:53:16.000Z",
+      "ETag": "\"1b95dcbf1e35e5eb968de64cb754015b-70\""
+    },
+    {
+      "Key": "videos/1792137221629-3842755f-sample-lecture.webm",
+      "Size": 24,
+      "LastModified": "2026-10-16T07:53:45.000Z",
+      "ETag": "\"19d1f4bd17565fe740b9310f92cce45e\""
+    },
+    {
+      "Key": "videos/1792137224498-f672a810-sample-lecture.mp4",
+      "Size": 16,
+      "LastModified": "2026-10-16T07:53:45.000Z",
+      "ETag": "\"c7535b6000010de65787e6c73ee76b42\""
+    },
+    {
+      "Key": "videos/1792137337058-1bce8ff8-sample-lecture.webm",
+      "Size": 24,
+      "LastModified": "2026-10-16T07:55:40.000Z",
+      "ETag": "\"19d1f4bd17565fe740b9310f92cce45e\""
+    },
+    {
+      "Key": "videos/1792137339825-4e4545c1-sample-lecture.mp4",
+      "Size": 16,
+      "LastModified": "2026-10-16T07:55:40.000Z",
+      "ETag": "\"c7535b6000010de65787e6c73ee76b42\""
+    },
+    {
+      "Key": "videos/1792137397827-506100f6-sample-lecture.webm",
+      "Size": 24,
+      "LastModified": "2026-10-16T07:56:39.000Z",
+      "ETag": "\"19d1f4bd17565fe740b9310f92cce45e\""
+    },
+    {
+      "Key": "videos/1792137398760-6fe2d743-sample-lecture.mp4",
+      "Size": 16,
+      "LastModified": "2026-10-16T07:56:39.000Z",
+      "ETag": "\"c7535b6000010de65787e6c73ee76b42\""
+    },
+    {
+      "Key": "videos/1792137436655-78b66f42-sample-lecture.webm",
+      "Size": 24,
+      "LastModified": "2026-10-16T07:57:19.000Z",
+      "ETag": "\"19d1f4bd17565fe740b9310f92cce45e\""
+    },
+    {
+      "Key": "videos/1792137438879-89690fbd-sample-lecture.mp4",
+      "Size": 16,
+      "LastModified": "2026-10-16T07:57:19.000Z",
+      "ETag": "\"c7535b6000010de65787e6c73ee76b42\""
+    },
+    {
+      "Key": "videos/1792137517639-e425efe4-sample-lecture.webm",
+      "Size": 24,
+      "LastModified": "2026-10-16T07:58:39.000Z",
+      "ETag": "\"19d1f4bd17565fe740b9310f92cce45e\""
+    },
+    {
+      "Key": "videos/1792137519311-5b6571a5-sample-lecture.mp4",
+      "Size": 16,
+      "LastModified": "2026-10-16T07:58:40.000Z",
+      "ETag": "\"c7535b6000010de65787e6c73ee76b42\""
+    },
+    {
+      "Key": "videos/1792140938539-4c15ad42-b296-4792-9206-883fd8f02637-video1.mp4",
+      "Size": 7734893,
+      "LastModified": "2026-10-16T08:55:39.000Z",
+      "ETag": "\"2bd0b4699b3de9ac64ec4e1e61d661bd-1\""
+    },
+    {
+      "Key": "videos/1792140991781-a9f75d14-fa85-4807-90e6-d80c2f341ffb-file_example_WEBM_480_900KB.webm",
+      "Size": 901185,
+      "LastModified": "2026-10-16T08:56:32.000Z",
+      "ETag": "\"9255021fe5dd08f672a6a3f89c79452a-1\""
+    },
+    {
+      "Key": "videos/1792141088251-4d037875-1f70-43d7-9950-c63e474595ec-file_example_WEBM_480_900KB.webm",
+      "Size": 901185,
+      "LastModified": "2026-10-16T08:58:09.000Z",
+      "ETag": "\"9255021fe5dd08f672a6a3f89c79452a-1\""
+    },
+    {
+      "Key": "videos/1792141137192-2a5887bd-3fac-42b6-81dd-71f5e60d82a6-file_example_WEBM_480_900KB.webm",
+      "Size": 901185,
+      "LastModified": "2026-10-16T08:58:58.000Z",
+      "ETag": "\"9255021fe5dd08f672a6a3f89c79452a-1\""
+    },
+    {
+      "Key": "videos/1792141196211-8b104bf8-556b-479e-9aea-ffe0c198b2a6-file_example_WEBM_480_900KB.webm",
+      "Size": 901185,
+      "LastModified": "2026-10-16T08:59:57.000Z",
+      "ETag": "\"9255021fe5dd08f672a6a3f89c79452a-1\""
+    },
+    {
+      "Key": "videos/1792141290199-c33e75a0-b140-40e0-a433-ab04bae84363-file_example_WEBM_480_900KB.webm",
+      "Size": 901185,
+      "LastModified": "2026-10-16T09:01:31.000Z",
+      "ETag": "\"9255021fe5dd08f672a6a3f89c79452a-1\""
+    },
+    {
+      "Key": "videos/1792141614515-0414b78d-8c3e-4d58-a884-b847da278024-video2.mp4",
+      "Size": 17873522,
+      "LastModified": "2026-10-16T09:06:55.000Z",
+      "ETag": "\"ebda982cc178f5cc4b7852f2b00ee3ca-3\""
+    },
+    {
+      "Key": "videos/1792142019375-77277302-13fc-4687-accd-2979fd452bc6-video1.mp4",
+      "Size": 7734893,
+      "LastModified": "2026-10-16T09:13:40.000Z",
+      "ETag": "\"2bd0b4699b3de9ac64ec4e1e61d661bd-1\""
+    },
+    {
+      "Key": "videos/1792142075899-5367d349-0bd4-4588-ba16-9b9943953304-file_example_WEBM_480_900KB.webm",
+      "Size": 901185,
+      "LastModified": "2026-10-16T09:14:36.000Z",
+      "ETag": "\"9255021fe5dd08f672a6a3f89c79452a-1\""
+    },
+    {
+      "Key": "videos/1792142119669-d7a356b2-06fd-4b9e-be9a-a8423db46eee-file_example_WEBM_480_900KB.webm",
+      "Size": 901185,
+      "LastModified": "2026-10-16T09:15:20.000Z",
+      "ETag": "\"9255021fe5dd08f672a6a3f89c79452a-1\""
+    },
+    {
+      "Key": "videos/1792152778154-fb288590-9dfa-47fe-a406-596ba985858b-Respiratory-2.mp4",
+      "Size": 183641610,
+      "LastModified": "2026-10-16T12:12:59.000Z",
+      "ETag": "\"dfc26c1b592d96af1ee198049d341f0c-22\""
+    },
+    {
+      "Key": "videos/1792153137816-8dfdd6c7-5e74-4a17-8e43-547e4bb0f1d4-PHARMACY-PART-3.webm",
+      "Size": 309194335,
+      "LastModified": "2026-10-16T12:18:58.000Z",
+      "ETag": "\"8c862c8def5909d1e54d72971daf7860-37\""
+    },
+    {
+      "Key": "videos/1792157978298-1aca9607-e059-49ff-96bb-08f6b2891896-PHARMACY-PART-2.webm",
+      "Size": 325949980,
+      "LastModified": "2026-10-16T13:39:39.000Z",
+      "ETag": "\"a788dcb82eca668d145821bc5798ab5f-39\""
+    },
+    {
+      "Key": "videos/1792158628714-a1d0f09f-5dad-4f4d-898e-ba12a79b56b6-BTP-PART-1.webm",
+      "Size": 329865836,
+      "LastModified": "2026-10-16T13:50:29.000Z",
+      "ETag": "\"e80d21d714238b0e801a2d8eb41b9fa4-40\""
+    },
+    {
+      "Key": "videos/1792159497458-b8470d0b-d95d-4670-8450-6398dee0266c-BTP-PART-1.webm",
+      "Size": 329865836,
+      "LastModified": "2026-10-16T14:04:58.000Z",
+      "ETag": "\"e80d21d714238b0e801a2d8eb41b9fa4-40\""
+    },
+    {
+      "Key": "videos/1792159812813-b22d82ac-5cfd-49a0-91d7-fa8bb31d28cc-BTP-PART-1.webm",
+      "Size": 329865836,
+      "LastModified": "2026-10-16T14:10:13.000Z",
+      "ETag": "\"e80d21d714238b0e801a2d8eb41b9fa4-40\""
+    },
+    {
+      "Key": "videos/1792159976918-4ef39f3a-4079-4932-9d0a-2d49f4c4bf8b-PHARMACY-PART-2-faststart.mp4",
+      "Size": 330218107,
+      "LastModified": "2026-10-23T08:50:33.000Z",
+      "ETag": "\"8887f08b5b7657a67c3100d85b12ebed-32\""
+    },
+    {
+      "Key": "videos/1792159976918-4ef39f3a-4079-4932-9d0a-2d49f4c4bf8b-PHARMACY-PART-2-indexed.webm",
+      "Size": 326691870,
+      "LastModified": "2026-10-23T08:18:16.000Z",
+      "ETag": "\"30cc57d7cdbdea02b889b45cc8512792-32\""
+    },
+    {
+      "Key": "videos/1792159976918-4ef39f3a-4079-4932-9d0a-2d49f4c4bf8b-PHARMACY-PART-2.webm",
+      "Size": 325949980,
+      "LastModified": "2026-10-16T14:12:57.000Z",
+      "ETag": "\"a788dcb82eca668d145821bc5798ab5f-39\""
+    },
+    {
+      "Key": "videos/1792160144076-907bc807-c219-4c66-aab7-e6a3e21acba2-PHARMACY-PART-2.webm",
+      "Size": 325949980,
+      "LastModified": "2026-10-16T14:15:45.000Z",
+      "ETag": "\"a788dcb82eca668d145821bc5798ab5f-39\""
+    },
+    {
+      "Key": "videos/1792160185067-83d7ed83-05a7-4698-8944-72fdc142cc8c-PHARMACY-PART-3.webm",
+      "Size": 309194335,
+      "LastModified": "2026-10-16T14:16:26.000Z",
+      "ETag": "\"8c862c8def5909d1e54d72971daf7860-37\""
+    },
+    {
+      "Key": "videos/1792160399143-82346567-7689-4f02-ac33-d845137896cc-PHARMACY-PART-3.webm",
+      "Size": 309194335,
+      "LastModified": "2026-10-16T14:20:00.000Z",
+      "ETag": "\"8c862c8def5909d1e54d72971daf7860-37\""
+    },
+    {
+      "Key": "videos/1792160660690-1f908aa3-c0db-4823-bea9-a8089679cf10-PHARMACY-PART-2.webm",
+      "Size": 325949980,
+      "LastModified": "2026-10-16T14:24:21.000Z",
+      "ETag": "\"a788dcb82eca668d145821bc5798ab5f-39\""
+    },
+    {
+      "Key": "videos/1792160725770-178852c5-672b-469d-8fd2-4c204be87932-PHARMACY-PART-3.webm",
+      "Size": 309194335,
+      "LastModified": "2026-10-16T14:25:26.000Z",
+      "ETag": "\"8c862c8def5909d1e54d72971daf7860-37\""
+    },
+    {
+      "Key": "videos/1792162686897-599e9778-19a9-48a9-9769-915fc78de75c-RESPIRATORY-1.webm",
+      "Size": 165977431,
+      "LastModified": "2026-10-16T14:58:07.000Z",
+      "ETag": "\"734a8c29ec5bb6ad041c163bdc73527c-20\""
+    },
+    {
+      "Key": "videos/1792163009954-d6a9fb79-f8b2-44ba-8761-04a133914add-RESPIRATORY-1.webm",
+      "Size": 165977431,
+      "LastModified": "2026-10-16T15:03:30.000Z",
+      "ETag": "\"734a8c29ec5bb6ad041c163bdc73527c-20\""
+    },
+    {
+      "Key": "videos/1792324773912-2285439c-a7db-4ffc-9a1f-6a2455ca2a16-screen-capture.webm",
+      "Size": 248929283,
+      "LastModified": "2026-10-18T11:59:34.000Z",
+      "ETag": "\"49e56d21fdb72098b7b1bfd718e98a7b-30\""
+    },
+    {
+      "Key": "videos/1792326343951-bf60a52c-a016-4821-a6d1-1938d9189637-screen-capture.webm",
+      "Size": 248929283,
+      "LastModified": "2026-10-18T12:25:44.000Z",
+      "ETag": "\"49e56d21fdb72098b7b1bfd718e98a7b-30\""
+    },
+    {
+      "Key": "videos/1792328033079-8b89b0ef-ff20-4e19-8909-623648cfdf8d-screen-capture.webm",
+      "Size": 248929283,
+      "LastModified": "2026-10-18T12:53:54.000Z",
+      "ETag": "\"49e56d21fdb72098b7b1bfd718e98a7b-30\""
+    },
+    {
+      "Key": "videos/1792510265684-3dbac5f7-2175-4790-ae90-239c9b526677-BTP-2.mp4",
+      "Size": 285526044,
+      "LastModified": "2026-10-20T15:31:06.000Z",
+      "ETag": "\"4d5d0a42aeb224f1619eaeb486be72bb-35\""
+    },
+    {
+      "Key": "videos/1792510679227-16378318-dddd-4d1f-be54-dc442132d434-BTP-2.mp4",
+      "Size": 285526044,
+      "LastModified": "2026-10-20T15:38:00.000Z",
+      "ETag": "\"4d5d0a42aeb224f1619eaeb486be72bb-35\""
+    },
+    {
+      "Key": "videos/1792510757212-f794c332-2c8e-4daa-bf1b-1f94ca1c046a-BTP-2.mp4",
+      "Size": 285526044,
+      "LastModified": "2026-10-20T15:39:18.000Z",
+      "ETag": "\"4d5d0a42aeb224f1619eaeb486be72bb-35\""
+    },
+    {
+      "Key": "videos/1792646336243-cd382b58-b74b-439b-a662-4ee16630dd1e-PHARMACY-4-cfr-test.mp4",
+      "Size": 314676292,
+      "LastModified": "2026-10-23T11:42:22.000Z",
+      "ETag": "\"0747a9361d5ccae15ba2f33242ecf0fd\""
+    },
+    {
+      "Key": "videos/1792646336243-cd382b58-b74b-439b-a662-4ee16630dd1e-PHARMACY-4.mp4",
+      "Size": 487944644,
+      "LastModified": "2026-10-22T05:18:57.000Z",
+      "ETag": "\"3b7c9f2f9e6b81e6358fde91957fe87f-59\""
+    },
+    {
+      "Key": "videos/1792655031349-816ceb78-a84d-4f79-86ba-a45f07bdb846-PHARMACY-4.mp4",
+      "Size": 487944644,
+      "LastModified": "2026-10-22T07:43:52.000Z",
+      "ETag": "\"3b7c9f2f9e6b81e6358fde91957fe87f-59\""
+    },
+    {
+      "Key": "videos/1792655168739-8bc5294f-15a1-49d8-8ad8-d3d75094365c-PHARMACY-4.mp4",
+      "Size": 496915422,
+      "LastModified": "2026-10-22T07:46:09.000Z",
+      "ETag": "\"63a152449ef0e22f35c0de8c17e6d179-60\""
+    },
+    {
+      "Key": "videos/1792656200653-bd6ed086-e4d4-4356-9ff7-d35487f204ff-PHARMACY-4.mp4",
+      "Size": 487944644,
+      "LastModified": "2026-10-22T08:03:21.000Z",
+      "ETag": "\"3b7c9f2f9e6b81e6358fde91957fe87f-59\""
+    },
+    {
+      "Key": "videos/1792754210832-71f86655-fab7-41a3-abf6-c59f5b6db6a2-video2-1-.mp4",
+      "Size": 17873522,
+      "LastModified": "2026-10-23T11:16:51.000Z",
+      "ETag": "\"ebda982cc178f5cc4b7852f2b00ee3ca-3\""
+    },
+    {
+      "Key": "videos/1792757191315-935282c4-7daf-4daf-8663-39a51734b049-1792646336243-cd382b58-b74b-439b-a662-4ee16630dd1e-PHARMACY-4.mp4",
+      "Size": 487944644,
+      "LastModified": "2026-10-23T12:06:32.000Z",
+      "ETag": "\"3b7c9f2f9e6b81e6358fde91957fe87f-59\""
+    },
+    {
+      "Key": "videos/1792777109895-1917218b-2461-4951-a245-438f9b459015-pharmacy-3.mp4",
+      "Size": 359576944,
+      "LastModified": "2026-10-23T17:38:30.000Z",
+      "ETag": "\"7023dffb8683c02cef3b61467fc9420b-43\""
+    },
+    {
+      "Key": "videos/1792778942878-d9afb55a-0c68-42e8-8f6a-e5230da8d919-pharmacy-3.mp4",
+      "Size": 359576944,
+      "LastModified": "2026-10-23T18:09:03.000Z",
+      "ETag": "\"7023dffb8683c02cef3b61467fc9420b-43\""
+    },
+    {
+      "Key": "videos/1792817297402-e2b60177-48e6-4b30-8e2e-6fb0352fa61d-PHARMACY-PART-2.mp4",
+      "Size": 364513931,
+      "LastModified": "2026-10-24T04:48:18.000Z",
+      "ETag": "\"981d811ef0398bdb12d256f845f0a9b8-44\""
+    },
+    {
+      "Key": "videos/1792818027865-f837c06f-960c-4cd6-904d-720d0bad63e9-PHARMACY-PART-2.mp4",
+      "Size": 364513931,
+      "LastModified": "2026-10-24T05:00:28.000Z",
+      "ETag": "\"981d811ef0398bdb12d256f845f0a9b8-44\""
+    },
+    {
+      "Key": "videos/1792819786472-965e766e-b885-47ae-8c47-f2cacbb690d6-BTP-PART-1.mp4",
+      "Size": 372447719,
+      "LastModified": "2026-10-24T05:29:47.000Z",
+      "ETag": "\"c6a1ec7e78f699bb24e0a5b3f3ce2e0a-45\""
+    },
+    {
+      "Key": "videos/1792821032732-810f354a-8343-4794-8026-d910d3c39607-BTP-PART-1.mp4",
+      "Size": 372447719,
+      "LastModified": "2026-10-24T05:50:33.000Z",
+      "ETag": "\"c6a1ec7e78f699bb24e0a5b3f3ce2e0a-45\""
+    },
+    {
+      "Key": "videos/1792821074022-ca59de93-427e-4fba-97c9-7a301044c493-PHARMACY-PART-2.mp4",
+      "Size": 364513931,
+      "LastModified": "2026-10-24T05:51:15.000Z",
+      "ETag": "\"981d811ef0398bdb12d256f845f0a9b8-44\""
+    },
+    {
+      "Key": "videos/1792821765370-7152c21a-12b6-4536-ae49-2b5bd7e07480-PHARMACY-PART-2.mp4",
+      "Size": 364513931,
+      "LastModified": "2026-10-24T06:02:46.000Z",
+      "ETag": "\"981d811ef0398bdb12d256f845f0a9b8-44\""
+    },
+    {
+      "Key": "videos/1792822243587-ca9ce537-e16e-4c64-a15c-79ca5c2babc2-BTP-PART-1.mp4",
+      "Size": 372447719,
+      "LastModified": "2026-10-24T06:10:44.000Z",
+      "ETag": "\"c6a1ec7e78f699bb24e0a5b3f3ce2e0a-45\""
+    },
+    {
+      "Key": "videos/1792828847737-77d94ce3-63b3-4a93-a376-b7794f2c13ae-pharmacy-3.mp4",
+      "Size": 359576944,
+      "LastModified": "2026-10-24T08:00:48.000Z",
+      "ETag": "\"7023dffb8683c02cef3b61467fc9420b-43\""
+    },
+    {
+      "Key": "videos/1792901482685-b6f9f03b-2170-4039-80b6-fc503a2d5593-pharmacy-5.mp4",
+      "Size": 483764845,
+      "LastModified": "2026-10-25T04:11:23.000Z",
+      "ETag": "\"1b0df09698ef8c25dc40886fec4af3b2-58\""
+    },
+    {
+      "Key": "videos/1792902075327-24ece0f7-3d32-44b5-a584-ed854e62d94d-pharmacy-5.mp4",
+      "Size": 483764845,
+      "LastModified": "2026-10-25T04:21:16.000Z",
+      "ETag": "\"1b0df09698ef8c25dc40886fec4af3b2-58\""
+    },
+    {
+      "Key": "videos/1792902184026-c4f9d847-f9cc-40d0-8182-12b2ab343dee-pharmacy-5.mp4",
+      "Size": 483764845,
+      "LastModified": "2026-10-25T04:23:05.000Z",
+      "ETag": "\"1b0df09698ef8c25dc40886fec4af3b2-58\""
+    },
+    {
+      "Key": "videos/1792902657064-bdf23c77-0a88-4a38-bee9-20e63d706f9f-pharmacy-5.mp4",
+      "Size": 483764845,
+      "LastModified": "2026-10-25T04:30:58.000Z",
+      "ETag": "\"1b0df09698ef8c25dc40886fec4af3b2-58\""
+    },
+    {
+      "Key": "videos/1792998461736-a4321c31-bdb1-41eb-97cd-0372a7f9836e-pharmacy-6.mp4",
+      "Size": 465175810,
+      "LastModified": "2026-10-26T07:07:42.000Z",
+      "ETag": "\"24792191c3755354e0d88ab4de7903eb-56\""
+    },
+    {
+      "Key": "videos/1793003835374-fc45a34f-bac7-44ec-b670-31762e816bce-pharmacy-6.mp4",
+      "Size": 465175810,
+      "LastModified": "2026-10-26T08:37:16.000Z",
+      "ETag": "\"24792191c3755354e0d88ab4de7903eb-56\""
+    },
+    {
+      "Key": "videos/1793004027927-cb155ede-f71b-4cb6-93ca-0c8c59392c4b-pharmacy-6.mp4",
+      "Size": 465175810,
+      "LastModified": "2026-10-26T08:40:28.000Z",
+      "ETag": "\"24792191c3755354e0d88ab4de7903eb-56\""
+    },
+    {
+      "Key": "videos/1793013512772-1792162686897-599e9778-19a9-48a9-9769-915fc78de75c-RESPIRATORY-1_faststart.mp4",
+      "Size": 168791549,
+      "LastModified": "2026-10-26T11:18:36.000Z",
+      "ETag": "\"42f449c028817bd5a0ec8adf9b8cb40f\""
+    },
+    {
+      "Key": "videos/1793013766321-1792160185067-83d7ed83-05a7-4698-8944-72fdc142cc8c-PHARMACY-PART-3_faststart.mp4",
+      "Size": 315220752,
+      "LastModified": "2026-10-26T11:22:50.000Z",
+      "ETag": "\"0e547e0921634c7e671efccca3e58bfe\""
+    },
+    {
+      "Key": "videos/1793014839298-1792162686897-599e9778-19a9-48a9-9769-915fc78de75c-RESPIRATORY-1_faststart.mp4",
+      "Size": 168791549,
+      "LastModified": "2026-10-26T11:40:43.000Z",
+      "ETag": "\"72d313f50fccb4e5c1b73abf5ceb5066-17\""
+    },
+    {
+      "Key": "videos/1793015421722-1792160185067-83d7ed83-05a7-4698-8944-72fdc142cc8c-PHARMACY-PART-3_faststart.mp4",
+      "Size": 315220752,
+      "LastModified": "2026-10-26T11:50:26.000Z",
+      "ETag": "\"820a34cf81f652c99aec83e1cd6bba69-31\""
+    },
+    {
+      "Key": "videos/1793015796346-1792163009954-d6a9fb79-f8b2-44ba-8761-04a133914add-RESPIRATORY-1_faststart.mp4",
+      "Size": 168791549,
+      "LastModified": "2026-10-26T11:56:40.000Z",
+      "ETag": "\"72d313f50fccb4e5c1b73abf5ceb5066-17\""
+    },
+    {
+      "Key": "videos/1793254762637-c65ea029-0ee5-49a6-b5ed-053df1092574-pharmacy-7.mp4",
+      "Size": 393923776,
+      "LastModified": "2026-10-29T06:19:23.000Z",
+      "ETag": "\"b4077474e5a3b82c09fe10f2db82dbcd-47\""
+    },
+    {
+      "Key": "videos/1793255216796-2f294651-637d-489b-9c19-23b71593c520-pharmacy-7.mp4",
+      "Size": 393923776,
+      "LastModified": "2026-10-29T06:26:57.000Z",
+      "ETag": "\"b4077474e5a3b82c09fe10f2db82dbcd-47\""
+    },
+    {
+      "Key": "videos/1793257058689-5dc6044a-f41d-4c50-aa7d-e166c762b253-pharmacy-6.mp4",
+      "Size": 465175810,
+      "LastModified": "2026-10-29T06:57:39.000Z",
+      "ETag": "\"24792191c3755354e0d88ab4de7903eb-56\""
+    },
+    {
+      "Key": "videos/1793342203483-c2f8729a-3cf2-4b44-9d5f-61d9e6dcb4ba-pharmacy-7.mp4",
+      "Size": 393923776,
+      "LastModified": "2026-10-30T06:36:44.000Z",
+      "ETag": "\"b4077474e5a3b82c09fe10f2db82dbcd-47\""
+    },
+    {
+      "Key": "videos/1793342834620-c855b738-e0a6-4887-acf2-67101ee53979-pharmacy-7.mp4",
+      "Size": 393923776,
+      "LastModified": "2026-10-30T06:47:15.000Z",
+      "ETag": "\"b4077474e5a3b82c09fe10f2db82dbcd-47\""
+    },
+    {
+      "Key": "videos/1793432296164-3bccecec-a30c-456f-b81c-04f0adc9a530-kent-mind-1.mp4",
+      "Size": 444152179,
+      "LastModified": "2026-10-31T07:38:17.000Z",
+      "ETag": "\"5e7a6b01e65b9df69b3f584a346f3641-53\""
+    },
+    {
+      "Key": "videos/1793433504166-de026f00-0295-4a8d-af68-fad7e6ee50bd-kent-mind-1.mp4",
+      "Size": 444152179,
+      "LastModified": "2026-10-31T07:58:25.000Z",
+      "ETag": "\"5e7a6b01e65b9df69b3f584a346f3641-53\""
+    },
+    {
+      "Key": "videos/1793440692061-9483a3c1-9b7b-4dcf-9eef-53f69d8d76f5-kent-mind-1.mp4",
+      "Size": 444152179,
+      "LastModified": "2026-10-31T09:58:13.000Z",
+      "ETag": "\"5e7a6b01e65b9df69b3f584a346f3641-53\""
+    },
+    {
+      "Key": "videos/1793441246142-ecbb4255-c3b7-43cf-b346-0cfe3c36c26a-kent-mind-1.mp4",
+      "Size": 444152179,
+      "LastModified": "2026-10-31T10:07:27.000Z",
+      "ETag": "\"5e7a6b01e65b9df69b3f584a346f3641-53\""
+    },
+    {
+      "Key": "videos/1793468811141-c46459ef-2cf6-4548-ac15-91db6b3ef0c6-kent-mind-2.mp4",
+      "Size": 296430958,
+      "LastModified": "2026-10-31T17:46:52.000Z",
+      "ETag": "\"eb7010aca837ef619db4fd174696c1fc-36\""
+    },
+    {
+      "Key": "videos/1793533970738-99b8a0b7-d875-4229-83ac-b56148efa61b-kent-mind-2.mp4",
+      "Size": 296430958,
+      "LastModified": "2026-11-01T11:52:51.000Z",
+      "ETag": "\"eb7010aca837ef619db4fd174696c1fc-36\""
+    },
+    {
+      "Key": "videos/1793534085963-5c5a1cdb-1959-4220-933d-c561266fe96a-kent-mind-2.mp4",
+      "Size": 296430958,
+      "LastModified": "2026-11-01T11:54:46.000Z",
+      "ETag": "\"eb7010aca837ef619db4fd174696c1fc-36\""
+    }
+  ],
+  "s3LiveRecords": [
+    {
+      "Key": "live_records/1790933389832-4a25e0e1-test_recording.webm",
+      "Size": 2245841,
+      "LastModified": "2026-10-02T09:29:51.000Z",
+      "ETag": "\"fa9fa11634e55fd911a3214d1037e56f\""
+    },
+    {
+      "Key": "live_records/1790933449776-2f9cb444-test_recording.webm",
+      "Size": 150109,
+      "LastModified": "2026-10-02T09:30:51.000Z",
+      "ETag": "\"3ed90f33c117c824dbc46bbb1e9810eb\""
+    }
+  ]
+}

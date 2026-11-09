@@ -10,26 +10,31 @@ const {
 const { getSignedUrl } = require('@aws-sdk/s3-request-presigner');
 const { randomUUID } = require('crypto');
 const mongoose = require('mongoose');
-const { s3Client, bucket } = require('../config/s3');
+const { s3Client, bucket, region, isS3Configured } = require('../config/s3');
 const Course = require('../models/Course');
+const Recording = require('../models/Recording');
+const DemoVideo = require('../models/DemoVideo');
+const Lesson = require('../models/Lesson.model');
 const Student = require('../models/Student');
+const { resolveStudentLessonVideoAccess } = require('../utils/studentLessonVideoAccess');
+const { getS3Url, getS3KeyFromUrl } = require('../services/s3Service');
 const { verifyStudentCourseAccess } = require('../utils/courseAccessHelper');
+const { normalizeS3Reference, encodeSignedUrl, resolveMediaRecord, getVerifiedS3KeyForLegacyAsset } = require('../utils/s3MediaSigner');
 
 const PART_URL_TTL_SECONDS = 900;
-const MEDIA_URL_TTL_SECONDS = 900;
-const HLS_FALLBACK_URL_TTL_SECONDS = (() => {
-  const configured = Number.parseInt(process.env.HLS_FALLBACK_URL_TTL_SECONDS || '', 10);
-  return Number.isInteger(configured) && configured >= 900 && configured <= 604800 ? configured : 21600;
-})();
+const MEDIA_URL_TTL_SECONDS = parseInt(process.env.S3_SIGNED_URL_EXPIRES_IN || process.env.S3_MEDIA_URL_TTL_SECONDS, 10) || 21600;
 const SINGLE_UPLOAD_URL_TTL_SECONDS = 900;
 const IMAGE_MAX_BYTES = 25 * 1024 * 1024;
 const PDF_MAX_BYTES = 250 * 1024 * 1024;
+const DOCUMENT_MAX_BYTES = 100 * 1024 * 1024;
 const VIDEO_MAX_BYTES = 2 * 1024 * 1024 * 1024 * 1024;
+
 const MEDIA_RULES = {
   image: {
     prefix: 'images',
     maxBytes: IMAGE_MAX_BYTES,
     extensions: {
+      'application/pdf': new Set(['pdf']),
       'image/jpeg': new Set(['jpg', 'jpeg']),
       'image/png': new Set(['png']),
       'image/webp': new Set(['webp']),
@@ -43,6 +48,52 @@ const MEDIA_RULES = {
     extensions: { 'application/pdf': new Set(['pdf']) },
     types: new Set(['application/pdf']),
   },
+  document: {
+    prefix: 'documents',
+    maxBytes: DOCUMENT_MAX_BYTES,
+    extensions: {
+      'application/msword': new Set(['doc']),
+      'application/vnd.openxmlformats-officedocument.wordprocessingml.document': new Set(['docx']),
+      'application/vnd.ms-powerpoint': new Set(['ppt']),
+      'application/vnd.openxmlformats-officedocument.presentationml.presentation': new Set(['pptx']),
+      'application/vnd.ms-excel': new Set(['xls', 'csv']),
+      'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet': new Set(['xlsx']),
+      'text/plain': new Set(['txt', 'csv']),
+      'text/csv': new Set(['csv']),
+      'application/zip': new Set(['zip']),
+      'application/x-zip-compressed': new Set(['zip']),
+      'application/vnd.rar': new Set(['rar']),
+      'application/x-rar-compressed': new Set(['rar']),
+      'application/x-rar': new Set(['rar']),
+      'application/octet-stream': new Set(['doc', 'docx', 'ppt', 'pptx', 'xls', 'xlsx', 'txt', 'csv', 'zip', 'rar']),
+    },
+    types: new Set([
+      'application/pdf',
+      'application/msword',
+      'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+      'application/vnd.ms-powerpoint',
+      'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+      'application/vnd.ms-excel',
+      'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+      'text/plain',
+      'text/csv',
+      'application/zip',
+      'application/x-zip-compressed',
+      'application/vnd.rar',
+      'application/x-rar-compressed',
+      'application/x-rar',
+      'application/octet-stream',
+    ]),
+  },
+};
+
+const normalizeMediaType = (val) => {
+  if (typeof val !== 'string') return '';
+  const clean = val.toLowerCase().trim();
+  if (clean === 'image' || clean === 'images') return 'image';
+  if (clean === 'pdf' || clean === 'pdfs') return 'pdf';
+  if (['document', 'documents', 'doc', 'docx', 'ppt', 'pptx', 'xls', 'xlsx', 'txt', 'csv', 'zip', 'rar', 'attachment', 'attachments'].includes(clean)) return 'document';
+  return clean;
 };
 
 const log = (action, fields = {}) => console.info(`[S3 multipart] ${action}`, fields);
@@ -51,7 +102,7 @@ const cleanFileName = (name) => name.trim().replace(/^.*[\\/]/, '').normalize('N
   .replace(/[\u0300-\u036f]/g, '').replace(/[^a-zA-Z0-9._-]+/g, '-')
   .replace(/-{2,}/g, '-').replace(/^[.-]+|[.-]+$/g, '').slice(0, 160);
 const validVideoKey = (key) => typeof key === 'string' && /^videos\/\d{13}-(?:[0-9a-f-]{36}-)?[a-zA-Z0-9][a-zA-Z0-9._-]{0,159}$/.test(key);
-const validStoredKey = (key, prefix) => typeof key === 'string' && key.startsWith(`${prefix}/`) && key.length <= 1024 && !key.includes('..') && !/[\\\r\n]/.test(key);
+const validStoredKey = (key, prefix) => typeof key === 'string' && key.startsWith(`${prefix}/`) && key.length <= 1024 && !key.includes('..') && !key.includes('//') && !/[\\\r\n]/.test(key);
 const validUploadId = (id) => typeof id === 'string' && id.length >= 1 && id.length <= 1024 && !/[\r\n]/.test(id);
 const safeFileName = (value) => {
   if (typeof value !== 'string' || !value.trim() || value.length > 1024 || /[\r\n]/.test(value)) return null;
@@ -59,38 +110,84 @@ const safeFileName = (value) => {
   return fileName && fileName !== '.' && fileName !== '..' ? fileName : null;
 };
 const validSize = (value, maxBytes) => Number.isSafeInteger(value) && value > 0 && value <= maxBytes;
-const makeReference = ({ key, fileName, contentType, fileSize, uploadStatus = 'uploaded', hlsConversionStatus, hlsOutputPrefix, hlsMasterUrl }) => ({
-  title: fileName,
-  url: '',
-  secure_url: '',
-  secureUrl: '',
-  fileUrl: '',
-  documentUrl: '',
-  path: '',
-  storageProvider: 's3',
-  s3Key: key,
-  resourceType: contentType?.startsWith('video/') ? 'video' : (contentType === 'application/pdf' ? 'pdf' : 'image'),
-  resource_type: contentType?.startsWith('video/') ? 'video' : (contentType === 'application/pdf' ? 'raw' : 'image'),
-  fileName,
-  originalFileName: fileName,
-  contentType,
-  mimetype: contentType,
-  fileSize: fileSize || 0,
-  size: fileSize || 0,
-  uploadStatus,
-  ...(hlsConversionStatus ? { hlsConversionStatus } : {}),
-  ...(hlsOutputPrefix ? { hlsOutputPrefix } : {}),
-  ...(hlsMasterUrl ? { hlsMasterUrl } : {}),
-});
+const makeReference = ({ key, fileName, contentType, fileSize, duration, uploadStatus = 'uploaded', hlsConversionStatus, hlsOutputPrefix, hlsMasterUrl }) => {
+  const resolvedSize = Number(fileSize) || 0;
+  const numDuration = (duration !== undefined && duration !== null && !isNaN(duration) && Number(duration) > 0)
+    ? Number(duration)
+    : undefined;
+
+  const isVideo = contentType?.startsWith('video/');
+  const isPdf = contentType === 'application/pdf';
+  const isDoc = (key && (key.startsWith('documents/') || key.startsWith('attachments/'))) || (!isVideo && !isPdf && !contentType?.startsWith('image/'));
+
+  return {
+    title: fileName,
+    url: '',
+    secure_url: '',
+    secureUrl: '',
+    fileUrl: '',
+    documentUrl: '',
+    path: '',
+    storageProvider: 's3',
+    s3Key: key,
+    resourceType: isVideo ? 'video' : (isPdf ? 'pdf' : (isDoc ? 'document' : 'image')),
+    resource_type: isVideo ? 'video' : (isPdf ? 'raw' : (isDoc ? 'raw' : 'image')),
+    fileName,
+    originalFileName: fileName,
+    contentType,
+    mimetype: contentType,
+    fileSize: resolvedSize,
+    size: resolvedSize,
+    bytes: resolvedSize,
+    ...(numDuration !== undefined ? { duration: numDuration, videoDuration: numDuration } : {}),
+    uploadStatus,
+    ...(hlsConversionStatus ? { hlsConversionStatus } : {}),
+    ...(hlsOutputPrefix ? { hlsOutputPrefix } : {}),
+    ...(hlsMasterUrl ? { hlsMasterUrl } : {}),
+  };
+};
 const handleS3Error = (res, error, action) => {
   const status = Number(error.$metadata?.httpStatusCode) || 0;
   const code = error.name || error.Code || 'S3Error';
-  console.error(`[S3 multipart] ${action} failed`, { code, status, message: error.message });
-  if (status === 404 || ['NoSuchUpload', 'NotFound'].includes(code)) return fail(res, 404, 'Multipart upload was not found.', code);
-  if (status === 403 || ['AccessDenied', 'InvalidAccessKeyId'].includes(code)) return fail(res, 502, 'S3 denied the multipart operation.', code);
-  if (['EntityTooSmall', 'InvalidPart', 'InvalidPartOrder', 'MalformedXML'].includes(code)) return fail(res, 400, 'S3 rejected the multipart completion data.', code);
-  return fail(res, status >= 400 && status < 500 ? status : 502, 'S3 multipart operation failed.', code);
+  const isSingleObject = ['object-presign', 'object-complete', 'media-access'].includes(action);
+  const operationType = isSingleObject ? 'object' : 'multipart';
+
+  console.error(`[S3 ${operationType}] ${action} failed:`, {
+    action,
+    code,
+    status,
+    hasCredentials: Boolean(
+      process.env.AWS_ACCESS_KEY_ID ||
+      process.env.S3_ACCESS_KEY ||
+      process.env.AWS_KEY
+    ),
+  });
+
+  if (code === 'CredentialsProviderError' || code === 'NoCredentials' || error.message?.includes('Could not load credentials')) {
+    return fail(
+      res,
+      503,
+      'S3 upload service is not configured',
+      'CredentialsProviderError'
+    );
+  }
+  if (status === 404 || ['NoSuchUpload', 'NotFound', 'NoSuchBucket', 'NoSuchKey'].includes(code)) {
+    return fail(res, 404, isSingleObject ? 'S3 resource or bucket was not found.' : 'Multipart upload was not found.', code);
+  }
+  if (status === 403 || ['AccessDenied', 'InvalidAccessKeyId', 'SignatureDoesNotMatch'].includes(code)) {
+    return fail(res, 502, 'S3 denied the operation. Check AWS credentials, region, and bucket permissions.', code);
+  }
+  if (['EntityTooSmall', 'InvalidPart', 'InvalidPartOrder', 'MalformedXML'].includes(code)) {
+    return fail(res, 400, 'S3 rejected the upload completion data.', code);
+  }
+  return fail(
+    res,
+    status >= 400 && status < 500 ? status : 502,
+    isSingleObject ? 'S3 media request failed.' : 'S3 multipart operation failed.',
+    code,
+  );
 };
+
 
 const initiateMultipartUpload = async (req, res) => {
   const fileName = req.body?.fileName;
@@ -98,10 +195,18 @@ const initiateMultipartUpload = async (req, res) => {
   const safeName = safeFileName(fileName);
   if (!safeName) return fail(res, 400, 'A valid fileName is required.');
   if (typeof contentType !== 'string' || !/^video\/[a-z0-9][a-z0-9.+-]{0,126}$/i.test(contentType)) return fail(res, 400, 'contentType must be a valid video MIME type.');
+  if (contentType.toLowerCase() === 'video/webm' || safeName.toLowerCase().endsWith('.webm')) {
+    return fail(res, 400, 'WEBM format is not supported for iOS/Safari playback. Please upload MP4 with H.264 video and AAC audio.');
+  }
   if (req.body?.fileSize !== undefined && !validSize(req.body.fileSize, VIDEO_MAX_BYTES)) return fail(res, 400, 'fileSize must be a positive safe integer no greater than 2 TiB.');
   const key = `videos/${Date.now()}-${randomUUID()}-${safeName}`;
   try {
-    const result = await s3Client.send(new CreateMultipartUploadCommand({ Bucket: bucket, Key: key, ContentType: contentType }));
+    const result = await s3Client.send(new CreateMultipartUploadCommand({
+      Bucket: bucket,
+      Key: key,
+      ContentType: contentType,
+      CacheControl: 'public, max-age=31536000',
+    }));
     if (!result.UploadId) throw new Error('S3 did not return an upload ID');
     log('initiated', { key, userId: req.user?.id });
     return res.status(201).json({
@@ -120,7 +225,8 @@ const partUrl = async (req, res) => {
   if (!validUploadId(uploadId)) return fail(res, 400, 'Invalid multipart uploadId.');
   if (!Number.isInteger(part) || part < 1 || part > 10000 || String(partNumber).trim() !== String(part)) return fail(res, 400, 'partNumber must be an integer from 1 to 10000.');
   try {
-    const url = await getSignedUrl(s3Client, new UploadPartCommand({ Bucket: bucket, Key: key, UploadId: uploadId, PartNumber: part }), { expiresIn: PART_URL_TTL_SECONDS });
+    const rawUrl = await getSignedUrl(s3Client, new UploadPartCommand({ Bucket: bucket, Key: key, UploadId: uploadId, PartNumber: part }), { expiresIn: PART_URL_TTL_SECONDS });
+    const url = encodeSignedUrl(rawUrl);
     log('part URL issued', { key, partNumber: part, userId: req.user?.id });
     return res.json({ success: true, url, partNumber: part, expiresIn: PART_URL_TTL_SECONDS });
   } catch (error) { return handleS3Error(res, error, 'part-url'); }
@@ -156,30 +262,88 @@ const completeMultipartUpload = async (req, res) => {
       console.error('[S3 multipart] completed object content type did not match the declared type', { key, expected: req.body.contentType, actual: objectMetadata.ContentType });
       return fail(res, 400, 'Uploaded video content type does not match contentType.');
     }
-    let hlsData = null;
-    if (String(objectMetadata.ContentType || req.body?.contentType || '').toLowerCase().startsWith('video/')) {
+    log('completed', { key, partCount: normalized.length, userId: req.user?.id });
+    const s3Url = getS3Url(key);
+    let linkedRecording = null;
+    if (req.body?.recordingId && mongoose.Types.ObjectId.isValid(req.body.recordingId)) {
       try {
-        const { enqueueHlsConversion } = require('../services/mediaConvertService');
-        hlsData = enqueueHlsConversion(key, { userMetadata: { uploadedBy: String(req.user?.id || '') } });
-      } catch (hlsError) {
-        console.warn('[S3 multipart] HLS conversion could not be enqueued:', hlsError.message);
+        const recording = await Recording.findById(req.body.recordingId);
+        if (recording) {
+          recording.s3Key = key;
+          recording.storageProvider = 's3';
+          recording.recordedVideoUrl = s3Url;
+          recording.recordingFileUrl = s3Url;
+          recording.status = 'stopped';
+          if (objectMetadata.ContentLength) {
+            recording.bytes = objectMetadata.ContentLength;
+          }
+          if (req.body?.duration) {
+            recording.duration = String(req.body.duration).trim();
+          } else if (req.body?.videoDuration) {
+            recording.duration = `${Math.round(req.body.videoDuration)} sec`;
+          }
+          await recording.save();
+          linkedRecording = recording;
+        }
+      } catch (recErr) {
+        console.warn('[S3 multipart] Failed to link recording to completed upload:', recErr.message);
       }
     }
-    log('completed', { key, partCount: normalized.length, userId: req.user?.id });
+
+    const durationVal = req.body?.duration !== undefined ? req.body.duration : req.body?.videoDuration;
+
+    // Automatically trigger AWS Elemental MediaConvert HLS conversion
+    let hlsData = null;
+    if (key.toLowerCase().endsWith('.mp4') || key.toLowerCase().endsWith('.webm') || key.toLowerCase().endsWith('.mov')) {
+      try {
+        const { enqueueHlsConversion } = require('../services/mediaConvertService');
+        hlsData = enqueueHlsConversion(key, {
+          userMetadata: {
+            s3Key: key,
+            recordingId: req.body?.recordingId || '',
+          },
+        });
+      } catch (hlsErr) {
+        console.warn('[S3 multipart] Could not enqueue MediaConvert HLS conversion:', hlsErr.message);
+      }
+    }
+
+    // Also trigger background iOS M4V conversion for uploaded videos
+    if (key.toLowerCase().endsWith('.mp4') || key.toLowerCase().endsWith('.webm') || key.toLowerCase().endsWith('.mov')) {
+      try {
+        const { enqueueConversion } = require('../services/videoConversionService');
+        enqueueConversion(key);
+      } catch (convErr) {
+        console.warn('[S3 multipart] Could not enqueue background M4V conversion:', convErr.message);
+      }
+    }
+
+    const hlsStatus = hlsData?.status || 'PENDING';
+    const hlsOutputPrefix = hlsData?.hlsOutputPrefix || '';
+    const hlsMasterUrl = hlsData?.hlsMasterUrl || '';
+
     return res.json({
       success: true,
       key,
+      s3Key: key,
+      storageProvider: 's3',
       location: result.Location,
+      secure_url: s3Url,
+      url: s3Url,
       etag: result.ETag,
-      ...(hlsData ? { hlsConversionStatus: hlsData.status, hlsOutputPrefix: hlsData.hlsOutputPrefix, hlsMasterUrl: hlsData.hlsMasterUrl } : {}),
+      recording: linkedRecording,
+      hlsConversionStatus: hlsStatus,
+      hlsOutputPrefix,
+      hlsMasterUrl,
       media: makeReference({
         key,
         fileName: safeFileName(req.body?.fileName) || key.split('/').pop(),
         contentType: objectMetadata.ContentType || req.body?.contentType || 'application/octet-stream',
         fileSize: objectMetadata.ContentLength || 0,
-        hlsConversionStatus: hlsData?.status,
-        hlsOutputPrefix: hlsData?.hlsOutputPrefix,
-        hlsMasterUrl: hlsData?.hlsMasterUrl,
+        duration: durationVal,
+        hlsConversionStatus: hlsStatus,
+        hlsOutputPrefix,
+        hlsMasterUrl,
       }),
     });
   } catch (error) { return handleS3Error(res, error, 'complete'); }
@@ -197,10 +361,11 @@ const abortMultipartUpload = async (req, res) => {
 };
 
 const initiateObjectUpload = async (req, res) => {
-  const { mediaType, contentType, fileSize } = req.body || {};
+  const { contentType, fileSize } = req.body || {};
+  const mediaType = normalizeMediaType(req.body?.mediaType);
   const rule = MEDIA_RULES[mediaType];
   const fileName = safeFileName(req.body?.fileName);
-  if (!rule) return fail(res, 400, 'mediaType must be image or pdf.');
+  if (!rule) return fail(res, 400, 'mediaType must be image, pdf, or document.');
   if (!fileName) return fail(res, 400, 'A valid fileName is required.');
   if (typeof contentType !== 'string' || !rule.types.has(contentType.toLowerCase())) {
     return fail(res, 400, `contentType is not supported for ${mediaType} uploads.`);
@@ -210,30 +375,68 @@ const initiateObjectUpload = async (req, res) => {
   if (!validSize(fileSize, rule.maxBytes)) {
     return fail(res, 400, `fileSize must be between 1 byte and ${rule.maxBytes} bytes for ${mediaType} uploads.`);
   }
+
+  const s3Ready = isS3Configured();
   const key = `${rule.prefix}/${Date.now()}-${randomUUID()}-${fileName}`;
+
+  console.info('[S3 PRESIGN]', {
+    'bucket configured': Boolean(bucket),
+    'region configured': Boolean(region),
+    'credentials configured': s3Ready,
+    'requested key': key,
+    'requested content type': contentType.toLowerCase(),
+    'generated presigned URL': false,
+  });
+
+  if (!s3Ready) {
+    console.error('[S3 PRESIGN] S3 upload service is not configured (missing credentials or bucket)');
+    return fail(res, 503, 'S3 upload service is not configured', 'S3NotConfigured');
+  }
+
   try {
     const command = new PutObjectCommand({ Bucket: bucket, Key: key, ContentType: contentType.toLowerCase(), ContentLength: fileSize });
-    const url = await getSignedUrl(s3Client, command, { expiresIn: SINGLE_UPLOAD_URL_TTL_SECONDS });
+    const rawUrl = await getSignedUrl(s3Client, command, { expiresIn: SINGLE_UPLOAD_URL_TTL_SECONDS });
+    const url = encodeSignedUrl(rawUrl);
     const media = makeReference({ key, fileName, contentType: contentType.toLowerCase(), fileSize, uploadStatus: 'pending' });
+    console.info('[S3 PRESIGN]', {
+      'bucket configured': Boolean(bucket),
+      'region configured': Boolean(region),
+      'credentials configured': true,
+      'requested key': key,
+      'requested content type': contentType.toLowerCase(),
+      'generated presigned URL': Boolean(url),
+    });
     console.info('[S3 media] upload URL issued', { mediaType, key, fileSize, userId: req.user?.id });
-    return res.status(201).json({
+    return res.status(200).json({
       success: true,
       url,
+      uploadUrl: url,
+      presignedUrl: url,
       method: 'PUT',
       headers: { 'Content-Type': contentType.toLowerCase() },
       expiresIn: SINGLE_UPLOAD_URL_TTL_SECONDS,
       key,
+      s3Key: key,
       media,
     });
   } catch (error) {
+    console.info('[S3 PRESIGN]', {
+      'bucket configured': Boolean(bucket),
+      'region configured': Boolean(region),
+      'credentials configured': s3Ready,
+      'requested key': key,
+      'requested content type': contentType.toLowerCase(),
+      'generated presigned URL': false,
+    });
     return handleS3Error(res, error, 'object-presign');
   }
 };
 
 const completeObjectUpload = async (req, res) => {
-  const { mediaType, key, fileName, contentType, fileSize } = req.body || {};
+  const { key, fileName, contentType, fileSize } = req.body || {};
+  const mediaType = normalizeMediaType(req.body?.mediaType);
   const rule = MEDIA_RULES[mediaType];
-  if (!rule) return fail(res, 400, 'mediaType must be image or pdf.');
+  if (!rule) return fail(res, 400, 'mediaType must be image, pdf, or document.');
   if (!validStoredKey(key, rule.prefix)) return fail(res, 400, 'Invalid S3 object key.');
   const safeName = safeFileName(fileName);
   if (!safeName || typeof contentType !== 'string' || !rule.types.has(contentType.toLowerCase())) return fail(res, 400, 'Valid fileName and contentType are required.');
@@ -266,129 +469,666 @@ const findStudentForMedia = async (user) => {
   return user.email ? Student.findOne({ email: user.email.toLowerCase() }) : null;
 };
 
-const courseContainsS3Key = (course, key) => {
-  if (course.thumbnailMedia?.s3Key === key) return true;
-  for (const moduleItem of course.modules || []) {
-    for (const lesson of moduleItem.lessons || []) {
-      if (lesson.s3Key === key || lesson.videoS3Key === key) return true;
+const escapeRegex = (str) => String(str).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+const courseContainsMediaKey = (course, key) => {
+  if (!course || !key) return false;
+  const targetKey = String(key).trim();
+  const getProp = (obj, prop) => {
+    if (!obj) return undefined;
+    if (typeof obj.get === 'function') {
+      const val = obj.get(prop);
+      if (val !== undefined) return val;
+    }
+    if (obj._doc && obj._doc[prop] !== undefined) return obj._doc[prop];
+    return obj[prop];
+  };
+
+  const thumbObj = getProp(course, 'thumbnailMedia') || course.thumbnailMedia;
+  const thumbKey = getProp(thumbObj, 's3Key') || getProp(thumbObj, 'key') || getS3KeyFromUrl(getProp(thumbObj, 'url'));
+  if (thumbKey === targetKey) return true;
+  if (getS3KeyFromUrl(getProp(course, 'thumbnail')) === targetKey) return true;
+  if (getS3KeyFromUrl(getProp(course, 'bannerUrl')) === targetKey) return true;
+  if (getS3KeyFromUrl(getProp(course, 'courseBanner')) === targetKey) return true;
+
+  const modules = getProp(course, 'modules') || course.modules || [];
+  const decodedTarget = (() => {
+    try { return decodeURIComponent(targetKey); } catch (_) { return targetKey; }
+  })();
+  const targetBaseName = decodedTarget.split('/').pop().trim().toLowerCase();
+  const verifiedLegacyKey = typeof getVerifiedS3KeyForLegacyAsset === 'function' ? getVerifiedS3KeyForLegacyAsset(targetKey) : null;
+
+  for (const moduleItem of modules) {
+    const lessons = getProp(moduleItem, 'lessons') || moduleItem.lessons || [];
+    for (const lesson of lessons) {
+      if (
+        getProp(lesson, 'videoS3Key') === targetKey ||
+        getProp(lesson, 's3Key') === targetKey ||
+        getProp(lesson, 'm4vS3Key') === targetKey ||
+        getProp(lesson, 'mp4S3Key') === targetKey
+      ) return true;
+      if (getS3KeyFromUrl(getProp(lesson, 'videoUrl')) === targetKey) return true;
+      if (normalizeS3Reference(getProp(lesson, 'videoUrl'))?.s3Key === targetKey) return true;
+      if (getS3KeyFromUrl(getProp(lesson, 'fileUrl')) === targetKey) return true;
+      if (getS3KeyFromUrl(getProp(lesson, 'pdfUrl')) === targetKey) return true;
+      if (getS3KeyFromUrl(getProp(lesson, 'documentUrl')) === targetKey) return true;
+      if (getS3KeyFromUrl(getProp(lesson, 'url')) === targetKey) return true;
+      if (getS3KeyFromUrl(getProp(lesson, 'path')) === targetKey) return true;
+      const lessonVideoUrl = getProp(lesson, 'videoUrl');
+      if (typeof lessonVideoUrl === 'string' && (lessonVideoUrl.includes(targetKey) || lessonVideoUrl.includes(decodedTarget))) return true;
+
       for (const collection of ['videoParts', 'pdfNotes', 'assignments', 'attachments']) {
-        if ((lesson[collection] || []).some((item) => item.s3Key === key)) return true;
+        const list = getProp(lesson, collection) || lesson[collection] || [];
+        for (const item of list) {
+          const itemKey = getProp(item, 's3Key') ||
+            getProp(item, 'm4vS3Key') ||
+            getProp(item, 'mp4S3Key') ||
+            getProp(item, 'key') ||
+            getS3KeyFromUrl(getProp(item, 'url')) ||
+            getS3KeyFromUrl(getProp(item, 'secure_url')) ||
+            getS3KeyFromUrl(getProp(item, 'secureUrl')) ||
+            getS3KeyFromUrl(getProp(item, 'fileUrl')) ||
+            getS3KeyFromUrl(getProp(item, 'documentUrl')) ||
+            getS3KeyFromUrl(getProp(item, 'path'));
+          if (itemKey === targetKey || (verifiedLegacyKey && itemKey === verifiedLegacyKey)) return true;
+          const itemUrl = getProp(item, 'url') || getProp(item, 'secure_url') || getProp(item, 'secureUrl');
+          if (typeof itemUrl === 'string') {
+            if (itemUrl.includes(targetKey) || itemUrl.includes(decodedTarget)) return true;
+            try {
+              if (decodeURIComponent(itemUrl).includes(decodedTarget)) return true;
+            } catch (_) {}
+          }
+          const itemTitle = String(getProp(item, 'title') || getProp(item, 'fileName') || getProp(item, 'originalFileName') || '').trim().toLowerCase();
+          if (targetBaseName && (itemTitle === targetBaseName || itemTitle === targetBaseName.replace(/\s*\(\d+\)\s*/g, ' ').replace(/\s+/g, ' ').trim())) return true;
+        }
       }
     }
+  }
+  if (targetKey.endsWith('_ios.m4v')) {
+    const origMp4 = targetKey.replace(/_ios\.m4v$/, '.mp4');
+    if (courseContainsMediaKey(course, origMp4)) return true;
+    const origWebm = targetKey.replace(/_ios\.m4v$/, '.webm');
+    if (courseContainsMediaKey(course, origWebm)) return true;
   }
   return false;
 };
 
+const courseContainsS3Key = courseContainsMediaKey;
+
 const getMediaAccessUrl = async (req, res) => {
   const courseId = req.query?.courseId || req.body?.courseId;
-  const key = req.query?.s3Key || req.query?.key || req.body?.s3Key || req.body?.key;
-  if (typeof key !== 'string' || !key.trim()) return fail(res, 400, 's3Key is required.');
-  const role = (req.user?.role || '').toLowerCase();
-  const requestedKey = key.trim();
-  if (role === 'student' && /^(?:videos|live_records)\//i.test(requestedKey)) {
-    if (requestedKey.length > 1024 || requestedKey.includes('..') || requestedKey.includes('//') || /[\\\r\n]/.test(requestedKey)) return fail(res, 400, 'Invalid S3 media key.');
+  const rawKey = req.query?.s3Key || req.query?.key || req.body?.s3Key || req.body?.key;
+  if (typeof rawKey !== 'string' || !rawKey.trim()) return fail(res, 400, 's3Key is required.');
+
+  // Student playback uses only video keys verified inside an enrolled course lesson.
+  if ((req.user?.role || '').toLowerCase() === 'student' && /^(?:videos|live_records)\//i.test(String(rawKey).trim())) {
     try {
-      const { resolveStudentLessonVideoAccess } = require('../utils/studentLessonVideoAccess');
-      const access = await resolveStudentLessonVideoAccess({ user: req.user, courseId, s3Key: requestedKey });
+      const cleanStudentKey = getS3KeyFromUrl(rawKey.trim()) || rawKey.trim();
+      const access = await resolveStudentLessonVideoAccess({ user: req.user, courseId, s3Key: cleanStudentKey });
       if (access.status !== 200) return fail(res, access.status, access.error);
+      const { key, lesson } = access;
       const { getHlsConversionStatus } = require('../services/mediaConvertService');
-      let hlsInfo = null;
-      try { hlsInfo = await getHlsConversionStatus(access.key); } catch (_) {}
-      if (String(hlsInfo?.hlsConversionStatus).toUpperCase() === 'COMPLETED' && hlsInfo?.hlsMasterUrl) {
+      let hlsInfo;
+      try { hlsInfo = await getHlsConversionStatus(key); } catch (_) { hlsInfo = null; }
+      if (String(hlsInfo?.hlsConversionStatus || '').toUpperCase() === 'COMPLETED' && hlsInfo.videoId) {
         try {
-          const { getValidatedHlsMasterUrl, attachHlsCookiesToResponse } = require('../utils/cloudFrontSecurity');
-          const playlistUrl = getValidatedHlsMasterUrl(hlsInfo.hlsMasterUrl, hlsInfo.videoId);
-          if (!attachHlsCookiesToResponse(res, hlsInfo.videoId)) return fail(res, 503, 'Secure HLS playback is temporarily unavailable.');
-          return res.json({ success: true, url: playlistUrl, hlsMasterUrl: playlistUrl, hlsPlaybackUrl: playlistUrl, s3Key: access.key, key: access.key, playbackType: 'hls', hlsConversionStatus: 'COMPLETED' });
-        } catch (_) {
-          return fail(res, 503, 'Secure HLS playback is temporarily unavailable.');
+          const { validateHlsS3Readiness } = require('../utils/hlsReadinessValidator');
+          const readiness = await validateHlsS3Readiness({ s3Client, bucket, hlsInfo });
+          if (readiness.ready) {
+            const { attachHlsCookiesToResponse, resolvePersistedHlsUrl } = require('../utils/cloudFrontSecurity');
+            let cookiesAttached = false;
+            try {
+              cookiesAttached = attachHlsCookiesToResponse(res, hlsInfo.videoId, undefined, hlsInfo.hlsOutputPrefix);
+            } catch (_) {
+              cookiesAttached = false;
+            }
+            if (cookiesAttached) {
+              const playlistUrl = resolvePersistedHlsUrl(hlsInfo.hlsMasterUrl || lesson.hlsMasterUrl, hlsInfo.videoId);
+              return res.json({
+                success: true,
+                url: playlistUrl,
+                hlsMasterUrl: playlistUrl,
+                hlsPlaybackUrl: playlistUrl,
+                s3Key: key,
+                key,
+                playbackType: 'hls',
+                hlsConversionStatus: 'COMPLETED',
+              });
+            }
+            console.warn('[S3 student media] Failed to attach CloudFront cookies, falling back to MP4');
+          } else {
+            console.warn('[S3 student media] HLS S3 readiness check failed, falling back to MP4:', readiness.reason);
+          }
+        } catch (hlsErr) {
+          console.warn('[S3 student media] HLS processing error, falling back to MP4:', hlsErr.message);
         }
       }
-      await s3Client.send(new HeadObjectCommand({ Bucket: bucket, Key: access.key }));
-      const fallbackUrl = await getSignedUrl(s3Client, new GetObjectCommand({ Bucket: bucket, Key: access.key, ResponseContentType: 'video/mp4', ResponseContentDisposition: 'inline' }), { expiresIn: HLS_FALLBACK_URL_TTL_SECONDS });
-      return res.json({ success: true, url: fallbackUrl, s3Key: access.key, key: access.key, expiresIn: HLS_FALLBACK_URL_TTL_SECONDS, playbackType: 'mp4', hlsConversionStatus: hlsInfo?.hlsConversionStatus || 'PENDING' });
-    } catch (error) {
-      return handleS3Error(res, error, 'media-access');
-    }
+      await s3Client.send(new HeadObjectCommand({ Bucket: bucket, Key: key }));
+      const signed = await getSignedUrl(s3Client, new GetObjectCommand({ Bucket: bucket, Key: key, ResponseContentType: 'video/mp4', ResponseContentDisposition: 'inline' }), { expiresIn: MEDIA_URL_TTL_SECONDS });
+      return res.json({
+        success: true,
+        url: encodeSignedUrl(signed),
+        s3Key: key,
+        key,
+        expiresIn: MEDIA_URL_TTL_SECONDS,
+        playbackType: 'mp4',
+        hlsConversionStatus: hlsInfo?.hlsConversionStatus || lesson.hlsConversionStatus || 'PENDING',
+      });
+    } catch (_) { return fail(res, 503, 'Media playback is temporarily unavailable.'); }
   }
-  const prefix = ['videos/', 'live_records/', 'images/', 'pdfs/'].find((item) => typeof key === 'string' && key.startsWith(item));
-  if (!prefix || !validStoredKey(key, prefix.slice(0, -1))) return fail(res, 400, 'Invalid S3 media key.');
+
+  // Handle external Cloudinary URLs seamlessly
+  const trimmedRawKey = rawKey.trim();
+  if (trimmedRawKey.includes('cloudinary.com')) {
+    return res.json({ success: true, url: trimmedRawKey, key: trimmedRawKey, s3Key: trimmedRawKey });
+  }
+
+  const isLegacyUpload = trimmedRawKey.includes('/uploads/');
+  const key = getS3KeyFromUrl(trimmedRawKey) || trimmedRawKey;
+  const prefix = ['videos/', 'images/', 'pdfs/', 'documents/', 'attachments/', 'live_records/', 'grand_mock_questions/', 'reviews/', 'unani_ranks/'].find((item) => typeof key === 'string' && key.startsWith(item));
+  if (!isLegacyUpload && (!prefix || !validStoredKey(key, prefix.slice(0, -1)))) {
+    return fail(res, 400, 'Invalid S3 media key.');
+  }
+
   try {
-    const courseResult = courseId
-      ? (mongoose.Types.ObjectId.isValid(courseId)
-        ? Course.findById(courseId)
-        : Course.findOne({ courseId }))
-      : Course.findOne({ $or: [
-        { 'thumbnailMedia.s3Key': key },
-        { 'modules.lessons.s3Key': key },
-        { 'modules.lessons.videoS3Key': key },
-        { 'modules.lessons.videoParts.s3Key': key },
-        { 'modules.lessons.pdfNotes.s3Key': key },
-        { 'modules.lessons.assignments.s3Key': key },
-        { 'modules.lessons.attachments.s3Key': key },
-      ] });
-    const course = courseResult && typeof courseResult.lean === 'function' ? await courseResult.lean() : await courseResult;
-    if (!course || !courseContainsS3Key(course, key)) return fail(res, 404, 'S3 media was not found in this course.');
+    let resolvedCourse = null;
+    let foundMedia = false;
+    let recordingDoc = null;
+    let demoVideoDoc = null;
 
     const role = (req.user?.role || '').toLowerCase();
     const isStaff = ['admin', 'superadmin'].includes(role);
+
+    // 1. If courseId is explicitly provided, verify media belongs to this course
+    if (courseId) {
+      const courseQuery = Course.findOne({
+        $or: [
+          { courseId: courseId },
+          ...(mongoose.Types.ObjectId.isValid(courseId) ? [{ _id: courseId }] : []),
+        ],
+      });
+      resolvedCourse = (courseQuery && typeof courseQuery.lean === 'function')
+        ? await courseQuery.lean()
+        : await courseQuery;
+
+      if (resolvedCourse && courseContainsMediaKey(resolvedCourse, key)) {
+        foundMedia = true;
+      }
+
+      if (!foundMedia && resolvedCourse) {
+        // Check recordings linked to this course
+        const courseIdQuery = [];
+        if (mongoose.Types.ObjectId.isValid(resolvedCourse._id)) {
+          courseIdQuery.push({ courseId: resolvedCourse._id });
+        }
+        if (resolvedCourse.courseTitle) {
+          courseIdQuery.push({ courseName: resolvedCourse.courseTitle });
+        }
+        if (courseIdQuery.length > 0) {
+          recordingDoc = await Recording.findOne({
+            $and: [
+              { $or: courseIdQuery },
+              {
+                $or: [
+                  { s3Key: key },
+                  { recordedVideoUrl: { $regex: escapeRegex(key) } },
+                  { recordingFileUrl: { $regex: escapeRegex(key) } },
+                  { streamUrl: { $regex: escapeRegex(key) } },
+                  { liveClassUrl: { $regex: escapeRegex(key) } },
+                ],
+              },
+            ],
+          });
+          if (recordingDoc) foundMedia = true;
+        }
+      }
+
+      if (!foundMedia && resolvedCourse) {
+        // Check demo videos linked to this course
+        const demoCourseQuery = [];
+        if (resolvedCourse.courseId) {
+          demoCourseQuery.push({ courseId: resolvedCourse.courseId });
+        }
+        if (mongoose.Types.ObjectId.isValid(resolvedCourse._id)) {
+          demoCourseQuery.push({ courseRef: resolvedCourse._id });
+        }
+        if (demoCourseQuery.length > 0) {
+          demoVideoDoc = await DemoVideo.findOne({
+            $and: [
+              { $or: demoCourseQuery },
+              {
+                $or: [
+                  { s3Key: key },
+                  { videoUrl: { $regex: escapeRegex(key) } },
+                  { thumbnailUrl: { $regex: escapeRegex(key) } },
+                ],
+              },
+            ],
+          });
+          if (demoVideoDoc) foundMedia = true;
+        }
+      }
+
+      if (!foundMedia && resolvedCourse) {
+        // Check standalone lessons linked to this course
+        const standaloneLesson = await Lesson.findOne({
+          $and: [
+            { courseId: resolvedCourse.courseId },
+            {
+              $or: [
+                { s3Key: key },
+                { uploadFileOrLink: { $regex: escapeRegex(key) } },
+              ],
+            },
+          ],
+        });
+        if (standaloneLesson) foundMedia = true;
+      }
+
+      if (!foundMedia) {
+        return fail(res, 404, 'S3 media was not found in this course.');
+      }
+    } else {
+      // 2. No courseId specified: search across Course, Recording, DemoVideo, and Lesson
+      const decodedKey = (() => { try { return decodeURIComponent(key); } catch (_) { return key; } })();
+      const verifiedKey = isLegacyUpload ? getVerifiedS3KeyForLegacyAsset(key) : null;
+      const baseName = decodedKey.split('/').pop().trim();
+
+      const searchConditions = [
+        { 'thumbnailMedia.s3Key': key },
+        { 'thumbnailMedia.url': { $regex: escapeRegex(key) } },
+        { thumbnail: { $regex: escapeRegex(key) } },
+        { bannerUrl: { $regex: escapeRegex(key) } },
+        { courseBanner: { $regex: escapeRegex(key) } },
+        { 'modules.lessons.videoS3Key': key },
+        { 'modules.lessons.s3Key': key },
+        { 'modules.lessons.videoUrl': { $regex: escapeRegex(key) } },
+        { 'modules.lessons.fileUrl': { $regex: escapeRegex(key) } },
+        { 'modules.lessons.pdfUrl': { $regex: escapeRegex(key) } },
+        { 'modules.lessons.documentUrl': { $regex: escapeRegex(key) } },
+        { 'modules.lessons.url': { $regex: escapeRegex(key) } },
+        { 'modules.lessons.path': { $regex: escapeRegex(key) } },
+        { 'modules.lessons.mp4S3Key': key },
+        { 'modules.lessons.videoParts.s3Key': key },
+        { 'modules.lessons.m4vS3Key': key },
+        { 'modules.lessons.videoParts.m4vS3Key': key },
+        { 'modules.lessons.videoParts.mp4S3Key': key },
+        { 'modules.lessons.videoParts.url': { $regex: escapeRegex(key) } },
+        { 'modules.lessons.videoParts.secure_url': { $regex: escapeRegex(key) } },
+        { 'modules.lessons.videoParts.secureUrl': { $regex: escapeRegex(key) } },
+        { 'modules.lessons.pdfNotes.s3Key': key },
+        { 'modules.lessons.pdfNotes.url': { $regex: escapeRegex(key) } },
+        { 'modules.lessons.pdfNotes.secure_url': { $regex: escapeRegex(key) } },
+        { 'modules.lessons.assignments.s3Key': key },
+        { 'modules.lessons.assignments.url': { $regex: escapeRegex(key) } },
+        { 'modules.lessons.attachments.s3Key': key },
+        { 'modules.lessons.attachments.url': { $regex: escapeRegex(key) } },
+      ];
+
+      if (isLegacyUpload) {
+        if (decodedKey !== key) {
+          searchConditions.push({ 'modules.lessons.attachments.url': { $regex: escapeRegex(decodedKey) } });
+          searchConditions.push({ 'modules.lessons.assignments.url': { $regex: escapeRegex(decodedKey) } });
+          searchConditions.push({ 'modules.lessons.pdfNotes.url': { $regex: escapeRegex(decodedKey) } });
+        }
+        if (verifiedKey) {
+          searchConditions.push({ 'modules.lessons.attachments.s3Key': verifiedKey });
+          searchConditions.push({ 'modules.lessons.assignments.s3Key': verifiedKey });
+          searchConditions.push({ 'modules.lessons.pdfNotes.s3Key': verifiedKey });
+        }
+        if (baseName) {
+          searchConditions.push({ 'modules.lessons.attachments.title': { $regex: escapeRegex(baseName), $options: 'i' } });
+          searchConditions.push({ 'modules.lessons.attachments.fileName': { $regex: escapeRegex(baseName), $options: 'i' } });
+        }
+      }
+
+      // If requester is a student, prioritize matching against courses the student is enrolled in
+      if (!isStaff) {
+        const studentDoc = await findStudentForMedia(req.user || {});
+        const enrolledRawIds = [];
+        if (studentDoc) {
+          if (Array.isArray(studentDoc.courseIds)) {
+            studentDoc.courseIds.forEach((id) => { if (id) enrolledRawIds.push(String(id).trim()); });
+          }
+          if (studentDoc.courseId) enrolledRawIds.push(String(studentDoc.courseId).trim());
+          if (studentDoc.courseRef) enrolledRawIds.push(String(studentDoc.courseRef).trim());
+          if (studentDoc.course) enrolledRawIds.push(String(studentDoc.course).trim());
+        }
+        if (enrolledRawIds.length > 0) {
+          const enrolledOr = [];
+          for (const id of enrolledRawIds) {
+            enrolledOr.push({ courseId: id });
+            enrolledOr.push({ courseTitle: id });
+            if (mongoose.Types.ObjectId.isValid(id)) {
+              enrolledOr.push({ _id: new mongoose.Types.ObjectId(id) });
+            }
+          }
+          if (enrolledOr.length > 0) {
+            resolvedCourse = await Course.findOne({
+              $and: [
+                { $or: enrolledOr },
+                { $or: searchConditions },
+              ],
+            });
+            if (resolvedCourse && courseContainsMediaKey(resolvedCourse, key)) {
+              foundMedia = true;
+            }
+          }
+        }
+      }
+
+      if (!foundMedia) {
+        resolvedCourse = await Course.findOne({
+          $or: searchConditions,
+        });
+
+        if (resolvedCourse && courseContainsMediaKey(resolvedCourse, key)) {
+          foundMedia = true;
+        }
+      }
+
+      if (!foundMedia) {
+        recordingDoc = await Recording.findOne({
+          $or: [
+            { s3Key: key },
+            { recordedVideoUrl: { $regex: escapeRegex(key) } },
+            { recordingFileUrl: { $regex: escapeRegex(key) } },
+            { streamUrl: { $regex: escapeRegex(key) } },
+            { liveClassUrl: { $regex: escapeRegex(key) } },
+          ],
+        });
+        if (recordingDoc) {
+          foundMedia = true;
+          if (recordingDoc.courseId) {
+            resolvedCourse = await Course.findById(recordingDoc.courseId);
+          } else if (recordingDoc.courseName) {
+            resolvedCourse = await Course.findOne({ courseTitle: recordingDoc.courseName });
+          }
+        }
+      }
+
+      if (!foundMedia) {
+        demoVideoDoc = await DemoVideo.findOne({
+          $or: [
+            { s3Key: key },
+            { videoUrl: { $regex: escapeRegex(key) } },
+            { thumbnailUrl: { $regex: escapeRegex(key) } },
+          ],
+        });
+        if (demoVideoDoc) {
+          foundMedia = true;
+          if (demoVideoDoc.courseRef) {
+            resolvedCourse = await Course.findById(demoVideoDoc.courseRef);
+          }
+          if (!resolvedCourse && demoVideoDoc.courseId) {
+            resolvedCourse = await Course.findOne({
+              $or: [
+                { courseId: demoVideoDoc.courseId },
+                ...(mongoose.Types.ObjectId.isValid(demoVideoDoc.courseId) ? [{ _id: demoVideoDoc.courseId }] : []),
+              ],
+            });
+          }
+        }
+      }
+
+      if (!foundMedia) {
+        const standaloneLesson = await Lesson.findOne({
+          $or: [
+            { s3Key: key },
+            { uploadFileOrLink: { $regex: escapeRegex(key) } },
+          ],
+        });
+        if (standaloneLesson) {
+          foundMedia = true;
+          if (standaloneLesson.courseId) {
+            resolvedCourse = await Course.findOne({
+              $or: [
+                { courseId: standaloneLesson.courseId },
+                ...(mongoose.Types.ObjectId.isValid(standaloneLesson.courseId) ? [{ _id: standaloneLesson.courseId }] : []),
+              ],
+            });
+          }
+        }
+      }
+
+      if (!foundMedia && mongoose.connection?.readyState === 1) {
+        let ExamModel;
+        try { ExamModel = require('../models/Exam'); } catch (_) {}
+        if (ExamModel) {
+          const examDoc = await ExamModel.findOne({
+            $or: [
+              { 'questions.imageUrl': { $regex: escapeRegex(key) } },
+              { 'questions.image': { $regex: escapeRegex(key) } },
+              { 'questions.questionImage': { $regex: escapeRegex(key) } },
+            ],
+          });
+          if (examDoc) {
+            foundMedia = true;
+          }
+        }
+      }
+
+      if (!foundMedia) {
+        return fail(res, 404, 'S3 media was not found in a course or recording.');
+      }
+    }
+
+    // 3. User Authorization
     if (!isStaff) {
+      if (!resolvedCourse) {
+        return fail(res, 403, 'Course access is required to access this media.');
+      }
+      const courseStatus = resolvedCourse.status ? String(resolvedCourse.status).toLowerCase() : 'published';
+      if (courseStatus !== 'published') {
+        return fail(res, 404, 'Course not found or not published.');
+      }
       const student = await findStudentForMedia(req.user || {});
       if (!student) return fail(res, 403, 'Student profile is required to access course media.');
       const accountOk = ['Active', 'Trial'].includes(student.status) || student.isActive || student.isApproved;
       const subscriptionOk = ['Active', 'Trial'].includes(student.subscriptionStatus) || ['Active', 'VIP', 'Premium'].includes(student.subscription);
       if (!accountOk && !subscriptionOk) return fail(res, 403, 'An active or approved account is required to access course media.');
       if (student.subscriptionExpiresAt && new Date(student.subscriptionExpiresAt) < new Date()) return fail(res, 403, 'Course subscription has expired.');
-      if (!await verifyStudentCourseAccess(req.user, course.courseId || course._id.toString())) return fail(res, 403, 'You do not have access to this course.');
+      if (!await verifyStudentCourseAccess(req.user, resolvedCourse.courseId || resolvedCourse._id.toString())) {
+        return fail(res, 403, 'You do not have access to this course.');
+      }
     }
 
-    const contentType = ['videos/', 'live_records/'].includes(prefix) ? undefined : (prefix === 'pdfs/' ? 'application/pdf' : undefined);
-    const url = await getSignedUrl(s3Client, new GetObjectCommand({
+    // Handle legacy uploads after course verification and authorization
+    if (isLegacyUpload) {
+      const resolved = await resolveMediaRecord({ url: trimmedRawKey }, { course: resolvedCourse, courseId: resolvedCourse?.courseId || courseId });
+      if (resolved && resolved.url && !resolved.url.includes('/uploads/')) {
+        return res.json({
+          success: true,
+          url: resolved.url,
+          key: resolved.s3Key || trimmedRawKey,
+          s3Key: resolved.s3Key || trimmedRawKey,
+          expiresIn: MEDIA_URL_TTL_SECONDS,
+        });
+      }
+      console.warn('[S3 media] Legacy media resolution failure: unverified record', {
+        url: trimmedRawKey,
+        courseId: resolvedCourse?.courseId || courseId,
+        userId: req.user?.id,
+      });
+      return fail(res, 404, 'This legacy document is no longer available on the server and has no verified S3 backup.');
+    }
+
+    // 4. Confirm the referenced private object still exists before issuing a URL.
+    await s3Client.send(new HeadObjectCommand({ Bucket: bucket, Key: key }));
+
+    // 5. Generate SigV4 signed URL
+    let contentType = undefined;
+    if (prefix === 'videos/' || prefix === 'live_records/') {
+      const keyLower = key.toLowerCase();
+      contentType = keyLower.endsWith('.mp4') || keyLower.endsWith('.m4v')
+        ? 'video/mp4'
+        : (keyLower.endsWith('.mov') ? 'video/quicktime' : (keyLower.endsWith('.webm') ? 'video/webm' : 'video/mp4'));
+    } else if (prefix === 'pdfs/') {
+      contentType = 'application/pdf';
+    }
+    const rawUrl = await getSignedUrl(s3Client, new GetObjectCommand({
       Bucket: bucket,
       Key: key,
       ...(contentType ? { ResponseContentType: contentType, ResponseContentDisposition: 'inline' } : {}),
     }), { expiresIn: MEDIA_URL_TTL_SECONDS });
-    let hlsFields = {};
-    if (['videos/', 'live_records/'].includes(prefix)) {
+    const url = encodeSignedUrl(rawUrl);
+
+    // HLS video integration: check conversion status and issue CloudFront signed cookies / URL
+    let hlsResponseFields = {};
+    if (prefix === 'videos/' || prefix === 'live_records/') {
       try {
         const { getHlsConversionStatus } = require('../services/mediaConvertService');
-        const status = await getHlsConversionStatus(key);
-        if (status.hlsConversionStatus === 'COMPLETED' && status.hlsMasterUrl) {
-          const { getValidatedHlsMasterUrl, attachHlsCookiesToResponse } = require('../utils/cloudFrontSecurity');
-          const masterUrl = getValidatedHlsMasterUrl(status.hlsMasterUrl, status.videoId);
-          if (attachHlsCookiesToResponse(res, status.videoId)) hlsFields = { hlsMasterUrl: masterUrl, hlsPlaybackUrl: masterUrl, hlsOutputPrefix: status.hlsOutputPrefix, hlsConversionStatus: 'COMPLETED', mediaConvertJobId: status.mediaConvertJobId, playbackType: 'hls' };
-        } else if (['PENDING', 'PROCESSING'].includes(status.hlsConversionStatus)) {
-          hlsFields = { hlsMasterUrl: '', hlsConversionStatus: status.hlsConversionStatus, mediaConvertJobId: status.mediaConvertJobId, playbackType: 'mp4' };
-        } else if (status.hlsConversionStatus === 'FAILED') {
-          hlsFields = { hlsMasterUrl: '', hlsConversionStatus: 'FAILED', hlsConversionError: status.error, mediaConvertJobId: status.mediaConvertJobId, playbackType: 'mp4' };
+        const { attachHlsCookiesToResponse, generateHlsSignedUrl, getCloudFrontDomain, resolvePersistedHlsUrl } = require('../utils/cloudFrontSecurity');
+        const { validateHlsS3Readiness } = require('../utils/hlsReadinessValidator');
+        const hlsInfo = await getHlsConversionStatus(key);
+
+        if (hlsInfo.hlsConversionStatus === 'COMPLETED' && hlsInfo.hlsMasterUrl) {
+          const readiness = await validateHlsS3Readiness({ s3Client, bucket, hlsInfo });
+          let cookiesAttached = false;
+          try {
+            cookiesAttached = readiness.ready && attachHlsCookiesToResponse(res, hlsInfo.videoId, undefined, hlsInfo.hlsOutputPrefix);
+          } catch (_) {
+            cookiesAttached = false;
+          }
+          if (cookiesAttached) {
+            const signedHlsUrl = resolvePersistedHlsUrl(hlsInfo.hlsMasterUrl, hlsInfo.videoId);
+            hlsResponseFields = {
+              hlsMasterUrl: signedHlsUrl,
+              hlsPlaybackUrl: signedHlsUrl,
+              hlsOutputPrefix: hlsInfo.hlsOutputPrefix,
+              hlsConversionStatus: 'COMPLETED',
+              mediaConvertJobId: hlsInfo.mediaConvertJobId,
+              playbackType: 'hls',
+            };
+          } else {
+            console.warn('[S3 media] HLS readiness or cookie attachment failed, falling back to MP4:', readiness.reason || 'cookie failure');
+            hlsResponseFields = {
+              hlsMasterUrl: '',
+              hlsConversionStatus: 'PROCESSING',
+              mediaConvertJobId: hlsInfo.mediaConvertJobId,
+              playbackType: 'mp4',
+            };
+          }
+        } else if (['PROCESSING', 'PENDING'].includes(hlsInfo.hlsConversionStatus)) {
+          hlsResponseFields = {
+            hlsMasterUrl: '',
+            hlsConversionStatus: hlsInfo.hlsConversionStatus,
+            mediaConvertJobId: hlsInfo.mediaConvertJobId,
+            playbackType: 'mp4',
+          };
+        } else if (hlsInfo.hlsConversionStatus === 'FAILED') {
+          hlsResponseFields = {
+            hlsMasterUrl: '',
+            hlsConversionStatus: 'FAILED',
+            hlsConversionError: hlsInfo.error,
+            mediaConvertJobId: hlsInfo.mediaConvertJobId,
+            playbackType: 'mp4',
+          };
         }
-      } catch (hlsError) {
-        console.warn('[S3 media] HLS status unavailable; preserving authorized MP4 fallback:', hlsError.message);
+      } catch (hlsCheckErr) {
+        console.warn('[S3 media] HLS status resolution warning:', hlsCheckErr.message);
       }
     }
-    console.info('[S3 media] access URL issued', { courseId: String(course.courseId || course._id), key, userId: req.user?.id });
-    return res.json({ success: true, url, key, s3Key: key, expiresIn: MEDIA_URL_TTL_SECONDS, ...hlsFields });
+
+    const mediaOwnerId = resolvedCourse?.courseId || resolvedCourse?._id || recordingDoc?.courseId || recordingDoc?._id || demoVideoDoc?.courseId || 'authorized-media';
+    console.info('[S3 media] access URL issued', { courseId: String(mediaOwnerId), prefix, userId: req.user?.id });
+    return res.json({
+      success: true,
+      url,
+      key,
+      s3Key: key,
+      expiresIn: MEDIA_URL_TTL_SECONDS,
+      ...hlsResponseFields,
+    });
   } catch (error) {
     return handleS3Error(res, error, 'media-access');
   }
 };
 
-const refreshHlsCookies = (req, res) => getMediaAccessUrl(req, res);
+const getVideoConversionStatus = async (req, res) => {
+  const s3Key = req.query?.s3Key || req.query?.key || req.body?.s3Key;
+  if (!s3Key) return fail(res, 400, 's3Key is required.');
+  try {
+    const { getConversionStatus } = require('../services/videoConversionService');
+    const status = await getConversionStatus(s3Key);
+    return res.json({ success: true, ...status });
+  } catch (err) {
+    return fail(res, 500, err.message);
+  }
+};
+
+const retryVideoConversion = async (req, res) => {
+  const s3Key = req.body?.s3Key || req.body?.key || req.query?.s3Key;
+  if (!s3Key) return fail(res, 400, 's3Key is required.');
+  try {
+    const { retryConversion } = require('../services/videoConversionService');
+    const enqueued = await retryConversion(s3Key);
+    return res.json({ success: true, enqueued, s3Key });
+  } catch (err) {
+    return fail(res, 500, err.message);
+  }
+};
+
+const batchConvertCourseVideos = async (req, res) => {
+  try {
+    const { enqueueConversion } = require('../services/videoConversionService');
+    const courses = await Course.find({}).lean();
+    const queued = [];
+    const seen = new Set();
+
+    for (const course of courses) {
+      for (const mod of course.modules || []) {
+        for (const lesson of mod.lessons || []) {
+          const keys = [
+            lesson.s3Key,
+            lesson.videoS3Key,
+            ...(lesson.videoParts || []).map((vp) => vp.s3Key),
+          ].filter(Boolean);
+
+          for (const k of keys) {
+            const trimmed = String(k).trim();
+            if (trimmed && (trimmed.endsWith('.mp4') || trimmed.endsWith('.webm') || trimmed.endsWith('.mov')) && !seen.has(trimmed)) {
+              seen.add(trimmed);
+              enqueueConversion(trimmed, { force: req.body?.force === true });
+              queued.push(trimmed);
+            }
+          }
+        }
+      }
+    }
+    return res.json({ success: true, count: queued.length, queued });
+  } catch (err) {
+    return fail(res, 500, err.message);
+  }
+};
+
+
 
 const handleMediaConvertWebhook = async (req, res) => {
   const secret = process.env.HLS_WEBHOOK_SECRET || process.env.MEDIACONVERT_WEBHOOK_SECRET;
-  if (!secret && process.env.NODE_ENV === 'production') return res.status(503).json({ success: false, message: 'Webhook authentication is not configured.' });
+  if (!secret && process.env.NODE_ENV === 'production') {
+    return res.status(503).json({ success: false, message: 'Webhook authentication is not configured.' });
+  }
   if (secret) {
-    const incoming = req.headers['x-api-key'] || req.headers['x-webhook-secret'] || req.headers.authorization?.replace(/^Bearer\s+/i, '');
-    const supplied = Buffer.from(String(incoming || ''));
+    const incomingSecret =
+      req.headers['x-api-key'] ||
+      req.headers['x-webhook-secret'] ||
+      req.headers['authorization']?.replace(/^Bearer\s+/i, '');
+    const supplied = Buffer.from(String(incomingSecret || ''));
     const expected = Buffer.from(secret);
     const { timingSafeEqual } = require('crypto');
-    if (supplied.length !== expected.length || !timingSafeEqual(supplied, expected)) return res.status(401).json({ success: false, message: 'Invalid webhook secret.' });
+    if (supplied.length !== expected.length || !timingSafeEqual(supplied, expected)) {
+      console.warn('[MediaConvert Webhook] Unauthorized webhook attempt.');
+      return res.status(401).json({ success: false, message: 'Invalid webhook secret.' });
+    }
   }
+
   try {
     const { handleJobStateChange } = require('../services/mediaConvertService');
-    return res.status(200).json({ success: true, ...(await handleJobStateChange(req.body)) });
-  } catch (_) {
+    const result = await handleJobStateChange(req.body);
+    return res.status(200).json({ success: true, ...result });
+  } catch (err) {
+    console.error('[MediaConvert Webhook] Processing error.');
     return res.status(500).json({ success: false, message: 'Webhook processing failed.' });
   }
 };
@@ -404,8 +1144,8 @@ const getMediaConvertJobStatus = async (req, res) => {
       status = await getHlsConversionStatus(keyOrJobId);
     }
     return res.json({ success: true, ...status });
-  } catch (_) {
-    return fail(res, 500, 'Unable to retrieve HLS conversion status.');
+  } catch (err) {
+    return fail(res, 500, err.message);
   }
 };
 
@@ -414,13 +1154,89 @@ const retryMediaConvertJob = async (req, res) => {
   if (!s3Key) return fail(res, 400, 's3Key is required.');
   try {
     const { submitHlsConversionJob } = require('../services/mediaConvertService');
-    return res.json({ success: true, ...(await submitHlsConversionJob({ s3Key, force: true })) });
-  } catch (_) {
-    return fail(res, 500, 'Unable to retry HLS conversion.');
+    const result = await submitHlsConversionJob({ s3Key, force: true });
+    return res.json({ success: true, ...result });
+  } catch (err) {
+    return fail(res, 500, err.message);
+  }
+};
+
+const refreshHlsCookies = async (req, res) => {
+  const courseId = req.query?.courseId || req.body?.courseId;
+  const rawKey = req.query?.s3Key || req.query?.key || req.body?.s3Key || req.body?.key;
+  const rawVideoId = req.query?.videoId || req.body?.videoId;
+
+  if (!rawKey && !rawVideoId) {
+    return fail(res, 400, 'Either s3Key or videoId is required.');
+  }
+
+  try {
+    const { getHlsConversionStatus } = require('../services/mediaConvertService');
+    const targetIdentifier = rawKey ? (getS3KeyFromUrl(String(rawKey).trim()) || String(rawKey).trim()) : String(rawVideoId).trim();
+    const hlsInfo = await getHlsConversionStatus(targetIdentifier);
+
+    if (String(hlsInfo?.hlsConversionStatus || '').toUpperCase() !== 'COMPLETED' || !hlsInfo.videoId) {
+      return fail(res, 404, 'HLS media is not available or conversion is not completed.');
+    }
+
+    // Student authorization check
+    if ((req.user?.role || '').toLowerCase() === 'student' && /^(?:videos|live_records)\//i.test(String(rawKey).trim())) {
+      const s3KeyToCheck = hlsInfo.s3Key || (rawKey ? (getS3KeyFromUrl(String(rawKey).trim()) || String(rawKey).trim()) : null);
+      if (!s3KeyToCheck) {
+        return fail(res, 403, 'Cannot verify student access for this video.');
+      }
+      const access = await resolveStudentLessonVideoAccess({
+        user: req.user,
+        courseId,
+        s3Key: s3KeyToCheck,
+      });
+      if (access.status !== 200) {
+        return fail(res, access.status, access.error);
+      }
+    }
+
+    // Validate readiness in S3
+    const { validateHlsS3Readiness } = require('../utils/hlsReadinessValidator');
+    const readiness = await validateHlsS3Readiness({ s3Client, bucket, hlsInfo });
+    if (!readiness.ready) {
+      return fail(res, 404, 'HLS media files are not ready in storage.');
+    }
+
+    // Attach signed cookies
+    const { attachHlsCookiesToResponse, resolvePersistedHlsUrl, DEFAULT_TTL_SECONDS } = require('../utils/cloudFrontSecurity');
+    let attached = false;
+    try {
+      attached = attachHlsCookiesToResponse(res, hlsInfo.videoId, undefined, hlsInfo.hlsOutputPrefix);
+    } catch (_) {
+      attached = false;
+    }
+    if (!attached) {
+      return fail(res, 503, 'Failed to refresh CloudFront signed cookies.');
+    }
+
+    const playlistUrl = resolvePersistedHlsUrl(hlsInfo.hlsMasterUrl, hlsInfo.videoId);
+    return res.json({
+      success: true,
+      message: 'CloudFront signed cookies refreshed successfully.',
+      videoId: hlsInfo.videoId,
+      hlsMasterUrl: playlistUrl,
+      hlsPlaybackUrl: playlistUrl,
+      playbackType: 'hls',
+      expiresIn: DEFAULT_TTL_SECONDS,
+    });
+  } catch (error) {
+    return fail(res, 500, error.message || 'Failed to refresh playback cookies.');
   }
 };
 
 module.exports = {
+  refreshHlsCookies,
+  handleMediaConvertWebhook,
+  getMediaConvertJobStatus,
+  retryMediaConvertJob,
+  getVideoConversionStatus,
+  retryVideoConversion,
+  batchConvertCourseVideos,
   initiateMultipartUpload,
   partUrl,
   completeMultipartUpload,
@@ -428,8 +1244,7 @@ module.exports = {
   initiateObjectUpload,
   completeObjectUpload,
   getMediaAccessUrl,
-  refreshHlsCookies,
-  handleMediaConvertWebhook,
-  getMediaConvertJobStatus,
-  retryMediaConvertJob,
+  courseContainsMediaKey,
+  courseContainsS3Key,
 };
+

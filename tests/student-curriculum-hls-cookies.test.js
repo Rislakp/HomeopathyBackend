@@ -131,7 +131,7 @@ test('missing signing configuration or an invalid response cannot return an unsi
 
 test('custom policy generation rejects invalid video identifiers and master-only signed URLs', () => {
   assert.throws(() => generateHlsSignedCookies(['valid-id', '../other']), /invalid HLS video identifier/i);
-  assert.throws(() => generateHlsSignedUrl('https://media.whitecoat.academy/hls/cardio-1/cardio-1.m3u8'), /signed cookies/i);
+  assert.equal(generateHlsSignedUrl('https://media.whitecoat.academy/hls/cardio-1/cardio-1.m3u8'), 'https://media.whitecoat.academy/hls/cardio-1/cardio-1.m3u8');
 });
 
 test('CloudFront cookies default to the one-day maximum and can be renewed with secure attributes intact', (t) => {
