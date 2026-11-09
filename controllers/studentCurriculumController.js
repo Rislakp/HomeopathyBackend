@@ -6,6 +6,7 @@ const ContentItemProgress = require('../models/ContentItemProgress');
 const { verifyStudentCourseAccess } = require('../utils/courseAccessHelper');
 const { logActivity } = require('../utils/activityLogger');
 const { signS3Reference } = require('../utils/s3MediaSigner');
+const { attachVerifiedHlsStream, collectCurriculumHlsVideoIds, attachCurriculumHlsCookies } = require('../utils/studentCurriculumHls');
 
 const addSignedS3MediaUrls = async (course) => {
   if (!course || typeof course !== 'object') return course;
@@ -24,11 +25,23 @@ const addSignedS3MediaUrls = async (course) => {
     for (const lesson of moduleItem.lessons || []) {
       for (const [field, type] of [['videoParts', undefined], ['pdfNotes', 'application/pdf'], ['assignments', undefined], ['attachments', undefined]]) {
         if (Array.isArray(lesson[field])) {
-          lesson[field] = await Promise.all(lesson[field].map((resource) => signS3Reference(resource, type)));
+          lesson[field] = await Promise.all(lesson[field].map(async (resource) => {
+            const signed = await signS3Reference(resource, type);
+            return field === 'videoParts' ? attachVerifiedHlsStream(signed) : signed;
+          }));
         }
       }
       const firstVideo = (lesson.videoParts || []).find((resource) => resource.storageProvider === 's3' && resource.s3Key);
       if (firstVideo && !lesson.videoUrl) lesson.videoUrl = firstVideo.url;
+      if (firstVideo?.hlsMasterUrl) {
+        for (const field of ['hlsMasterUrl', 'hlsPlaybackUrl', 'hlsOutputPrefix', 'hlsConversionStatus', 'mediaConvertJobId', 'hlsConversionError', 'playbackType']) {
+          if (firstVideo[field] !== undefined) lesson[field] = firstVideo[field];
+        }
+      }
+      const lessonHls = await attachVerifiedHlsStream(lesson);
+      for (const field of ['hlsMasterUrl', 'hlsPlaybackUrl', 'hlsConversionStatus', 'hlsOutputPrefix', 'mediaConvertJobId', 'hlsConversionError', 'playbackType']) {
+        if (lessonHls[field] !== undefined) lesson[field] = lessonHls[field];
+      }
       const firstPdf = (lesson.pdfNotes || []).find((resource) => resource.storageProvider === 's3' && resource.s3Key);
       if (firstPdf && !lesson.pdfUrl) {
         lesson.pdfUrl = firstPdf.url;
@@ -469,6 +482,7 @@ const getMyCourses = async (req, res) => {
       };
     }));
 
+    attachCurriculumHlsCookies(res, formatted);
     return res.status(200).json({
       success: true,
       count: formatted.length,
@@ -651,6 +665,7 @@ const getMyCourseContent = async (req, res) => {
     formattedCourse.studyTimeSeconds = summary.studyTimeSeconds;
     formattedCourse.studyTimeHours = summary.studyTimeHours;
 
+    attachCurriculumHlsCookies(res, formattedCourse);
     return res.status(200).json({
       success: true,
       data: {
@@ -1280,4 +1295,8 @@ module.exports = {
   buildProgressSummary,
   saveCourseSummary,
   extractDurationSeconds,
+  attachVerifiedHlsStream,
+  collectCurriculumHlsVideoIds,
+  attachCurriculumHlsCookies,
+  addSignedS3MediaUrls,
 };
