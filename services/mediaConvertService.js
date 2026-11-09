@@ -1,6 +1,6 @@
 const mongoose = require('mongoose');
 const { CreateJobCommand, GetJobCommand } = require('@aws-sdk/client-mediaconvert');
-const { HeadObjectCommand } = require('@aws-sdk/client-s3');
+const { GetObjectCommand, HeadObjectCommand } = require('@aws-sdk/client-s3');
 const { s3Client } = require('../config/s3');
 const { mediaConvertConfig, getMediaConvertClient } = require('../config/mediaconvert');
 const Course = require('../models/Course');
@@ -53,6 +53,227 @@ function getCloudFrontHlsMasterUrl(videoId) {
 /**
  * Constructs the AWS Elemental MediaConvert Job specification for adaptive HLS outputs (480p and 360p).
  */
+function parseMediaConvertS3Path(uri, videoId) {
+  if (typeof uri !== 'string') return null;
+  const match = uri.trim().match(/^s3:\/\/([^/]+)\/(.+)$/i);
+  if (!match || match[1] !== mediaConvertConfig.bucket) return null;
+  const key = match[2];
+  if (!key.startsWith(`hls/${videoId}/`) || key.includes('..') || key.includes('//') || /[\\\r\n]/.test(key)) return null;
+  return { bucket: match[1], key };
+}
+
+function getOutputQuality(outputDetail, outputPath) {
+  const height = Number(outputDetail?.videoDetails?.heightInPx || outputDetail?.videoDetails?.HeightInPx);
+  if (height === 360 || height === 480) return height;
+  const match = String(outputPath || '').match(/(?:^|[_-])(360|480)p\.m3u8(?:[?#].*)?$/i);
+  return match ? Number(match[1]) : null;
+}
+
+async function bodyToString(body) {
+  if (!body) return '';
+  if (typeof body.transformToString === 'function') return body.transformToString();
+  if (typeof body === 'string' || Buffer.isBuffer(body)) return String(body);
+  const chunks = [];
+  for await (const chunk of body) chunks.push(Buffer.from(chunk));
+  return Buffer.concat(chunks).toString('utf8');
+}
+
+function resolvePlaylistReference(masterKey, reference, videoId) {
+  const cleanReference = String(reference || '').trim();
+  if (!cleanReference || cleanReference.startsWith('//')) return null;
+  try {
+    const url = new URL(cleanReference, `https://hls.invalid/${masterKey}`);
+    if (url.hostname !== 'hls.invalid' || url.protocol !== 'https:' || url.search || url.hash) return null;
+    const key = decodeURIComponent(url.pathname.slice(1));
+    if (!key.startsWith(`hls/${videoId}/`) || key.split('/').some((part) => part === '.' || part === '..')) return null;
+    return key;
+  } catch (_) {
+    return null;
+  }
+}
+
+function parseMediaPlaylist(manifest, playlistKey, videoId) {
+  const lines = String(manifest || '').split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
+  if (lines[0] !== '#EXTM3U') throw new Error('Invalid media playlist header');
+  const targetLines = lines.filter((line) => line.startsWith('#EXT-X-TARGETDURATION:'));
+  if (targetLines.length !== 1) throw new Error('Invalid target duration');
+  const targetLine = targetLines[0];
+  const targetDuration = Number(targetLine?.slice('#EXT-X-TARGETDURATION:'.length));
+  if (!Number.isInteger(targetDuration) || targetDuration <= 0) throw new Error('Invalid target duration');
+  const sequenceLine = lines.find((line) => line.startsWith('#EXT-X-MEDIA-SEQUENCE:'));
+  const mediaSequence = sequenceLine ? Number(sequenceLine.slice('#EXT-X-MEDIA-SEQUENCE:'.length)) : 0;
+  if (!Number.isSafeInteger(mediaSequence) || mediaSequence < 0) throw new Error('Invalid media sequence');
+  const discontinuitySequenceLines = lines.filter((line) => line.startsWith('#EXT-X-DISCONTINUITY-SEQUENCE:'));
+  if (discontinuitySequenceLines.length > 1) throw new Error('Invalid discontinuity sequence');
+  const discontinuitySequence = discontinuitySequenceLines.length
+    ? Number(discontinuitySequenceLines[0].slice('#EXT-X-DISCONTINUITY-SEQUENCE:'.length))
+    : 0;
+  if (!Number.isSafeInteger(discontinuitySequence) || discontinuitySequence < 0) throw new Error('Invalid discontinuity sequence');
+
+  let pendingDuration = null;
+  let maxDuration = 0;
+  const segments = [];
+  const durations = [];
+  const discontinuities = [];
+  const initializationSegments = [];
+  let ended = false;
+  for (const line of lines.slice(1)) {
+    if (ended) throw new Error('Playlist contains entries after ENDLIST');
+    if (line.startsWith('#EXTINF:')) {
+      if (pendingDuration !== null) throw new Error('Missing segment URI');
+      const duration = Number(line.slice('#EXTINF:'.length).split(',')[0]);
+      if (!Number.isFinite(duration) || duration <= 0) throw new Error('Invalid segment duration');
+      pendingDuration = duration;
+      maxDuration = Math.max(maxDuration, duration);
+    } else if (line === '#EXT-X-DISCONTINUITY') {
+      if (pendingDuration !== null) throw new Error('Discontinuity appears after EXTINF');
+      discontinuities.push(segments.length);
+    } else if (line.startsWith('#EXT-X-MAP:')) {
+      const uri = line.match(/(?:^|,)URI="([^"]+)"/i)?.[1];
+      const key = resolvePlaylistReference(playlistKey, uri, videoId);
+      if (!key || !/\.mp4$/i.test(key)) throw new Error('Invalid initialization segment reference');
+      initializationSegments.push({ index: segments.length, key });
+    } else if (line.startsWith('#EXT-X-ENDLIST')) {
+      if (pendingDuration !== null) throw new Error('Missing final segment URI');
+      ended = true;
+    } else if (!line.startsWith('#')) {
+      if (pendingDuration === null) throw new Error('Segment URI has no EXTINF');
+      const key = resolvePlaylistReference(playlistKey, line, videoId);
+      if (!key || !/\.(?:ts|m4s)$/i.test(key)) throw new Error('Invalid segment reference');
+      segments.push(key);
+      durations.push(pendingDuration);
+      pendingDuration = null;
+    }
+  }
+  if (!segments.length || pendingDuration !== null || !ended || lines.at(-1) !== '#EXT-X-ENDLIST') throw new Error('Incomplete VOD playlist');
+  if (Math.ceil(maxDuration) > targetDuration) throw new Error('Target duration is shorter than a segment');
+  return { targetDuration, mediaSequence, discontinuitySequence, segments, durations, discontinuities, initializationSegments };
+}
+
+async function readS3Text(bucket, key) {
+  const response = await s3Client.send(new GetObjectCommand({ Bucket: bucket, Key: key }));
+  return bodyToString(response?.Body);
+}
+
+async function verifyS3Objects(bucketName, keys) {
+  const uniqueKeys = [...new Set(keys)];
+  const concurrency = 16;
+  for (let offset = 0; offset < uniqueKeys.length; offset += concurrency) {
+    await Promise.all(uniqueKeys.slice(offset, offset + concurrency).map(async (key) => {
+      const metadata = await s3Client.send(new HeadObjectCommand({ Bucket: bucketName, Key: key }));
+      if (!(Number(metadata?.ContentLength) > 0)) throw new Error(`Missing or empty HLS object: ${key}`);
+    }));
+  }
+}
+
+/**
+ * Resolve and verify the actual HLS playlist and variant paths reported by
+ * MediaConvert's COMPLETE event before persisting a completed state.
+ */
+async function validateHlsOutputFiles(detail, videoId) {
+  const outputGroups = Array.isArray(detail?.outputGroupDetails) ? detail.outputGroupDetails : [];
+  const hlsGroup = outputGroups.find((group) => String(group?.type || '').toUpperCase() === 'HLS_GROUP');
+  if (!hlsGroup) return { valid: false, error: 'MediaConvert did not report an HLS output group.' };
+
+  const masterPaths = (Array.isArray(hlsGroup.playlistFilePaths) ? hlsGroup.playlistFilePaths : [])
+    .map((path) => parseMediaConvertS3Path(path, videoId))
+    .filter(Boolean)
+    .filter((path) => path.key.toLowerCase().endsWith('.m3u8'));
+  if (masterPaths.length !== 1) return { valid: false, error: 'MediaConvert did not report exactly one valid master playlist.' };
+
+  const variantPathsByQuality = new Map();
+  for (const output of Array.isArray(hlsGroup.outputDetails) ? hlsGroup.outputDetails : []) {
+    for (const path of Array.isArray(output?.outputFilePaths) ? output.outputFilePaths : []) {
+      if (!String(path).toLowerCase().endsWith('.m3u8')) continue;
+      const parsed = parseMediaConvertS3Path(path, videoId);
+      const quality = getOutputQuality(output, path);
+      if (parsed && (quality === 360 || quality === 480) && !variantPathsByQuality.has(quality)) {
+        variantPathsByQuality.set(quality, parsed);
+      }
+    }
+  }
+  if (!variantPathsByQuality.has(360) || !variantPathsByQuality.has(480)) {
+    return { valid: false, error: 'MediaConvert did not report both 360p and 480p variant playlists.' };
+  }
+
+  const master = masterPaths[0];
+  const variants = [variantPathsByQuality.get(360), variantPathsByQuality.get(480)];
+  if (variants.some((variant) => variant.key === master.key) || variants[0].key === variants[1].key) {
+    return { valid: false, error: 'MediaConvert reported conflicting HLS playlist paths.' };
+  }
+
+  try {
+    await verifyS3Objects(master.bucket, [master.key, ...variants.map((variant) => variant.key)]);
+    const masterPlaylist = await readS3Text(master.bucket, master.key);
+    const masterLines = String(masterPlaylist).split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
+    if (masterLines[0] !== '#EXTM3U' || !masterLines.some((line) => line.startsWith('#EXT-X-STREAM-INF:'))) {
+      return { valid: false, error: 'The reported master playlist is missing or invalid.' };
+    }
+
+    const referencedPlaylists = new Set();
+    let awaitingVariant = false;
+    for (const line of masterLines.slice(1)) {
+      if (line.startsWith('#EXT-X-STREAM-INF:')) {
+        if (awaitingVariant) throw new Error('Master playlist stream is missing a URI');
+        awaitingVariant = true;
+      } else if (!line.startsWith('#') && awaitingVariant) {
+        const resolvedKey = resolvePlaylistReference(master.key, line, videoId);
+        if (!resolvedKey || !resolvedKey.toLowerCase().endsWith('.m3u8')) throw new Error('Invalid variant playlist reference');
+        referencedPlaylists.add(resolvedKey);
+        awaitingVariant = false;
+      }
+    }
+    if (awaitingVariant || referencedPlaylists.size !== 2 || variants.some((variant) => !referencedPlaylists.has(variant.key))) {
+      return { valid: false, error: 'The master playlist does not reference both reported variant playlists.' };
+    }
+
+    const mediaPlaylists = await Promise.all(variants.map(async (variant) => {
+      const text = await readS3Text(master.bucket, variant.key);
+      const parsed = parseMediaPlaylist(text, variant.key, videoId);
+      return { variant, parsed };
+    }));
+    const firstSequence = mediaPlaylists[0].parsed.mediaSequence;
+    const segmentCount = mediaPlaylists[0].parsed.segments.length;
+    for (const playlist of mediaPlaylists) {
+      if (playlist.parsed.mediaSequence !== firstSequence || playlist.parsed.segments.length !== segmentCount) {
+        throw new Error('Variant segment sequences do not align');
+      }
+    }
+    const reference = mediaPlaylists[0].parsed;
+    for (const playlist of mediaPlaylists.slice(1)) {
+      const candidate = playlist.parsed;
+      if (candidate.targetDuration !== reference.targetDuration ||
+          candidate.mediaSequence !== reference.mediaSequence ||
+          candidate.discontinuitySequence !== reference.discontinuitySequence ||
+          candidate.segments.length !== reference.segments.length ||
+          candidate.discontinuities.join(',') !== reference.discontinuities.join(',') ||
+          candidate.initializationSegments.map((item) => item.index).join(',') !== reference.initializationSegments.map((item) => item.index).join(',') ||
+          candidate.durations.some((duration, index) => Math.abs(duration - reference.durations[index]) > 0.1)) {
+        throw new Error('Variant playlist timelines are not aligned');
+      }
+    }
+    await verifyS3Objects(master.bucket, mediaPlaylists.flatMap(({ parsed }) => [
+      ...parsed.segments,
+      ...parsed.initializationSegments.map((item) => item.key),
+    ]));
+
+    const masterKeyPrefix = master.key.slice(0, master.key.lastIndexOf('/') + 1);
+    return {
+      valid: true,
+      hlsMasterUrl: `https://${mediaConvertConfig.cloudFrontDomain}/${master.key.split('/').map(encodeURIComponent).join('/')}`,
+      hlsOutputPrefix: masterKeyPrefix,
+      masterS3Key: master.key,
+      variantS3Keys: variants.map((variant) => variant.key),
+    };
+  } catch (_) {
+    return { valid: false, error: 'One or more reported HLS output files are missing or unreadable.' };
+  }
+}
+
+/**
+ * Constructs the AWS Elemental MediaConvert Job specification for adaptive HLS outputs (480p and 360p).
+ */
+
 function buildHlsJobSettings({ inputS3Uri, outputS3Destination, videoId, userMetadata = {} }) {
   return {
     Role: mediaConvertConfig.roleArn,
@@ -202,21 +423,23 @@ async function syncHlsDatabaseRecords({
   error = '',
   convertedAt = null,
   originalVideoUrl = '',
+  hlsMasterUrl: reportedHlsMasterUrl = '',
+  hlsOutputPrefix: reportedHlsOutputPrefix = '',
 }) {
   const cleanKey = String(s3Key || '').trim();
   const cleanVideoId = String(videoId || deriveVideoIdFromKey(cleanKey)).trim();
   const normStatus = String(status || 'PENDING').toUpperCase();
-  const hlsOutputPrefix = `hls/${cleanVideoId}/`;
-  const hlsMasterUrl = normStatus === 'COMPLETED' ? getCloudFrontHlsMasterUrl(cleanVideoId) : '';
+  const hlsOutputPrefix = reportedHlsOutputPrefix || `hls/${cleanVideoId}/`;
+  const hlsMasterUrl = normStatus === 'COMPLETED' ? reportedHlsMasterUrl : '';
 
   const updateFields = {
     hlsConversionStatus: normStatus,
+    hlsMasterUrl,
     hlsOutputPrefix,
   };
   if (jobId) updateFields.mediaConvertJobId = jobId;
   if (error) updateFields.hlsConversionError = error;
   if (normStatus === 'COMPLETED') {
-    updateFields.hlsMasterUrl = hlsMasterUrl;
     updateFields.hlsConvertedAt = convertedAt || new Date();
     updateFields.hlsConversionError = '';
   }
@@ -505,7 +728,8 @@ function enqueueHlsConversion(s3Key, options = {}) {
   // Asynchronously submit job to AWS Elemental MediaConvert
   setImmediate(async () => {
     try {
-      await submitHlsConversionJob({
+      const submitJob = typeof options.submitJob === 'function' ? options.submitJob : submitHlsConversionJob;
+      await submitJob({
         s3Key: cleanKey,
         videoId,
         userMetadata: options.userMetadata || {},
@@ -561,8 +785,24 @@ async function handleJobStateChange(eventPayload) {
   const resolvedVideoId = videoId || existing?.videoId || deriveVideoIdFromKey(resolvedKey);
 
   if (status === 'COMPLETE') {
-    const masterUrl = getCloudFrontHlsMasterUrl(resolvedVideoId);
-    console.info(`[MediaConvert EventBridge] Job ${jobId} COMPLETED. Master URL: ${masterUrl}`);
+    const outputValidation = await validateHlsOutputFiles(detail, resolvedVideoId);
+    if (!outputValidation.valid) {
+      await syncHlsDatabaseRecords({
+        s3Key: resolvedKey,
+        videoId: resolvedVideoId,
+        status: 'FAILED',
+        jobId,
+        error: outputValidation.error,
+      });
+      console.warn(`[MediaConvert EventBridge] Job ${jobId} completed without valid HLS outputs; playback will use MP4 fallback.`);
+      return {
+        success: true,
+        status: 'FAILED',
+        jobId,
+        videoId: resolvedVideoId,
+        error: outputValidation.error,
+      };
+    }
 
     await syncHlsDatabaseRecords({
       s3Key: resolvedKey,
@@ -570,6 +810,8 @@ async function handleJobStateChange(eventPayload) {
       status: 'COMPLETED',
       jobId,
       convertedAt: new Date(),
+      hlsMasterUrl: outputValidation.hlsMasterUrl,
+      hlsOutputPrefix: outputValidation.hlsOutputPrefix,
     });
 
     return {
@@ -577,7 +819,9 @@ async function handleJobStateChange(eventPayload) {
       status: 'COMPLETED',
       jobId,
       videoId: resolvedVideoId,
-      hlsMasterUrl: masterUrl,
+      hlsMasterUrl: outputValidation.hlsMasterUrl,
+      hlsOutputPrefix: outputValidation.hlsOutputPrefix,
+      hlsVariantS3Keys: outputValidation.variantS3Keys,
     };
   }
 
@@ -707,6 +951,8 @@ module.exports = {
   deriveVideoIdFromKey,
   isEligibleVideoKey,
   getCloudFrontHlsMasterUrl,
+  validateHlsOutputFiles,
+  parseMediaPlaylist,
   buildHlsJobSettings,
   syncHlsDatabaseRecords,
   submitHlsConversionJob,

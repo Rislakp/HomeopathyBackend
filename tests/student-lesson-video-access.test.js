@@ -69,3 +69,23 @@ test('supports s3Key-only requests without courseId for enrolled students', asyn
   // invalid s3Key returns 400
   assert.equal((await resolveStudentLessonVideoAccess(request({ courseId: '', s3Key: '' }))).status, 400);
 });
+
+
+test('s3Key-only access requires exactly one authorized lesson and rejects missing or ambiguous keys', async () => {
+  const unique = await resolveStudentLessonVideoAccess(request({ courseId: undefined, s3Key: 'videos/one.mp4' }));
+  assert.equal(unique.status, 200);
+  assert.equal(unique.lesson._id, 'lesson-1');
+
+  const noKey = await resolveStudentLessonVideoAccess(request({ courseId: undefined, s3Key: '' }));
+  assert.equal(noKey.status, 400);
+
+  const missing = await resolveStudentLessonVideoAccess(request({ courseId: undefined, s3Key: 'videos/not-found.mp4' }));
+  assert.equal(missing.status, 404);
+
+  const secondCourse = { ...courseBase, _id: 'course-2', courseId: 'C-2' };
+  const ambiguous = await resolveStudentLessonVideoAccess(request({
+    courseId: undefined,
+    models: { ...mocks({ ...studentBase, courseIds: ['C-1', 'C-2'] }), Course: { findOne: () => ({ lean: async () => null }), find: () => ({ lean: async () => [courseBase, secondCourse] }) } },
+  }));
+  assert.equal(ambiguous.status, 409);
+});

@@ -10,6 +10,7 @@ const { verifyStudentCourseAccess } = require('../utils/courseAccessHelper');
 const { logActivity } = require('../utils/activityLogger');
 const { signS3Reference, normalizeS3Reference, resolveMediaRecord } = require('../utils/s3MediaSigner');
 const { calculateCourseTotalDurationMinutes } = require('../utils/courseDurationHelper');
+const { attachCurriculumHlsCookies, collectCurriculumHlsVideoIds } = require('../utils/studentCurriculumHls');
 
 const isWebmMedia = (resource) => {
   const s3Key = String(resource?.s3Key || '').trim().toLowerCase();
@@ -790,6 +791,7 @@ const getMyCourses = async (req, res) => {
       };
     }));
 
+    attachCurriculumHlsCookies(res, formatted);
     return res.status(200).json({
       success: true,
       count: formatted.length,
@@ -981,6 +983,7 @@ const getMyCourseContent = async (req, res) => {
     formattedCourse.studyTimeHours = summary.studyTimeHours;
     formattedCourse.totalDurationMinutes = calculateCourseTotalDurationMinutes(formattedCourse);
 
+    attachCurriculumHlsCookies(res, formattedCourse);
     return res.status(200).json({
       success: true,
       data: {
@@ -1618,5 +1621,7 @@ module.exports = {
   attachVerifiedM4vRendition,
   hasSafeM4vKey,
   attachVerifiedHlsStream,
+  attachCurriculumHlsCookies,
+  collectCurriculumHlsVideoIds,
   addSignedS3MediaUrls,
 };

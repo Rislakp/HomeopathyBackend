@@ -561,7 +561,7 @@ const getMediaAccessUrl = async (req, res) => {
   if (typeof rawKey !== 'string' || !rawKey.trim()) return fail(res, 400, 's3Key is required.');
 
   // Student playback uses only video keys verified inside an enrolled course lesson.
-  if ((req.user?.role || '').toLowerCase() === 'student') {
+  if ((req.user?.role || '').toLowerCase() === 'student' && /^(?:videos|live_records)\//i.test(String(rawKey).trim())) {
     try {
       const cleanStudentKey = getS3KeyFromUrl(rawKey.trim()) || rawKey.trim();
       const access = await resolveStudentLessonVideoAccess({ user: req.user, courseId, s3Key: cleanStudentKey });
@@ -1180,7 +1180,7 @@ const refreshHlsCookies = async (req, res) => {
     }
 
     // Student authorization check
-    if ((req.user?.role || '').toLowerCase() === 'student') {
+    if ((req.user?.role || '').toLowerCase() === 'student' && /^(?:videos|live_records)\//i.test(String(rawKey).trim())) {
       const s3KeyToCheck = hlsInfo.s3Key || (rawKey ? (getS3KeyFromUrl(String(rawKey).trim()) || String(rawKey).trim()) : null);
       if (!s3KeyToCheck) {
         return fail(res, 403, 'Cannot verify student access for this video.');

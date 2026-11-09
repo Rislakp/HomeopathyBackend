@@ -255,6 +255,7 @@ test('5. EventBridge webhook notification handles COMPLETE and ERROR status tran
   const origUpdateManyCourse = Course.updateMany;
   const origUpdateManyRec = Recording.updateMany;
   const origFindOne = VideoConversion.findOne;
+  const origS3Send = s3.s3Client.send;
 
   let recordedStatus = null;
   let recordedMasterUrl = null;
@@ -275,6 +276,16 @@ test('5. EventBridge webhook notification handles COMPLETE and ERROR status tran
   });
   Course.updateMany = async () => ({ modifiedCount: 1 });
   Recording.updateMany = async () => ({ modifiedCount: 1 });
+  s3.s3Client.send = async (command) => {
+    const key = command.input?.Key || '';
+    if (command.constructor?.name === 'HeadObjectCommand') return { ContentLength: 2048 };
+    const manifests = {
+      'hls/test-session/master.m3u8': '#EXTM3U\n#EXT-X-STREAM-INF:BANDWIDTH=500000\n360p.m3u8\n#EXT-X-STREAM-INF:BANDWIDTH=900000\n480p.m3u8\n',
+      'hls/test-session/360p.m3u8': '#EXTM3U\n#EXT-X-TARGETDURATION:6\n#EXT-X-MEDIA-SEQUENCE:0\n#EXTINF:6,\n360-00000.ts\n#EXT-X-ENDLIST\n',
+      'hls/test-session/480p.m3u8': '#EXTM3U\n#EXT-X-TARGETDURATION:6\n#EXT-X-MEDIA-SEQUENCE:0\n#EXTINF:6,\n480-00000.ts\n#EXT-X-ENDLIST\n',
+    };
+    return { Body: manifests[key] || '' };
+  };
 
   try {
     // 5.1 Test COMPLETE
@@ -286,14 +297,18 @@ test('5. EventBridge webhook notification handles COMPLETE and ERROR status tran
           s3Key: 'videos/test-session.mp4',
           videoId: 'test-session',
         },
+        outputGroupDetails: [{ type: 'HLS_GROUP', playlistFilePaths: ['s3://whitecoat-media-prod/hls/test-session/master.m3u8'], outputDetails: [
+          { videoDetails: { heightInPx: 360 }, outputFilePaths: ['s3://whitecoat-media-prod/hls/test-session/360p.m3u8'] },
+          { videoDetails: { heightInPx: 480 }, outputFilePaths: ['s3://whitecoat-media-prod/hls/test-session/480p.m3u8'] },
+        ] }],
       },
     });
 
     assert.equal(resComplete.success, true);
     assert.equal(resComplete.status, 'COMPLETED');
-    assert.equal(resComplete.hlsMasterUrl, 'https://media.whitecoat.academy/hls/test-session/test-session.m3u8');
+    assert.equal(resComplete.hlsMasterUrl, 'https://media.whitecoat.academy/hls/test-session/master.m3u8');
     assert.equal(recordedStatus, 'COMPLETED');
-    assert.equal(recordedMasterUrl, 'https://media.whitecoat.academy/hls/test-session/test-session.m3u8');
+    assert.equal(recordedMasterUrl, 'https://media.whitecoat.academy/hls/test-session/master.m3u8');
 
     // 5.2 Test ERROR
     const resError = await handleJobStateChange({
@@ -318,6 +333,7 @@ test('5. EventBridge webhook notification handles COMPLETE and ERROR status tran
     Course.updateMany = origUpdateManyCourse;
     Recording.updateMany = origUpdateManyRec;
     VideoConversion.findOne = origFindOne;
+    s3.s3Client.send = origS3Send;
   }
 });
 
@@ -691,7 +707,8 @@ test('11. enqueueHlsConversion enforces synchronous duplicate-submission guard f
   inFlightSubmissions.delete(testKey);
 
   // Call 1: First call should enqueue and reserve lock immediately
-  const call1 = enqueueHlsConversion(testKey);
+  const submitJob = async () => ({ success: true, status: 'PENDING' });
+  const call1 = enqueueHlsConversion(testKey, { submitJob });
   assert.equal(call1.enqueued, true);
   assert.equal(call1.status, 'PENDING');
   assert.equal(
@@ -701,7 +718,7 @@ test('11. enqueueHlsConversion enforces synchronous duplicate-submission guard f
   assert.equal(inFlightSubmissions.has(testKey), true, 'Synchronous lock held immediately');
 
   // Call 2: Concurrent duplicate call before setImmediate executes
-  const call2 = enqueueHlsConversion(testKey);
+  const call2 = enqueueHlsConversion(testKey, { submitJob });
   assert.equal(call2.enqueued, false);
   assert.equal(call2.alreadyInFlight, true);
   assert.equal(call2.status, 'PENDING');
@@ -1186,7 +1203,7 @@ test('20. Preserves persisted master.m3u8 playlist filename and aligns domain', 
       originalS3Key: 'videos/persisted-master.mp4',
       videoId: 'persisted-master',
       hlsConversionStatus: 'COMPLETED',
-      hlsMasterUrl: 'https://d9rfsgqgwn1wa.cloudfront.net/hls/persisted-master/master.m3u8',
+      hlsMasterUrl: 'https://media.whitecoat.academy/hls/persisted-master/master.m3u8',
       hlsOutputPrefix: 'hls/persisted-master/',
     }),
   });
@@ -1318,11 +1335,11 @@ test('22. refreshHlsCookies endpoint validates credentials, S3 readiness, and re
     assert.equal(resByVid.responseBody.success, true);
     assert.equal(resByVid.responseBody.playbackType, 'hls');
     assert.equal(resByVid.responseBody.videoId, 'refresh-video');
-    assert.equal(resByVid.responseBody.expiresIn, 21600);
+    assert.equal(resByVid.responseBody.expiresIn, 86400);
     assert.ok(resByVid.cookies['CloudFront-Policy'], 'CloudFront-Policy cookie refreshed');
     assert.ok(resByVid.cookies['CloudFront-Signature'], 'CloudFront-Signature cookie refreshed');
     assert.ok(resByVid.cookies['CloudFront-Key-Pair-Id'], 'CloudFront-Key-Pair-Id cookie refreshed');
-    assert.equal(resByVid.cookies['CloudFront-Policy'].options.maxAge, 21600 * 1000);
+    assert.equal(resByVid.cookies['CloudFront-Policy'].options.maxAge, 86400 * 1000);
 
     // 22.3 Successful refresh by s3Key
     const { req: reqByKey, res: resByKey } = mockReqRes({
