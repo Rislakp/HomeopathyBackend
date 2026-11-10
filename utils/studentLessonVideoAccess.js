@@ -1,16 +1,25 @@
 const mongoose = require('mongoose');
 const Student = require('../models/Student');
+const User = require('../models/User');
 const Course = require('../models/Course');
 
-function hasCourseEnrollment(student, course) {
-  const enrolledIds = [
-    ...(Array.isArray(student.courseIds) ? student.courseIds : []),
-    student.courseId,
-    student.courseRef,
+function hasCourseEnrollment(student, course, dbUser) {
+  if (!course) return false;
+
+  const rawEnrolled = [
+    ...(student && Array.isArray(student.courseIds) ? student.courseIds : []),
+    student?.courseId,
+    student?.courseRef,
     // `course` is a legacy course-title enrollment field. The shared
     // course-access helper has historically treated it as an enrollment alias.
-    student.course,
-  ]
+    student?.course,
+    ...(dbUser && Array.isArray(dbUser.courseIds) ? dbUser.courseIds : []),
+    dbUser?.courseId,
+    dbUser?.courseRef,
+    dbUser?.course,
+  ];
+
+  const enrolledIds = rawEnrolled
     .filter((id) => id !== undefined && id !== null && String(id).trim())
     .map((id) => String(id).trim().toLowerCase());
 
@@ -23,25 +32,54 @@ function hasCourseEnrollment(student, course) {
 
 /**
  * Shared eligibility gate for student APIs that return course media.
- * Account status and subscription status are independent requirements.
+ * Playback is permitted when:
+ * 1. The account is Active AND Approved (regardless of whether subscription is None, Expired, or has an old expiry timestamp).
+ * OR
+ * 2. A student who is not Active + Approved holds an active, non-expired subscription.
+ *
+ * Expired or invalid subscription timestamps invalidate subscription-based eligibility,
+ * but do not override independently valid account-based eligibility.
  * Legacy subscription labels are retained for existing student records.
  */
 function getStudentPlaybackEligibilityError(student, now = Date.now()) {
   if (!student) return 'Student profile is required.';
 
+  // Check account operational and approval status
   const status = String(student.status || '').trim().toLowerCase();
   const accountStatus = String(student.accountStatus || '').trim().toLowerCase();
-  const accountOk = ['active', 'trial'].includes(status) &&
-    (!accountStatus || ['approved', 'active'].includes(accountStatus));
-  if (!accountOk) return 'Student account is not active.';
 
+  // Operational status must be active or trial (explicitly reject inactive, pending, suspended, expired, etc.)
+  const isOperational = ['active', 'trial'].includes(status) && status !== 'inactive';
+
+  // Approval requires approved/active status, or isApproved flag without contradictory pending/rejected/suspended status
+  const isApproved = ['approved', 'active'].includes(accountStatus) ||
+    (student.isApproved === true && !['rejected', 'suspended', 'pending'].includes(accountStatus));
+
+  // Both operational status AND approval status must be satisfied for account-based eligibility
+  const accountOk = isOperational && isApproved;
+
+  // If the student account is Active + Approved, account eligibility grants playback access.
+  if (accountOk) {
+    return null;
+  }
+
+  // Otherwise, the student must have a valid, active, non-expired subscription
   const subscriptionStatus = String(student.subscriptionStatus || '').trim().toLowerCase();
   const legacySubscription = String(student.subscription || '').trim().toLowerCase();
-  const subscriptionOk = ['active', 'trial'].includes(subscriptionStatus) ||
+  const hasActiveSubscriptionStatus = ['active', 'trial'].includes(subscriptionStatus) ||
     ['active', 'trial', 'vip', 'premium'].includes(legacySubscription);
+
   const expiry = student.subscriptionExpiresAt ? new Date(student.subscriptionExpiresAt) : null;
-  if (!subscriptionOk || (expiry && (!Number.isFinite(expiry.getTime()) || expiry.getTime() <= now))) {
-    return 'An active subscription is required.';
+  const isExpired = subscriptionStatus === 'expired' ||
+    (expiry && (!Number.isFinite(expiry.getTime()) || expiry.getTime() <= now));
+
+  if (isExpired && (hasActiveSubscriptionStatus || subscriptionStatus === 'expired')) {
+    return 'Course subscription has expired.';
+  }
+
+  const validSubscription = hasActiveSubscriptionStatus && !isExpired;
+  if (!validSubscription) {
+    return 'An active account or subscription is required.';
   }
 
   return null;
@@ -49,6 +87,7 @@ function getStudentPlaybackEligibilityError(student, now = Date.now()) {
 
 async function resolveStudentLessonVideoAccess({ user, courseId, s3Key, models = {} }) {
   const StudentModel = models.Student || Student;
+  const UserModel = models.User || User;
   const CourseModel = models.Course || Course;
   if (!user || (user.role || '').toLowerCase() !== 'student') return { status: 401, error: 'Student authentication required.' };
   if (typeof s3Key !== 'string' || !s3Key.trim() || s3Key.length > 1024 || /[\r\n]/.test(s3Key)) return { status: 400, error: 'A valid s3Key is required.' };
@@ -63,6 +102,35 @@ async function resolveStudentLessonVideoAccess({ user, courseId, s3Key, models =
   }
   if (!student && user.email) student = await StudentModel.findOne({ email: String(user.email).toLowerCase() }).lean();
   if (!student) return { status: 403, error: 'Student profile is required.' };
+
+  // Fetch authoritative User document if available to check authoritative course enrollment
+  let dbUser = null;
+  if (models.User) {
+    const authUserId = student.userId || user.id || user.userId;
+    if (authUserId) {
+      if (mongoose.Types.ObjectId.isValid(authUserId) && typeof models.User.findById === 'function') {
+        const res = models.User.findById(authUserId);
+        dbUser = await (res && typeof res.lean === 'function' ? res.lean() : res);
+      }
+      if (!dbUser && typeof models.User.findOne === 'function') {
+        const query = mongoose.Types.ObjectId.isValid(authUserId)
+          ? { $or: [{ _id: authUserId }, { userId: authUserId }] }
+          : { userId: authUserId };
+        const res = models.User.findOne(query);
+        dbUser = await (res && typeof res.lean === 'function' ? res.lean() : res);
+      }
+    }
+  } else if (mongoose.connection?.readyState === 1 && User) {
+    const authUserId = student.userId || user.id || user.userId;
+    if (authUserId) {
+      if (mongoose.Types.ObjectId.isValid(authUserId)) {
+        dbUser = await User.findById(authUserId).lean();
+      }
+      if (!dbUser) {
+        dbUser = await User.findOne({ userId: authUserId }).lean();
+      }
+    }
+  }
 
   const eligibilityError = getStudentPlaybackEligibilityError(student);
   if (eligibilityError) return { status: 403, error: eligibilityError };
@@ -92,7 +160,9 @@ async function resolveStudentLessonVideoAccess({ user, courseId, s3Key, models =
     } else if (CourseModel.findOne !== mongoose.Model.findOne) {
       const enrolledIds = [
         ...(Array.isArray(student.courseIds) ? student.courseIds : []),
+        ...(dbUser && Array.isArray(dbUser.courseIds) ? dbUser.courseIds : []),
         student.courseId, student.courseRef, student.course,
+        dbUser?.courseId, dbUser?.courseRef, dbUser?.course,
       ].filter((id) => id !== undefined && id !== null && String(id).trim());
       if (!enrolledIds.length) return { status: 403, error: 'You do not have access to this course.' };
       const enrolledOr = [];
@@ -112,14 +182,14 @@ async function resolveStudentLessonVideoAccess({ user, courseId, s3Key, models =
   if (requestedCourseId) {
     const course = (courses || [])[0];
     if (!course || String(course.status || 'Published').toLowerCase() !== 'published') return { status: 404, error: 'Course not found.' };
-    if (!hasCourseEnrollment(student, course)) return { status: 403, error: 'You do not have access to this course.' };
+    if (!hasCourseEnrollment(student, course, dbUser)) return { status: 403, error: 'You do not have access to this course.' };
   }
 
   let authorizedCourseCount = 0;
   const matches = [];
   for (const course of courses || []) {
     if (String(course.status || 'Published').toLowerCase() !== 'published') continue;
-    if (!hasCourseEnrollment(student, course)) continue;
+    if (!hasCourseEnrollment(student, course, dbUser)) continue;
     authorizedCourseCount += 1;
     for (const mod of course.modules || []) for (const lesson of mod.lessons || []) {
       const keys = directFields.map((field) => lesson[field]).filter(Boolean).map(String);
