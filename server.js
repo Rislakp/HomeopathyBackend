@@ -148,6 +148,11 @@ const corsOptionsDelegate = (req, callback) => {
     'X-Requested-With',
     'x-student-id',
     'x-user-id',
+    'x-auth-retried',
+    'Cache-Control',
+    'Pragma',
+    'If-Modified-Since',
+    'If-None-Match',
     'Access-Control-Request-Method',
     'Access-Control-Request-Headers',
   ];
@@ -299,6 +304,9 @@ app.use('/api/media', require('./routes/uploadRoutes'));
 app.use('/api/uploads', require('./routes/uploadRoutes'));
 app.use('/api/upload-image', require('./routes/uploadRoutes'));
 app.use('/api/s3-upload', require('./routes/s3UploadRoutes'));
+app.use('/api/s3', require('./routes/s3UploadRoutes'));
+app.use('/api/v1/s3', require('./routes/s3UploadRoutes'));
+app.post('/api/webhooks/mediaconvert', require('./controllers/s3UploadController').handleMediaConvertWebhook);
 
 app.use('/courses', require('./routes/studentCurriculumRoutes'));
 app.use('/api/courses', require('./routes/courseRoutes'));
@@ -399,8 +407,11 @@ app.use((err, req, res, next) => {
 
 const PORT = process.env.PORT || 5000;
 
+const loadHlsSecrets = require('./utils/loadHlsSecrets');
+
 const startServer = async () => {
   try {
+    await loadHlsSecrets();
     await connectDB();
     const { seedInitialAdmin } = require('./controllers/adminAuthController');
     await seedInitialAdmin();

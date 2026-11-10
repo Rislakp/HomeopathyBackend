@@ -1060,6 +1060,8 @@ const updateUserRole = async (req, res) => {
 };
 
 const crypto = require('crypto');
+const bcrypt = require('bcryptjs');
+const { sendPasswordResetEmail } = require('../services/emailService');
 
 /**
  * @route   POST /api/auth/forgot-password
@@ -1083,7 +1085,7 @@ const forgotPassword = async (req, res) => {
     } catch (e) {}
 
     if (!user && !admin) {
-      return res.status(404).json({ success: false, message: 'User not found' });
+      return res.status(200).json({ success: true, message: 'Password recovery token generated and sent to email.' });
     }
 
     const resetToken = crypto.randomBytes(32).toString('hex');
@@ -1102,7 +1104,14 @@ const forgotPassword = async (req, res) => {
     }
 
     // In a real application, send this token via Email. 
-    // For this audit, we simulate it by returning success without the token.
+    try {
+      const recipientName = (user && user.name) || (admin && admin.name) || 'User';
+      const portalBaseUrl = admin ? (process.env.ADMIN_PORTAL_URL || 'https://admin.whitecoat.academy') : (process.env.FRONTEND_URL || 'https://whitecoat.academy');
+      const resetUrl = `${portalBaseUrl}/reset-password?token=${resetToken}&email=${encodeURIComponent(cleanEmail)}`;
+      await sendPasswordResetEmail({ to: cleanEmail, name: recipientName, resetToken, resetUrl, expiresInMinutes: 15 });
+    } catch (e) {
+      console.error('[forgotPassword] Error sending email:', e.message);
+    }
     return res.status(200).json({
       success: true,
       message: 'Password recovery token generated and sent to email.'
@@ -1165,7 +1174,9 @@ const resetPassword = async (req, res) => {
     }
 
     if (admin) {
-      admin.password = targetPassword;
+      const salt = await bcrypt.genSalt(10);
+      admin.password = await bcrypt.hash(targetPassword, salt);
+      admin.tokenVersion = (admin.tokenVersion || 0) + 1;
       admin.resetPasswordToken = undefined;
       admin.resetPasswordExpire = undefined;
       await admin.save();

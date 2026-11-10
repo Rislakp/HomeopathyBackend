@@ -52,6 +52,40 @@ const demoVideoSchema = new mongoose.Schema({
     trim: true,
     default: '',
   },
+  originalVideoUrl: {
+    type: String,
+    trim: true,
+    default: '',
+  },
+  hlsMasterUrl: {
+    type: String,
+    trim: true,
+    default: '',
+  },
+  hlsOutputPrefix: {
+    type: String,
+    trim: true,
+    default: '',
+  },
+  mediaConvertJobId: {
+    type: String,
+    trim: true,
+    default: '',
+  },
+  hlsConversionStatus: {
+    type: String,
+    enum: ['none', 'pending', 'processing', 'completed', 'failed', 'PENDING', 'PROCESSING', 'COMPLETED', 'FAILED'],
+    default: 'none',
+  },
+  hlsConversionError: {
+    type: String,
+    trim: true,
+    default: '',
+  },
+  hlsConvertedAt: {
+    type: Date,
+    default: null,
+  },
 }, {
   timestamps: true,
 });

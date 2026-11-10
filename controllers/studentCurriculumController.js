@@ -1,3 +1,4 @@
+const mongoose = require('mongoose');
 const Course = require('../models/Course');
 const Student = require('../models/Student');
 const LessonProgress = require('../models/LessonProgress');
@@ -9,8 +10,15 @@ const { verifyStudentCourseAccess } = require('../utils/courseAccessHelper');
 const { logActivity } = require('../utils/activityLogger');
 const { signS3Reference, normalizeS3Reference, resolveMediaRecord } = require('../utils/s3MediaSigner');
 const { calculateCourseTotalDurationMinutes } = require('../utils/courseDurationHelper');
+const {
+  attachVerifiedHlsStream: attachVerifiedHlsMetadata,
+  attachCurriculumHlsCookies,
+  collectCurriculumHlsVideoIds,
+} = require('../utils/studentCurriculumHls');
 
 const isWebmMedia = (resource) => {
+  const s3Key = String(resource?.s3Key || '').trim().toLowerCase();
+  if (s3Key.endsWith('.mp4') || s3Key.endsWith('.m4v')) return false;
   const reference = resource?.s3Key || resource?.url || resource?.secure_url || resource?.fileUrl || '';
   try {
     return new URL(reference, 'https://media.invalid').pathname.toLowerCase().endsWith('.webm');
@@ -26,6 +34,9 @@ const hasSafeMp4Key = (key) => typeof key === 'string' &&
 const hasSafeM4vKey = (key) => typeof key === 'string' &&
   /^videos\/[a-zA-Z0-9][a-zA-Z0-9._\/-]*\.m4v$/i.test(key) &&
   !key.includes('..') && !key.includes('//') && !/[\\\r\n]/.test(key);
+
+
+const attachVerifiedHlsStream = attachVerifiedHlsMetadata;
 
 const attachVerifiedM4vRendition = async (resource) => {
   if (!resource || typeof resource !== 'object') return resource;
@@ -115,6 +126,37 @@ const attachVerifiedMp4Fallback = async (resource) => {
   return output;
 };
 
+const isDirectS3Url = (value) => {
+  try {
+    const host = new URL(String(value || '')).hostname.toLowerCase();
+    return /(?:^|\.)s3(?:[.-][a-z0-9-]+)*\.amazonaws\.com(?:\.cn)?$/.test(host);
+  } catch (_) {
+    return false;
+  }
+};
+
+const attachHlsStreamSafely = async (resource) => {
+  try {
+    return await attachVerifiedHlsStream(resource);
+  } catch (_) {
+    // HLS metadata is optional; an invalid record must not abort course serialization.
+    // Never include a URL or raw exception in logs because persisted URLs can contain tokens.
+    console.warn('[HLS] Could not resolve persisted conversion; using MP4 fallback', {
+      videoId: /^[A-Za-z0-9_-]+$/.test(String(resource?.videoId || '')) ? String(resource.videoId) : 'unknown',
+      mediaConvertJobId: /^[A-Za-z0-9_-]+$/.test(String(resource?.mediaConvertJobId || '')) ? String(resource.mediaConvertJobId) : 'unknown',
+      reason: 'hls_attachment_failed',
+    });
+    return {
+      ...resource,
+      hlsMasterUrl: '',
+      hlsPlaybackUrl: '',
+      hlsConversionStatus: 'FAILED',
+      hlsConversionError: 'Invalid persisted HLS master URL',
+      playbackType: 'mp4',
+    };
+  }
+};
+
 const addSignedS3MediaUrls = async (course) => {
   if (!course || typeof course !== 'object') return course;
   if (course.thumbnailMedia?.storageProvider === 's3') {
@@ -137,7 +179,12 @@ const addSignedS3MediaUrls = async (course) => {
               ? (isWebmMedia(resource) ? 'video/webm' : 'video/mp4')
               : type;
             const resolved = await resolveMediaRecord(resource, { responseContentType: mediaType, course });
-            if (field === 'videoParts') { const withMp4 = await attachVerifiedMp4Fallback(resolved); return attachVerifiedM4vRendition(withMp4); } return resolved;
+            if (field === 'videoParts') {
+              const withMp4 = await attachVerifiedMp4Fallback(resolved);
+              const withM4v = await attachVerifiedM4vRendition(withMp4);
+              return attachHlsStreamSafely(withM4v);
+            }
+            return resolved;
           }));
         }
       }
@@ -158,6 +205,26 @@ const addSignedS3MediaUrls = async (course) => {
           lesson.mp4S3Key = firstVideo.mp4S3Key;
           lesson.mp4StorageProvider = firstVideo.mp4StorageProvider;
         }
+        if (firstVideo.hlsMasterUrl) {
+          lesson.hlsMasterUrl = firstVideo.hlsMasterUrl;
+          lesson.hlsPlaybackUrl = firstVideo.hlsPlaybackUrl || firstVideo.hlsMasterUrl;
+          lesson.playbackType = firstVideo.playbackType || 'hls';
+        } else {
+          lesson.hlsMasterUrl = '';
+          lesson.playbackType = firstVideo.playbackType || 'mp4';
+        }
+        if (firstVideo.hlsConversionStatus && firstVideo.hlsConversionStatus !== 'NONE') {
+          lesson.hlsConversionStatus = firstVideo.hlsConversionStatus;
+        }
+        if (firstVideo.hlsOutputPrefix) {
+          lesson.hlsOutputPrefix = firstVideo.hlsOutputPrefix;
+        }
+        if (firstVideo.mediaConvertJobId) {
+          lesson.mediaConvertJobId = firstVideo.mediaConvertJobId;
+        }
+        if (firstVideo.hlsConversionError) {
+          lesson.hlsConversionError = firstVideo.hlsConversionError;
+        }
         const isLessonUrlLiveVideo = lesson.videoUrl &&
           !lesson.videoUrl.includes('meet.google.com') &&
           !lesson.videoUrl.includes('tel.meet') &&
@@ -165,7 +232,8 @@ const addSignedS3MediaUrls = async (course) => {
           !lesson.videoUrl.includes('X-Amz-Signature') &&
           lesson.videoUrl.includes('cloudinary.com');
         if (!isLessonUrlLiveVideo) {
-          lesson.videoUrl = firstVideo.url;
+          const compatibleUrl = firstVideo.mp4Url || firstVideo.m4vUrl || firstVideo.url;
+          lesson.videoUrl = compatibleUrl;
         }
       } else if (!firstVideo && (lesson.videoS3Key || lesson.s3Key || lesson.storageProvider === 's3' || (lesson.videoUrl && (lesson.videoUrl.includes('.amazonaws.com/') || lesson.videoUrl.startsWith('videos/'))))) {
         const candidateKey = lesson.videoS3Key || lesson.s3Key || (lesson.videoUrl && lesson.videoUrl.startsWith('videos/') ? lesson.videoUrl : undefined);
@@ -205,6 +273,30 @@ const addSignedS3MediaUrls = async (course) => {
               lesson.fallbackVideoUrl = fallbackRef.fallbackVideoUrl;
               lesson.fallbackMp4Url = fallbackRef.mp4Url;
             }
+          }
+          const withHls = await attachHlsStreamSafely(withM4v);
+          if (withHls?.hlsMasterUrl) {
+            lesson.hlsMasterUrl = withHls.hlsMasterUrl;
+            lesson.hlsPlaybackUrl = withHls.hlsPlaybackUrl || withHls.hlsMasterUrl;
+            lesson.playbackType = withHls.playbackType || 'hls';
+          } else if (withHls?.hlsConversionStatus && withHls.hlsConversionStatus !== 'NONE') {
+            lesson.hlsMasterUrl = '';
+            lesson.playbackType = withHls.playbackType || 'mp4';
+          }
+          if (withHls?.hlsConversionStatus && withHls.hlsConversionStatus !== 'NONE') {
+            lesson.hlsConversionStatus = withHls.hlsConversionStatus;
+          }
+          if (withHls?.hlsOutputPrefix) {
+            lesson.hlsOutputPrefix = withHls.hlsOutputPrefix;
+          }
+          if (withHls?.mediaConvertJobId) {
+            lesson.mediaConvertJobId = withHls.mediaConvertJobId;
+          }
+          if (withHls?.hlsConversionError) {
+            lesson.hlsConversionError = withHls.hlsConversionError;
+          }
+          if (!Array.isArray(lesson.videoParts) || lesson.videoParts.length === 0) {
+            lesson.videoParts = [withHls];
           }
         }
       }
@@ -684,6 +776,7 @@ const getMyCourses = async (req, res) => {
       };
     }));
 
+    attachCurriculumHlsCookies(res, formatted);
     return res.status(200).json({
       success: true,
       count: formatted.length,
@@ -875,6 +968,7 @@ const getMyCourseContent = async (req, res) => {
     formattedCourse.studyTimeHours = summary.studyTimeHours;
     formattedCourse.totalDurationMinutes = calculateCourseTotalDurationMinutes(formattedCourse);
 
+    attachCurriculumHlsCookies(res, formattedCourse);
     return res.status(200).json({
       success: true,
       data: {
@@ -1511,4 +1605,8 @@ module.exports = {
   attachVerifiedMp4Fallback,
   attachVerifiedM4vRendition,
   hasSafeM4vKey,
+  attachVerifiedHlsStream,
+  attachCurriculumHlsCookies,
+  collectCurriculumHlsVideoIds,
+  addSignedS3MediaUrls,
 };

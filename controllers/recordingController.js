@@ -199,9 +199,11 @@ const formatRecordingDocument = async (rec) => {
   // Ensure recordedVideoUrl is strictly clean public URL or empty string "" if pending
   const storedVideoUrl = sanitizeVideoUrl(rec.recordedVideoUrl || rec.recordingFileUrl || '');
   const recS3Key = (rec.s3Key || '').toLowerCase();
-  const inferredMime = recS3Key.endsWith('.webm') || rec.format === 'webm'
-    ? 'video/webm'
-    : (recS3Key.endsWith('.mov') || rec.format === 'mov' ? 'video/quicktime' : 'video/mp4');
+  const inferredMime = recS3Key.endsWith('.mp4') || rec.format === 'mp4'
+    ? 'video/mp4'
+    : (recS3Key.endsWith('.mov') || rec.format === 'mov'
+      ? 'video/quicktime'
+      : (recS3Key.endsWith('.webm') || rec.format === 'webm' ? 'video/webm' : 'video/mp4'));
   const s3RefCandidate = (rec.storageProvider === 's3' && rec.s3Key)
     ? { storageProvider: 's3', s3Key: rec.s3Key, contentType: inferredMime }
     : storedVideoUrl;

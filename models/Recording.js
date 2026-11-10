@@ -27,6 +27,13 @@ const recordingSchema = new mongoose.Schema(
       trim: true,
       default: '',
     },
+    s3Key: { type: String, trim: true, default: '' },
+    hlsMasterUrl: { type: String, trim: true, default: '' },
+    hlsOutputPrefix: { type: String, trim: true, default: '' },
+    mediaConvertJobId: { type: String, trim: true, default: '' },
+    hlsConversionStatus: { type: String, enum: ['none', 'pending', 'processing', 'completed', 'failed', 'PENDING', 'PROCESSING', 'COMPLETED', 'FAILED'], default: 'none' },
+    hlsConversionError: { type: String, trim: true, default: '' },
+    hlsConvertedAt: { type: Date, default: null },
     width: {
       type: Number,
       default: 0,
@@ -107,6 +114,40 @@ const recordingSchema = new mongoose.Schema(
       type: String,
       trim: true,
       default: '',
+    },
+    originalVideoUrl: {
+      type: String,
+      trim: true,
+      default: '',
+    },
+    hlsMasterUrl: {
+      type: String,
+      trim: true,
+      default: '',
+    },
+    hlsOutputPrefix: {
+      type: String,
+      trim: true,
+      default: '',
+    },
+    mediaConvertJobId: {
+      type: String,
+      trim: true,
+      default: '',
+    },
+    hlsConversionStatus: {
+      type: String,
+      enum: ['none', 'pending', 'processing', 'completed', 'failed', 'PENDING', 'PROCESSING', 'COMPLETED', 'FAILED'],
+      default: 'none',
+    },
+    hlsConversionError: {
+      type: String,
+      trim: true,
+      default: '',
+    },
+    hlsConvertedAt: {
+      type: Date,
+      default: null,
     },
     duration: {
       type: String,

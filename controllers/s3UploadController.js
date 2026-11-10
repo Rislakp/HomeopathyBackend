@@ -16,6 +16,7 @@ const Recording = require('../models/Recording');
 const DemoVideo = require('../models/DemoVideo');
 const Lesson = require('../models/Lesson.model');
 const Student = require('../models/Student');
+const { resolveStudentLessonVideoAccess } = require('../utils/studentLessonVideoAccess');
 const { getS3Url, getS3KeyFromUrl } = require('../services/s3Service');
 const { verifyStudentCourseAccess } = require('../utils/courseAccessHelper');
 const { normalizeS3Reference, encodeSignedUrl, resolveMediaRecord, getVerifiedS3KeyForLegacyAsset } = require('../utils/s3MediaSigner');
@@ -110,7 +111,7 @@ const safeFileName = (value) => {
   return fileName && fileName !== '.' && fileName !== '..' ? fileName : null;
 };
 const validSize = (value, maxBytes) => Number.isSafeInteger(value) && value > 0 && value <= maxBytes;
-const makeReference = ({ key, fileName, contentType, fileSize, duration, uploadStatus = 'uploaded' }) => {
+const makeReference = ({ key, fileName, contentType, fileSize, duration, uploadStatus = 'uploaded', hlsConversionStatus, hlsOutputPrefix, hlsMasterUrl }) => {
   const resolvedSize = Number(fileSize) || 0;
   const numDuration = (duration !== undefined && duration !== null && !isNaN(duration) && Number(duration) > 0)
     ? Number(duration)
@@ -141,6 +142,9 @@ const makeReference = ({ key, fileName, contentType, fileSize, duration, uploadS
     bytes: resolvedSize,
     ...(numDuration !== undefined ? { duration: numDuration, videoDuration: numDuration } : {}),
     uploadStatus,
+    ...(hlsConversionStatus ? { hlsConversionStatus } : {}),
+    ...(hlsOutputPrefix ? { hlsOutputPrefix } : {}),
+    ...(hlsMasterUrl ? { hlsMasterUrl } : {}),
   };
 };
 const handleS3Error = (res, error, action) => {
@@ -192,6 +196,9 @@ const initiateMultipartUpload = async (req, res) => {
   const safeName = safeFileName(fileName);
   if (!safeName) return fail(res, 400, 'A valid fileName is required.');
   if (typeof contentType !== 'string' || !/^video\/[a-z0-9][a-z0-9.+-]{0,126}$/i.test(contentType)) return fail(res, 400, 'contentType must be a valid video MIME type.');
+  if (contentType.toLowerCase() === 'video/webm' || safeName.toLowerCase().endsWith('.webm')) {
+    return fail(res, 400, 'WEBM format is not supported for iOS/Safari playback. Please upload MP4 with H.264 video and AAC audio.');
+  }
   if (req.body?.fileSize !== undefined && !validSize(req.body.fileSize, VIDEO_MAX_BYTES)) return fail(res, 400, 'fileSize must be a positive safe integer no greater than 2 TiB.');
   const key = `videos/${Date.now()}-${randomUUID()}-${safeName}`;
   try {
@@ -286,7 +293,23 @@ const completeMultipartUpload = async (req, res) => {
 
     const durationVal = req.body?.duration !== undefined ? req.body.duration : req.body?.videoDuration;
 
-    // Automatically trigger background iOS M4V conversion for uploaded videos
+    // Automatically trigger AWS Elemental MediaConvert HLS conversion
+    let hlsData = null;
+    if (key.toLowerCase().endsWith('.mp4') || key.toLowerCase().endsWith('.webm') || key.toLowerCase().endsWith('.mov')) {
+      try {
+        const { enqueueHlsConversion } = require('../services/mediaConvertService');
+        hlsData = enqueueHlsConversion(key, {
+          userMetadata: {
+            s3Key: key,
+            recordingId: req.body?.recordingId || '',
+          },
+        });
+      } catch (hlsErr) {
+        console.warn('[S3 multipart] Could not enqueue MediaConvert HLS conversion:', hlsErr.message);
+      }
+    }
+
+    // Also trigger background iOS M4V conversion for uploaded videos
     if (key.toLowerCase().endsWith('.mp4') || key.toLowerCase().endsWith('.webm') || key.toLowerCase().endsWith('.mov')) {
       try {
         const { enqueueConversion } = require('../services/videoConversionService');
@@ -295,6 +318,10 @@ const completeMultipartUpload = async (req, res) => {
         console.warn('[S3 multipart] Could not enqueue background M4V conversion:', convErr.message);
       }
     }
+
+    const hlsStatus = hlsData?.status || 'PENDING';
+    const hlsOutputPrefix = hlsData?.hlsOutputPrefix || '';
+    const hlsMasterUrl = hlsData?.hlsMasterUrl || '';
 
     return res.json({
       success: true,
@@ -306,12 +333,18 @@ const completeMultipartUpload = async (req, res) => {
       url: s3Url,
       etag: result.ETag,
       recording: linkedRecording,
+      hlsConversionStatus: hlsStatus,
+      hlsOutputPrefix,
+      hlsMasterUrl,
       media: makeReference({
         key,
         fileName: safeFileName(req.body?.fileName) || key.split('/').pop(),
         contentType: objectMetadata.ContentType || req.body?.contentType || 'application/octet-stream',
         fileSize: objectMetadata.ContentLength || 0,
         duration: durationVal,
+        hlsConversionStatus: hlsStatus,
+        hlsOutputPrefix,
+        hlsMasterUrl,
       }),
     });
   } catch (error) { return handleS3Error(res, error, 'complete'); }
@@ -469,7 +502,16 @@ const courseContainsMediaKey = (course, key) => {
   for (const moduleItem of modules) {
     const lessons = getProp(moduleItem, 'lessons') || moduleItem.lessons || [];
     for (const lesson of lessons) {
+<<<<<<< HEAD
       if (getProp(lesson, 'videoS3Key') === targetKey || getProp(lesson, 's3Key') === targetKey || getProp(lesson, 'mp4S3Key') === targetKey || getProp(lesson, 'm4vS3Key') === targetKey) return true;
+=======
+      if (
+        getProp(lesson, 'videoS3Key') === targetKey ||
+        getProp(lesson, 's3Key') === targetKey ||
+        getProp(lesson, 'm4vS3Key') === targetKey ||
+        getProp(lesson, 'mp4S3Key') === targetKey
+      ) return true;
+>>>>>>> f56b0cb44bf5e47764d240af60262e5a9218af38
       if (getS3KeyFromUrl(getProp(lesson, 'videoUrl')) === targetKey) return true;
       if (normalizeS3Reference(getProp(lesson, 'videoUrl'))?.s3Key === targetKey) return true;
       if (getS3KeyFromUrl(getProp(lesson, 'fileUrl')) === targetKey) return true;
@@ -483,7 +525,14 @@ const courseContainsMediaKey = (course, key) => {
       for (const collection of ['videoParts', 'pdfNotes', 'assignments', 'attachments']) {
         const list = getProp(lesson, collection) || lesson[collection] || [];
         for (const item of list) {
+<<<<<<< HEAD
           const itemKey = getProp(item, 's3Key') || getProp(item, 'm4vS3Key') || getProp(item, 'mp4S3Key') || getProp(item, 'key') ||
+=======
+          const itemKey = getProp(item, 's3Key') ||
+            getProp(item, 'm4vS3Key') ||
+            getProp(item, 'mp4S3Key') ||
+            getProp(item, 'key') ||
+>>>>>>> f56b0cb44bf5e47764d240af60262e5a9218af38
             getS3KeyFromUrl(getProp(item, 'url')) ||
             getS3KeyFromUrl(getProp(item, 'secure_url')) ||
             getS3KeyFromUrl(getProp(item, 'secureUrl')) ||
@@ -519,6 +568,63 @@ const getMediaAccessUrl = async (req, res) => {
   const courseId = req.query?.courseId || req.body?.courseId;
   const rawKey = req.query?.s3Key || req.query?.key || req.body?.s3Key || req.body?.key;
   if (typeof rawKey !== 'string' || !rawKey.trim()) return fail(res, 400, 's3Key is required.');
+
+  // Student playback uses only video keys verified inside an enrolled course lesson.
+  if ((req.user?.role || '').toLowerCase() === 'student' && /^(?:videos|live_records)\//i.test(String(rawKey).trim())) {
+    try {
+      const cleanStudentKey = getS3KeyFromUrl(rawKey.trim()) || rawKey.trim();
+      const access = await resolveStudentLessonVideoAccess({ user: req.user, courseId, s3Key: cleanStudentKey });
+      if (access.status !== 200) return fail(res, access.status, access.error);
+      const { key, lesson } = access;
+      const { getVerifiedHlsConversionForS3Key } = require('../services/mediaConvertService');
+      let hlsInfo;
+      try { hlsInfo = await getVerifiedHlsConversionForS3Key(key); } catch (_) { hlsInfo = null; }
+      if (String(hlsInfo?.hlsConversionStatus || '').toUpperCase() === 'COMPLETED' && hlsInfo.videoId) {
+        try {
+          const { validateHlsS3Readiness } = require('../utils/hlsReadinessValidator');
+          const readiness = await validateHlsS3Readiness({ s3Client, bucket, hlsInfo });
+          if (readiness.ready) {
+            const { attachHlsCookiesToResponse, getValidatedHlsMasterUrl } = require('../utils/cloudFrontSecurity');
+            if (String(hlsInfo.originalS3Key || '') !== String(key)) throw new Error('HLS source key mismatch');
+            const playlistUrl = getValidatedHlsMasterUrl(hlsInfo.hlsMasterUrl, hlsInfo.videoId);
+            let cookiesAttached = false;
+            try {
+              cookiesAttached = attachHlsCookiesToResponse(res, hlsInfo.videoId, undefined, hlsInfo.hlsOutputPrefix);
+            } catch (_) {
+              cookiesAttached = false;
+            }
+            if (cookiesAttached) {
+              return res.json({
+                success: true,
+                url: playlistUrl,
+                hlsMasterUrl: playlistUrl,
+                hlsPlaybackUrl: playlistUrl,
+                s3Key: key,
+                key,
+                playbackType: 'hls',
+                hlsConversionStatus: 'COMPLETED',
+              });
+            }
+          } else {
+            // A generated but incomplete HLS package is not advertised; use the authorized MP4 path below.
+          }
+        } catch (hlsErr) {
+          // Persisted HLS metadata and readiness are optional; keep this student's authorized MP4 fallback.
+        }
+      }
+      await s3Client.send(new HeadObjectCommand({ Bucket: bucket, Key: key }));
+      const signed = await getSignedUrl(s3Client, new GetObjectCommand({ Bucket: bucket, Key: key, ResponseContentType: 'video/mp4', ResponseContentDisposition: 'inline' }), { expiresIn: MEDIA_URL_TTL_SECONDS });
+      return res.json({
+        success: true,
+        url: encodeSignedUrl(signed),
+        s3Key: key,
+        key,
+        expiresIn: MEDIA_URL_TTL_SECONDS,
+        playbackType: 'mp4',
+        hlsConversionStatus: hlsInfo?.hlsConversionStatus || lesson.hlsConversionStatus || 'PENDING',
+      });
+    } catch (_) { return fail(res, 503, 'Media playback is temporarily unavailable.'); }
+  }
 
   // Handle external Cloudinary URLs seamlessly
   const trimmedRawKey = rawKey.trim();
@@ -653,10 +759,17 @@ const getMediaAccessUrl = async (req, res) => {
         { 'modules.lessons.path': { $regex: escapeRegex(key) } },
         { 'modules.lessons.mp4S3Key': key },
         { 'modules.lessons.videoParts.s3Key': key },
+<<<<<<< HEAD
         { 'modules.lessons.mp4S3Key': key },
+=======
+>>>>>>> f56b0cb44bf5e47764d240af60262e5a9218af38
         { 'modules.lessons.m4vS3Key': key },
         { 'modules.lessons.videoParts.mp4S3Key': key },
         { 'modules.lessons.videoParts.m4vS3Key': key },
+<<<<<<< HEAD
+=======
+        { 'modules.lessons.videoParts.mp4S3Key': key },
+>>>>>>> f56b0cb44bf5e47764d240af60262e5a9218af38
         { 'modules.lessons.videoParts.url': { $regex: escapeRegex(key) } },
         { 'modules.lessons.videoParts.secure_url': { $regex: escapeRegex(key) } },
         { 'modules.lessons.videoParts.secureUrl': { $regex: escapeRegex(key) } },
@@ -795,7 +908,7 @@ const getMediaAccessUrl = async (req, res) => {
         }
       }
 
-      if (!foundMedia) {
+      if (!foundMedia && mongoose.connection?.readyState === 1) {
         let ExamModel;
         try { ExamModel = require('../models/Exam'); } catch (_) {}
         if (ExamModel) {
@@ -822,7 +935,8 @@ const getMediaAccessUrl = async (req, res) => {
       if (!resolvedCourse) {
         return fail(res, 403, 'Course access is required to access this media.');
       }
-      if (String(resolvedCourse.status || '').toLowerCase() !== 'published') {
+      const courseStatus = resolvedCourse.status ? String(resolvedCourse.status).toLowerCase() : 'published';
+      if (courseStatus !== 'published') {
         return fail(res, 404, 'Course not found or not published.');
       }
       const student = await findStudentForMedia(req.user || {});
@@ -859,6 +973,7 @@ const getMediaAccessUrl = async (req, res) => {
     // 4. Confirm the referenced private object still exists before issuing a URL.
     await s3Client.send(new HeadObjectCommand({ Bucket: bucket, Key: key }));
 
+<<<<<<< HEAD
     // 5. Generate signed URL (CloudFront if enabled, with fallback to S3 SigV4)
     let url = null;
     let deliveryProvider = 's3';
@@ -885,11 +1000,91 @@ const getMediaAccessUrl = async (req, res) => {
         ...(contentType ? { ResponseContentType: contentType, ResponseContentDisposition: 'inline' } : {}),
       }), { expiresIn: MEDIA_URL_TTL_SECONDS });
       url = encodeSignedUrl(rawUrl);
+=======
+    // 5. Generate SigV4 signed URL
+    let contentType = undefined;
+    if (prefix === 'videos/' || prefix === 'live_records/') {
+      const keyLower = key.toLowerCase();
+      contentType = keyLower.endsWith('.mp4') || keyLower.endsWith('.m4v')
+        ? 'video/mp4'
+        : (keyLower.endsWith('.mov') ? 'video/quicktime' : (keyLower.endsWith('.webm') ? 'video/webm' : 'video/mp4'));
+    } else if (prefix === 'pdfs/') {
+      contentType = 'application/pdf';
+>>>>>>> f56b0cb44bf5e47764d240af60262e5a9218af38
+    }
+
+    // HLS video integration: check conversion status and issue CloudFront signed cookies / URL
+    let hlsResponseFields = {};
+    if (prefix === 'videos/' || prefix === 'live_records/') {
+      try {
+        const { getHlsConversionStatus } = require('../services/mediaConvertService');
+        const { attachHlsCookiesToResponse, generateHlsSignedUrl, getCloudFrontDomain, resolvePersistedHlsUrl } = require('../utils/cloudFrontSecurity');
+        const { validateHlsS3Readiness } = require('../utils/hlsReadinessValidator');
+        const hlsInfo = await getHlsConversionStatus(key);
+
+        if (hlsInfo.hlsConversionStatus === 'COMPLETED' && hlsInfo.hlsMasterUrl) {
+          const readiness = await validateHlsS3Readiness({ s3Client, bucket, hlsInfo });
+          let cookiesAttached = false;
+          try {
+            cookiesAttached = readiness.ready && attachHlsCookiesToResponse(res, hlsInfo.videoId, undefined, hlsInfo.hlsOutputPrefix);
+          } catch (_) {
+            cookiesAttached = false;
+          }
+          if (cookiesAttached) {
+            const signedHlsUrl = resolvePersistedHlsUrl(hlsInfo.hlsMasterUrl, hlsInfo.videoId);
+            hlsResponseFields = {
+              hlsMasterUrl: signedHlsUrl,
+              hlsPlaybackUrl: signedHlsUrl,
+              hlsOutputPrefix: hlsInfo.hlsOutputPrefix,
+              hlsConversionStatus: 'COMPLETED',
+              mediaConvertJobId: hlsInfo.mediaConvertJobId,
+              playbackType: 'hls',
+            };
+          } else {
+            console.warn('[S3 media] HLS readiness or cookie attachment failed, falling back to MP4:', readiness.reason || 'cookie failure');
+            hlsResponseFields = {
+              hlsMasterUrl: '',
+              hlsConversionStatus: 'PROCESSING',
+              mediaConvertJobId: hlsInfo.mediaConvertJobId,
+              playbackType: 'mp4',
+            };
+          }
+        } else if (['PROCESSING', 'PENDING'].includes(hlsInfo.hlsConversionStatus)) {
+          hlsResponseFields = {
+            hlsMasterUrl: '',
+            hlsConversionStatus: hlsInfo.hlsConversionStatus,
+            mediaConvertJobId: hlsInfo.mediaConvertJobId,
+            playbackType: 'mp4',
+          };
+        } else if (hlsInfo.hlsConversionStatus === 'FAILED') {
+          hlsResponseFields = {
+            hlsMasterUrl: '',
+            hlsConversionStatus: 'FAILED',
+            hlsConversionError: hlsInfo.error,
+            mediaConvertJobId: hlsInfo.mediaConvertJobId,
+            playbackType: 'mp4',
+          };
+        }
+      } catch (hlsCheckErr) {
+        console.warn('[S3 media] HLS status resolution warning:', hlsCheckErr.message);
+      }
     }
 
     const mediaOwnerId = resolvedCourse?.courseId || resolvedCourse?._id || recordingDoc?.courseId || recordingDoc?._id || demoVideoDoc?.courseId || 'authorized-media';
+<<<<<<< HEAD
     console.info('[S3 media] access URL issued', { courseId: String(mediaOwnerId), prefix, deliveryProvider, userId: req.user?.id });
     return res.json({ success: true, url, key, s3Key: key, expiresIn: MEDIA_URL_TTL_SECONDS, deliveryProvider });
+=======
+    console.info('[S3 media] access URL issued', { courseId: String(mediaOwnerId), prefix, userId: req.user?.id });
+    return res.json({
+      success: true,
+      url,
+      key,
+      s3Key: key,
+      expiresIn: MEDIA_URL_TTL_SECONDS,
+      ...hlsResponseFields,
+    });
+>>>>>>> f56b0cb44bf5e47764d240af60262e5a9218af38
   } catch (error) {
     return handleS3Error(res, error, 'media-access');
   }
@@ -953,7 +1148,137 @@ const batchConvertCourseVideos = async (req, res) => {
 };
 
 
+
+const handleMediaConvertWebhook = async (req, res) => {
+  const secret = process.env.HLS_WEBHOOK_SECRET || process.env.MEDIACONVERT_WEBHOOK_SECRET;
+  if (!secret && process.env.NODE_ENV === 'production') {
+    return res.status(503).json({ success: false, message: 'Webhook authentication is not configured.' });
+  }
+  if (secret) {
+    const incomingSecret =
+      req.headers['x-api-key'] ||
+      req.headers['x-webhook-secret'] ||
+      req.headers['authorization']?.replace(/^Bearer\s+/i, '');
+    const supplied = Buffer.from(String(incomingSecret || ''));
+    const expected = Buffer.from(secret);
+    const { timingSafeEqual } = require('crypto');
+    if (supplied.length !== expected.length || !timingSafeEqual(supplied, expected)) {
+      console.warn('[MediaConvert Webhook] Unauthorized webhook attempt.');
+      return res.status(401).json({ success: false, message: 'Invalid webhook secret.' });
+    }
+  }
+
+  try {
+    const { handleJobStateChange } = require('../services/mediaConvertService');
+    const result = await handleJobStateChange(req.body);
+    return res.status(200).json({ success: true, ...result });
+  } catch (err) {
+    console.error('[MediaConvert Webhook] Processing error.');
+    return res.status(500).json({ success: false, message: 'Webhook processing failed.' });
+  }
+};
+
+const getMediaConvertJobStatus = async (req, res) => {
+  const keyOrJobId = req.params?.keyOrJobId || req.query?.s3Key || req.query?.key || req.query?.jobId || req.body?.s3Key;
+  if (!keyOrJobId) return fail(res, 400, 's3Key or jobId is required.');
+  try {
+    const { getHlsConversionStatus, checkMediaConvertJob } = require('../services/mediaConvertService');
+    let status = await getHlsConversionStatus(keyOrJobId);
+    if (['PENDING', 'PROCESSING'].includes(status.hlsConversionStatus) && status.mediaConvertJobId) {
+      await checkMediaConvertJob(status.mediaConvertJobId).catch(() => {});
+      status = await getHlsConversionStatus(keyOrJobId);
+    }
+    return res.json({ success: true, ...status });
+  } catch (err) {
+    return fail(res, 500, err.message);
+  }
+};
+
+const retryMediaConvertJob = async (req, res) => {
+  const s3Key = req.body?.s3Key || req.body?.key || req.query?.s3Key;
+  if (!s3Key) return fail(res, 400, 's3Key is required.');
+  try {
+    const { submitHlsConversionJob } = require('../services/mediaConvertService');
+    const result = await submitHlsConversionJob({ s3Key, force: true });
+    return res.json({ success: true, ...result });
+  } catch (err) {
+    return fail(res, 500, err.message);
+  }
+};
+
+const refreshHlsCookies = async (req, res) => {
+  const courseId = req.query?.courseId || req.body?.courseId;
+  const rawKey = req.query?.s3Key || req.query?.key || req.body?.s3Key || req.body?.key;
+  const rawVideoId = req.query?.videoId || req.body?.videoId;
+
+  if (!rawKey && !rawVideoId) {
+    return fail(res, 400, 'Either s3Key or videoId is required.');
+  }
+
+  try {
+    const { getHlsConversionStatus } = require('../services/mediaConvertService');
+    const targetIdentifier = rawKey ? (getS3KeyFromUrl(String(rawKey).trim()) || String(rawKey).trim()) : String(rawVideoId).trim();
+    const hlsInfo = await getHlsConversionStatus(targetIdentifier);
+
+    if (String(hlsInfo?.hlsConversionStatus || '').toUpperCase() !== 'COMPLETED' || !hlsInfo.videoId) {
+      return fail(res, 404, 'HLS media is not available or conversion is not completed.');
+    }
+
+    // Student authorization check
+    if ((req.user?.role || '').toLowerCase() === 'student' && /^(?:videos|live_records)\//i.test(String(rawKey).trim())) {
+      const s3KeyToCheck = hlsInfo.s3Key || (rawKey ? (getS3KeyFromUrl(String(rawKey).trim()) || String(rawKey).trim()) : null);
+      if (!s3KeyToCheck) {
+        return fail(res, 403, 'Cannot verify student access for this video.');
+      }
+      const access = await resolveStudentLessonVideoAccess({
+        user: req.user,
+        courseId,
+        s3Key: s3KeyToCheck,
+      });
+      if (access.status !== 200) {
+        return fail(res, access.status, access.error);
+      }
+    }
+
+    // Validate readiness in S3
+    const { validateHlsS3Readiness } = require('../utils/hlsReadinessValidator');
+    const readiness = await validateHlsS3Readiness({ s3Client, bucket, hlsInfo });
+    if (!readiness.ready) {
+      return fail(res, 404, 'HLS media files are not ready in storage.');
+    }
+
+    // Attach signed cookies
+    const { attachHlsCookiesToResponse, resolvePersistedHlsUrl, DEFAULT_TTL_SECONDS } = require('../utils/cloudFrontSecurity');
+    let attached = false;
+    try {
+      attached = attachHlsCookiesToResponse(res, hlsInfo.videoId, undefined, hlsInfo.hlsOutputPrefix);
+    } catch (_) {
+      attached = false;
+    }
+    if (!attached) {
+      return fail(res, 503, 'Failed to refresh CloudFront signed cookies.');
+    }
+
+    const playlistUrl = resolvePersistedHlsUrl(hlsInfo.hlsMasterUrl, hlsInfo.videoId);
+    return res.json({
+      success: true,
+      message: 'CloudFront signed cookies refreshed successfully.',
+      videoId: hlsInfo.videoId,
+      hlsMasterUrl: playlistUrl,
+      hlsPlaybackUrl: playlistUrl,
+      playbackType: 'hls',
+      expiresIn: DEFAULT_TTL_SECONDS,
+    });
+  } catch (error) {
+    return fail(res, 500, error.message || 'Failed to refresh playback cookies.');
+  }
+};
+
 module.exports = {
+  refreshHlsCookies,
+  handleMediaConvertWebhook,
+  getMediaConvertJobStatus,
+  retryMediaConvertJob,
   getVideoConversionStatus,
   retryVideoConversion,
   batchConvertCourseVideos,

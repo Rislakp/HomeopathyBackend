@@ -16,6 +16,19 @@ const {
 } = require('../controllers/authController');
 
 const { requireAuth, requireAdmin } = require('../middleware/rbac');
+const { createRateLimiter } = require('../middleware/rateLimiter');
+
+const forgotPasswordLimiter = createRateLimiter({
+  windowMs: 15 * 60 * 1000,
+  max: 5,
+  message: 'Too many password reset requests. Please try again after 15 minutes.',
+});
+
+const resetPasswordLimiter = createRateLimiter({
+  windowMs: 15 * 60 * 1000,
+  max: 10,
+  message: 'Too many password reset attempts. Please try again after 15 minutes.',
+});
 
 // -----------------------------
 // TOKEN REFRESH & SESSION MANAGEMENT
@@ -49,12 +62,12 @@ router.post('/admin/login', adminLogin);
 // -----------------------------
 // PASSWORD MANAGEMENT
 // -----------------------------
-router.post('/forgot-password', forgotPassword);
-router.put('/forgot-password', forgotPassword);
+router.post('/forgot-password', forgotPasswordLimiter, forgotPassword);
+router.put('/forgot-password', forgotPasswordLimiter, forgotPassword);
 
-router.post('/reset-password', resetPassword);
-router.put('/reset-password', resetPassword);
-router.patch('/reset-password', resetPassword);
+router.post('/reset-password', resetPasswordLimiter, resetPassword);
+router.put('/reset-password', resetPasswordLimiter, resetPassword);
+router.patch('/reset-password', resetPasswordLimiter, resetPassword);
 router.post('/password/reset', resetPassword);
 router.put('/password/reset', resetPassword);
 router.post('/student/reset-password', resetPassword);

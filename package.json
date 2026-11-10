@@ -24,8 +24,14 @@
   "author": "",
   "license": "ISC",
   "dependencies": {
+    "@aws-sdk/client-mediaconvert": "^3.1162.0",
     "@aws-sdk/client-s3": "^3.1144.0",
+<<<<<<< HEAD
     "@aws-sdk/cloudfront-signer": "^3.1165.0",
+=======
+    "@aws-sdk/client-secrets-manager": "^3.1163.0",
+    "@aws-sdk/cloudfront-signer": "^3.1161.0",
+>>>>>>> f56b0cb44bf5e47764d240af60262e5a9218af38
     "@aws-sdk/s3-request-presigner": "^3.850.0",
     "@google/genai": "^2.21.0",
     "bcryptjs": "^3.0.3",
@@ -37,6 +43,7 @@
     "mime-types": "^2.1.35",
     "mongoose": "^8.2.1",
     "multer": "^2.2.0",
+    "nodemailer": "^10.4.0",
     "pdf-parse": "^1.1.1",
     "pdfkit": "^0.20.1",
     "sharp": "^0.35.4",
