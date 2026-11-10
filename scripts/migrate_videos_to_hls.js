@@ -13,9 +13,13 @@
  * Options:
  *   --concurrency=N   Maximum concurrent MediaConvert job submissions (default: 3)
  *   --limit=N         Maximum number of videos to submit in this run
+ *   --key=SUBSTRING   Filter candidates to s3Keys matching substring (case-insensitive)
+ *   --only=SUBSTRING  Alias for --key
  *   --dry-run         Scan and display eligible videos without submitting jobs
  *   --force           Re-submit jobs even if previously failed or marked pending
- *   --state-file=F    Custom path for migration state file (default: scratch/hls_migration_state.json)
+ *   --state-file=F    Custom path for migration state file (default: HLS_STATE_FILE env or scratch/hls_migration_state.json)
+ *                     NOTE: On EC2 instances, configure HLS_STATE_FILE or pass --state-file pointing outside the repo
+ *                     (e.g., /home/ec2-user/hls_migration_state.json) so automated git deploys do not overwrite it.
  */
 
 const path = require('path');
@@ -42,12 +46,21 @@ const isForce = args.includes('--force');
 const concurrencyArg = args.find((a) => a.startsWith('--concurrency='));
 const limitArg = args.find((a) => a.startsWith('--limit='));
 const stateFileArg = args.find((a) => a.startsWith('--state-file='));
+const keyFilterArg = args.find((a) => a.startsWith('--key=') || a.startsWith('--only='));
+const KEY_FILTER = keyFilterArg ? keyFilterArg.split('=').slice(1).join('=').trim().toLowerCase() : '';
 
 const CONCURRENCY = concurrencyArg ? parseInt(concurrencyArg.split('=')[1], 10) || 3 : 3;
 const LIMIT = limitArg ? parseInt(limitArg.split('=')[1], 10) : Infinity;
-const STATE_FILE = stateFileArg
-  ? path.resolve(stateFileArg.split('=')[1])
+
+// Default state file configurable via --state-file or env HLS_STATE_FILE.
+// On EC2, point outside the git repo (e.g., /home/ec2-user/hls_migration_state.json).
+const defaultStateFile = process.env.HLS_STATE_FILE
+  ? path.resolve(process.env.HLS_STATE_FILE)
   : path.join(__dirname, '../scratch/hls_migration_state.json');
+
+const STATE_FILE = stateFileArg
+  ? path.resolve(stateFileArg.split('=').slice(1).join('='))
+  : defaultStateFile;
 
 // Ensure scratch directory exists
 const stateDir = path.dirname(STATE_FILE);
@@ -207,6 +220,8 @@ async function runMigration() {
   console.log('================================================================');
   console.log(`Concurrency: ${CONCURRENCY} concurrent jobs`);
   console.log(`Mode:        ${isDryRun ? 'DRY-RUN (read-only)' : 'LIVE EXECUTION'}`);
+  console.log(`Key Filter:  ${KEY_FILTER ? `"${KEY_FILTER}"` : 'NONE (all eligible)'}`);
+  console.log(`Limit:       ${limitArg ? LIMIT : 'NONE (unlimited)'}`);
   console.log(`Force:       ${isForce ? 'YES (override existing states)' : 'NO (skip completed/in-progress)'}`);
   console.log(`State File:  ${STATE_FILE}`);
   console.log('----------------------------------------------------------------');
@@ -226,6 +241,16 @@ async function runMigration() {
   const allVideos = await discoverEligibleVideos();
   console.info(`Found ${allVideos.length} total unique video references in database.\n`);
 
+  // Dry-run guard: check if key filter matches any video
+  if (KEY_FILTER) {
+    const matchingCount = allVideos.filter((v) => v.s3Key.toLowerCase().includes(KEY_FILTER)).length;
+    if (matchingCount === 0) {
+      console.log(`[Key Filter] No videos matched filter: "${KEY_FILTER}". Exiting.`);
+      await mongoose.disconnect();
+      return;
+    }
+  }
+
   const state = loadState();
 
   // Classify each video
@@ -235,6 +260,9 @@ async function runMigration() {
 
   for (const vid of allVideos) {
     const key = vid.s3Key;
+    if (KEY_FILTER && !key.toLowerCase().includes(KEY_FILTER)) {
+      continue;
+    }
     const videoId = deriveVideoIdFromKey(key);
     vid.videoId = videoId;
 
@@ -275,10 +303,17 @@ async function runMigration() {
 
   console.log('--- Migration Pre-flight Summary ---');
   console.log(`Total Videos Discovered: ${allVideos.length}`);
+  if (KEY_FILTER) console.log(`Key Filter:              "${KEY_FILTER}"`);
   console.log(`Already Completed (skip): ${alreadyCompletedCount}`);
   console.log(`In-Progress/Pending:      ${inProgressCount}`);
   console.log(`Remaining to Process:     ${toProcess.length}`);
+  if (limitArg) console.log(`Limit:                   ${LIMIT}`);
   console.log('------------------------------------\n');
+
+  // Guard: Warn if filter matched multiple videos without an explicit limit
+  if (KEY_FILTER && toProcess.length > 1 && !limitArg) {
+    console.warn(`⚠️  WARNING: Key filter "${KEY_FILTER}" matched ${toProcess.length} pending videos and no --limit was specified. Proceeding with all ${toProcess.length} videos.\n`);
+  }
 
   const finalQueue = toProcess.slice(0, LIMIT);
   if (finalQueue.length === 0) {
