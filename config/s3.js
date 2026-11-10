@@ -66,7 +66,8 @@ console.info('[S3 Config]', {
   hasCredentials: Boolean(accessKeyId && secretAccessKey),
   hasSessionToken: Boolean(sessionToken),
   hasCustomEndpoint: Boolean(customEndpoint),
-  publicBaseUrl: publicBaseUrl || '(none)',
+  publicBaseUrl: publicBaseUrl || (process.env.CLOUDFRONT_DOMAIN ? `https://${process.env.CLOUDFRONT_DOMAIN.replace(/^https?:\/\//i, '')}` : '(none)'),
+  cloudFrontPlayback: (process.env.CLOUDFRONT_ENABLED || '').toLowerCase() === 'true',
 });
 
 const isS3Configured = () => {

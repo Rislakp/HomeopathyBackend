@@ -5,3 +5,20 @@ npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
 .DS_Store
+
+# CloudFront Keys & Credentials
+*.pem
+*.key
+
+# Terraform artifacts & state
+.terraform/
+.terraform.lock.hcl
+*.tfstate
+*.tfstate.*
+*.tfvars
+!*.tfvars.example
+*.tfvars.json
+override.tf
+override.tf.json
+*_override.tf
+*_override.tf.json

@@ -1,6 +1,7 @@
 const { GetObjectCommand } = require('@aws-sdk/client-s3');
 const { getSignedUrl } = require('@aws-sdk/s3-request-presigner');
 const { s3Client, bucket, region, publicBaseUrl } = require('../config/s3');
+const { isCloudFrontConfigured, signCloudFrontPlaybackUrl, getCloudFrontDomain } = require('./cloudFrontMediaSigner');
 
 // Time-to-live for signed URLs (in seconds) - default 2 hours (7200s) to support long classes
 const S3_MEDIA_URL_TTL_SECONDS = parseInt(process.env.S3_SIGNED_URL_EXPIRES_IN || process.env.S3_MEDIA_URL_TTL_SECONDS, 10) || 21600;
@@ -74,6 +75,10 @@ const normalizeS3Reference = (reference) => {
     if (publicBaseUrl) {
       try { expectedHosts.add(new URL(publicBaseUrl).hostname); } catch (_) { /* ignore invalid base URL */ }
     }
+    const cfDomain = getCloudFrontDomain();
+    if (cfDomain) {
+      expectedHosts.add(cfDomain);
+    }
     if (parsed.hostname.includes('amazonaws.com') && !expectedHosts.has(parsed.hostname)) {
       expectedHosts.add(parsed.hostname);
     }
@@ -124,6 +129,29 @@ const signS3Reference = async (reference, responseContentType) => {
       effectiveContentType = 'image/jpeg';
     } else if (lowerKey.endsWith('.webp')) {
       effectiveContentType = 'image/webp';
+    }
+  }
+
+  // If CloudFront playback is enabled, attempt CloudFront signed URL first
+  if (isCloudFrontConfigured()) {
+    try {
+      const cloudFrontUrl = signCloudFrontPlaybackUrl(key, { expiresIn: S3_MEDIA_URL_TTL_SECONDS });
+      return {
+        ...normalized,
+        fileName: normalized.fileName || normalized.originalFileName || '',
+        url: cloudFrontUrl,
+        secure_url: cloudFrontUrl,
+        secureUrl: cloudFrontUrl,
+        fileUrl: cloudFrontUrl,
+        documentUrl: cloudFrontUrl,
+        path: cloudFrontUrl,
+        videoUrl: cloudFrontUrl,
+        mediaUrl: cloudFrontUrl,
+        accessUrlExpiresIn: S3_MEDIA_URL_TTL_SECONDS,
+        deliveryProvider: 'cloudfront',
+      };
+    } catch (cfErr) {
+      console.warn('[S3 media signer] CloudFront signing failed, falling back to S3 presigned URL:', cfErr.message);
     }
   }
 
