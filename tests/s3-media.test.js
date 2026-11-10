@@ -6,6 +6,7 @@ const controller = require('../controllers/s3UploadController');
 const courseController = require('../controllers/courseController');
 const Course = require('../models/Course');
 const Student = require('../models/Student');
+const { signS3Reference } = require('../utils/s3MediaSigner');
 const defaultCredentialProvider = config.s3Client.config.credentials;
 // Synthetic, in-memory credentials are scoped to this test process only.
 config.s3Client.config.credentials = async () => ({ accessKeyId: 'AKIDEXAMPLE', secretAccessKey: 'local-test-only-secret' });
@@ -51,6 +52,25 @@ test('S3 configuration, controller exports, and route callbacks load', async (t)
   const mediaAccessRoutes = router.stack.filter((item) => item.route && item.route.path === '/media/access-url');
   assert.deepEqual(mediaAccessRoutes.map((item) => Object.keys(item.route.methods)[0]).sort(), ['get', 'post']);
   assert.ok(mediaAccessRoutes.every((item) => item.route.stack[0].handle.name === 'requireAuth'));
+});
+
+test('S3 signer preserves untagged legacy URLs and non-video resources without a valid S3 key', async () => {
+  const legacyVideo = { url: 'https://res.cloudinary.com/test/video.mp4', secure_url: 'https://res.cloudinary.com/test/video.mp4' };
+  const legacyPdf = { url: 'https://documents.example/notes.pdf', documentUrl: 'https://documents.example/notes.pdf' };
+  assert.deepEqual(await signS3Reference(legacyVideo), legacyVideo);
+  assert.deepEqual(await signS3Reference(legacyPdf, 'application/pdf'), legacyPdf);
+
+  const keyOnlyS3 = await signS3Reference({ key: 'videos/legacy-key-only.mp4' });
+  assert.equal(keyOnlyS3.storageProvider, 's3');
+  assert.equal(keyOnlyS3.s3Key, 'videos/legacy-key-only.mp4');
+  assert.match(keyOnlyS3.url, /X-Amz-Signature=/);
+  const legacyRecording = await signS3Reference({ storageProvider: 's3', s3Key: 'live_records/lesson-recording.mp4' });
+  assert.match(legacyRecording.url, /X-Amz-Signature=/);
+
+  const invalidExplicitS3 = { storageProvider: 's3', s3Key: '../private/video.mp4', url: 'https://untrusted.example/video.mp4' };
+  const sanitized = await signS3Reference(invalidExplicitS3);
+  assert.equal(sanitized.url, '');
+  assert.equal(sanitized.storageProvider, 's3');
 });
 
 test('multipart initiate, part URL, complete, and abort use the expected S3 commands', async (t) => {

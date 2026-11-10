@@ -298,10 +298,12 @@ const getMediaAccessUrl = async (req, res) => {
         try {
           const { getValidatedHlsMasterUrl, attachHlsCookiesToResponse } = require('../utils/cloudFrontSecurity');
           const playlistUrl = getValidatedHlsMasterUrl(hlsInfo.hlsMasterUrl, hlsInfo.videoId);
-          if (!attachHlsCookiesToResponse(res, hlsInfo.videoId)) return fail(res, 503, 'Secure HLS playback is temporarily unavailable.');
-          return res.json({ success: true, url: playlistUrl, hlsMasterUrl: playlistUrl, hlsPlaybackUrl: playlistUrl, s3Key: access.key, key: access.key, playbackType: 'hls', hlsConversionStatus: 'COMPLETED' });
+          if (attachHlsCookiesToResponse(res, hlsInfo.videoId)) {
+            return res.json({ success: true, url: playlistUrl, hlsMasterUrl: playlistUrl, hlsPlaybackUrl: playlistUrl, s3Key: access.key, key: access.key, playbackType: 'hls', hlsConversionStatus: 'COMPLETED' });
+          }
         } catch (_) {
-          return fail(res, 503, 'Secure HLS playback is temporarily unavailable.');
+          // Keep the already-authorized S3 MP4 fallback available if HLS URL
+          // validation or CloudFront cookie signing is unavailable.
         }
       }
       await s3Client.send(new HeadObjectCommand({ Bucket: bucket, Key: access.key }));

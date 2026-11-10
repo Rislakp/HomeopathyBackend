@@ -3,7 +3,7 @@ const { getSignedUrl } = require('@aws-sdk/s3-request-presigner');
 const { s3Client, bucket } = require('../config/s3');
 
 const S3_MEDIA_URL_TTL_SECONDS = 900;
-const SAFE_S3_KEY = /^(videos|images|pdfs)\/[a-zA-Z0-9][a-zA-Z0-9._/-]*$/;
+const SAFE_S3_KEY = /^(videos|live_records|images|pdfs)\/[a-zA-Z0-9][a-zA-Z0-9._/-]*$/;
 
 const stripS3ReferenceUrls = (reference) => ({
   ...reference,
@@ -17,16 +17,25 @@ const stripS3ReferenceUrls = (reference) => ({
 });
 
 const signS3Reference = async (reference, responseContentType) => {
-  if (!reference || reference.storageProvider !== 's3') return reference;
+  if (!reference) return reference;
 
-  const key = typeof reference.s3Key === 'string' ? reference.s3Key : '';
+  const declaredProvider = String(reference.storageProvider || '').trim().toLowerCase();
+  // Older course records may have only an S3 key. An explicit non-S3 provider
+  // remains authoritative so Cloudinary and other legacy URLs are untouched.
+  if (declaredProvider && declaredProvider !== 's3') return reference;
+
+  const key = typeof reference.s3Key === 'string'
+    ? reference.s3Key
+    : (typeof reference.key === 'string' ? reference.key : '');
   const validKey = SAFE_S3_KEY.test(key)
     && !key.includes('..')
     && !key.includes('//')
     && !/[\\\r\n]/.test(key);
 
-  // An invalid S3 reference must never fall back to a stored/public URL or a legacy banner alias.
+  // Untagged legacy resources are not assumed to be S3. Preserve their URLs
+  // unless they carry a valid S3 key; explicit S3 resources remain fail-closed.
   if (!validKey) {
+    if (!declaredProvider) return reference;
     return stripS3ReferenceUrls(reference);
   }
 
@@ -38,6 +47,8 @@ const signS3Reference = async (reference, responseContentType) => {
 
   return {
     ...reference,
+    storageProvider: 's3',
+    s3Key: key,
     fileName: reference.fileName || reference.originalFileName || '',
     url,
     secure_url: url,

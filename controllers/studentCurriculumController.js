@@ -8,6 +8,37 @@ const { logActivity } = require('../utils/activityLogger');
 const { signS3Reference } = require('../utils/s3MediaSigner');
 const { attachVerifiedHlsStream, collectCurriculumHlsVideoIds, attachCurriculumHlsCookies } = require('../utils/studentCurriculumHls');
 
+const isDirectS3Url = (value) => {
+  try {
+    const host = new URL(String(value || '')).hostname.toLowerCase();
+    return /(?:^|\.)s3(?:[.-][a-z0-9-]+)*\.amazonaws\.com(?:\.cn)?$/.test(host);
+  } catch (_) {
+    return false;
+  }
+};
+
+const attachHlsStreamSafely = async (resource) => {
+  try {
+    return await attachVerifiedHlsStream(resource);
+  } catch (_) {
+    // HLS metadata is optional; an invalid record must not abort course serialization.
+    // Never include a URL or raw exception in logs because persisted URLs can contain tokens.
+    console.warn('[HLS] Could not resolve persisted conversion; using MP4 fallback', {
+      videoId: /^[A-Za-z0-9_-]+$/.test(String(resource?.videoId || '')) ? String(resource.videoId) : 'unknown',
+      mediaConvertJobId: /^[A-Za-z0-9_-]+$/.test(String(resource?.mediaConvertJobId || '')) ? String(resource.mediaConvertJobId) : 'unknown',
+      reason: 'hls_attachment_failed',
+    });
+    return {
+      ...resource,
+      hlsMasterUrl: '',
+      hlsPlaybackUrl: '',
+      hlsConversionStatus: 'FAILED',
+      hlsConversionError: 'Invalid persisted HLS master URL',
+      playbackType: 'mp4',
+    };
+  }
+};
+
 const addSignedS3MediaUrls = async (course) => {
   if (!course || typeof course !== 'object') return course;
   if (course.thumbnailMedia?.storageProvider === 's3') {
@@ -27,18 +58,40 @@ const addSignedS3MediaUrls = async (course) => {
         if (Array.isArray(lesson[field])) {
           lesson[field] = await Promise.all(lesson[field].map(async (resource) => {
             const signed = await signS3Reference(resource, type);
-            return field === 'videoParts' ? attachVerifiedHlsStream(signed) : signed;
+            return field === 'videoParts' ? attachHlsStreamSafely(signed) : signed;
           }));
         }
       }
-      const firstVideo = (lesson.videoParts || []).find((resource) => resource.storageProvider === 's3' && resource.s3Key);
-      if (firstVideo && !lesson.videoUrl) lesson.videoUrl = firstVideo.url;
-      if (firstVideo?.hlsMasterUrl) {
+      const legacyVideoKey = lesson.videoS3Key || lesson.s3Key;
+      if (legacyVideoKey && !(lesson.videoParts || []).length && (!lesson.videoUrl || isDirectS3Url(lesson.videoUrl))) {
+        const signedLegacyVideo = await signS3Reference({
+          storageProvider: 's3',
+          s3Key: legacyVideoKey,
+          resourceType: 'video',
+          contentType: 'video/mp4',
+        });
+        const legacyVideo = await attachHlsStreamSafely(signedLegacyVideo);
+        lesson.videoParts = [legacyVideo];
+        lesson.videoUrl = legacyVideo.url || '';
         for (const field of ['hlsMasterUrl', 'hlsPlaybackUrl', 'hlsOutputPrefix', 'hlsConversionStatus', 'mediaConvertJobId', 'hlsConversionError', 'playbackType']) {
-          if (firstVideo[field] !== undefined) lesson[field] = firstVideo[field];
+          if (legacyVideo[field] !== undefined) lesson[field] = legacyVideo[field];
         }
       }
-      const lessonHls = await attachVerifiedHlsStream(lesson);
+      const primaryVideo = (lesson.videoParts || [])[0];
+      if (primaryVideo) {
+        const primaryUrl = primaryVideo.url || primaryVideo.secure_url || primaryVideo.secureUrl || '';
+        if (primaryUrl) lesson.videoUrl = primaryUrl;
+      }
+      const primaryS3Key = primaryVideo?.storageProvider === 's3'
+        ? (primaryVideo.s3Key || primaryVideo.videoS3Key || '')
+        : '';
+      const lessonHls = await attachHlsStreamSafely({
+        ...lesson,
+        s3Key: primaryS3Key,
+        videoS3Key: '',
+        hlsMasterUrl: primaryVideo?.storageProvider === 's3' ? primaryVideo.hlsMasterUrl : '',
+        hlsConversionStatus: primaryVideo?.storageProvider === 's3' ? primaryVideo.hlsConversionStatus : 'none',
+      });
       for (const field of ['hlsMasterUrl', 'hlsPlaybackUrl', 'hlsConversionStatus', 'hlsOutputPrefix', 'mediaConvertJobId', 'hlsConversionError', 'playbackType']) {
         if (lessonHls[field] !== undefined) lesson[field] = lessonHls[field];
       }

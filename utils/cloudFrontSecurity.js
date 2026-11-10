@@ -65,20 +65,46 @@ function getCloudFrontDomain() {
   return normalized;
 }
 
+function getTrustedCloudFrontDomains() {
+  const configuredDomains = String(process.env.CLOUDFRONT_TRUSTED_HLS_DOMAINS || '')
+    .split(',')
+    .map((domain) => domain.trim())
+    .filter(Boolean);
+  const domains = new Set([getCloudFrontDomain().toLowerCase()]);
+  for (const configuredDomain of configuredDomains) {
+    const domain = configuredDomain.toLowerCase().replace(/^https?:\/\//i, '').replace(/\/+$/, '');
+    if (!/^(?:[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\.)+[a-z]{2,}$/i.test(domain)) {
+      throw new Error('Invalid trusted CloudFront HLS hostname configuration');
+    }
+    domains.add(domain);
+  }
+  return [...domains];
+}
+
+function isTrustedCloudFrontDomain(hostname) {
+  return getTrustedCloudFrontDomains().includes(String(hostname || '').trim().toLowerCase());
+}
+
 function getValidatedHlsMasterUrl(masterUrl, videoId) {
-  const domain = getCloudFrontDomain();
   const id = String(videoId || '').trim();
   if (!/^[A-Za-z0-9_-]+$/.test(id)) throw new Error('Invalid HLS video identifier');
   let parsed;
   try { parsed = new URL(String(masterUrl || '')); } catch (_) { throw new Error('Invalid HLS master playlist URL'); }
   const prefix = `/hls/${id}/`;
-  if (parsed.protocol !== 'https:' || parsed.hostname.toLowerCase() !== domain.toLowerCase() ||
-      parsed.port || parsed.username || parsed.password || parsed.search || parsed.hash ||
-      !parsed.pathname.startsWith(prefix) || !/\.m3u8$/i.test(parsed.pathname) ||
-      parsed.pathname.split('/').some((segment) => segment === '.' || segment === '..')) {
+  let trustedHost = false;
+  try { trustedHost = isTrustedCloudFrontDomain(parsed.hostname); } catch (_) {}
+  const pathSegments = parsed.pathname.split('/').filter(Boolean);
+  const hasUnsafePathSegment = pathSegments.some((segment) => {
+    try {
+      const decoded = decodeURIComponent(segment);
+      return decoded === '.' || decoded === '..' || decoded.includes('\\');
+    } catch (_) { return true; }
+  });
+  if (parsed.protocol !== 'https:' || !trustedHost || parsed.port || parsed.username || parsed.password || parsed.hash ||
+      !parsed.pathname.startsWith(prefix) || !/\.m3u8$/i.test(parsed.pathname) || hasUnsafePathSegment) {
     throw new Error('Invalid HLS master playlist URL');
   }
-  return `https://${domain}${parsed.pathname}`;
+  return parsed.toString();
 }
 
 /**
@@ -125,21 +151,16 @@ function generateHlsSignedCookies(videoIds, ttlSeconds = DEFAULT_TTL_SECONDS) {
   const ids = normalizeVideoIds(videoIds);
   if (!isCloudFrontSigningConfigured()) throw new Error('CloudFront signing is not configured');
 
-  const domain = getCloudFrontDomain();
   ttlSeconds = getValidatedTtl(ttlSeconds);
   const privateKey = getFormattedPrivateKey();
   const keyPairId = getKeyPairId();
   const epochTime = Math.floor(Date.now() / 1000) + Number(ttlSeconds || DEFAULT_TTL_SECONDS);
 
   const policy = JSON.stringify({
-    Statement: ids.map((videoId) => ({
-        Resource: `https://${domain}/hls/${videoId}/*`,
-        Condition: {
-          DateLessThan: {
-            'AWS:EpochTime': epochTime,
-          },
-        },
-      })),
+    Statement: ids.flatMap((videoId) => getTrustedCloudFrontDomains().map((trustedDomain) => ({
+      Resource: `https://${trustedDomain}/hls/${videoId}/*`,
+      Condition: { DateLessThan: { 'AWS:EpochTime': epochTime } },
+    }))),
   });
 
   try {
@@ -208,6 +229,8 @@ module.exports = {
   getKeyPairId,
   getCookieDomain,
   getCloudFrontDomain,
+  getTrustedCloudFrontDomains,
+  isTrustedCloudFrontDomain,
   getValidatedHlsMasterUrl,
   getValidatedTtl,
 };
