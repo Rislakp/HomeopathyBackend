@@ -1301,9 +1301,11 @@ test('19. Student s3Key-only access resolves course enrollment and serves HLS pl
       }) });
       const cookieFailureFallback = mockReqRes({ query: { s3Key: 'videos/student-s3only.mp4' }, user: { role: 'student', id: studentObjectId, studentId: studentObjectId.toString() } });
       await s3Controller.getMediaAccessUrl(cookieFailureFallback.req, cookieFailureFallback.res);
-      assert.equal(cookieFailureFallback.res.statusCode, 200);
-      assert.equal(cookieFailureFallback.res.responseBody.playbackType, 'mp4');
-      assert.match(cookieFailureFallback.res.responseBody.url, /X-Amz-Signature=/);
+      // Under unified HLS playback architecture, student video playback strictly forbids direct S3 MP4 fallback.
+      // Unready or uncredentialed HLS returns HTTP 409/422 processing/unavailable status.
+      assert.equal(cookieFailureFallback.res.statusCode, 409);
+      assert.equal(cookieFailureFallback.res.responseBody.playbackType, 'hls');
+      assert.equal(cookieFailureFallback.res.responseBody.status, 'PROCESSING');
       assert.deepEqual(cookieFailureFallback.res.cookies, {});
     } finally {
       process.env.CLOUDFRONT_PRIVATE_KEY = configuredPrivateKey;
@@ -1513,6 +1515,138 @@ test('22. refreshHlsCookies endpoint validates credentials, S3 readiness, and re
     clearReadinessCache();
     restoreSigner();
     Course.findOne = origFindOneCourse;
+    VideoConversion.findOne = origFindOneVC;
+    s3.s3Client.send = origSend;
+  }
+});
+
+test('23. Unified Architecture Enforcement: Student requesting unready video receives 409 status and NO S3 URL, completed video receives HLS CloudFront URL, and unauthorized student receives 403', async () => {
+  const { clearReadinessCache } = require('../utils/hlsReadinessValidator');
+  const restoreSigner = configureTestCloudFrontSigner();
+  const origFindOneCourse = Course.findOne;
+  const origFindCourse = Course.find;
+  const origFindByIdStudent = Student.findById;
+  const origFindOneVC = VideoConversion.findOne;
+  const origSend = s3.s3Client.send;
+
+  const studentId = new mongoose.Types.ObjectId();
+  const courseId = new mongoose.Types.ObjectId();
+  const student = {
+    _id: studentId,
+    name: 'Unified Test Student',
+    status: 'Active',
+    subscriptionStatus: 'active',
+    isActive: true,
+    courseIds: [courseId.toString()],
+  };
+  const enrolledCourse = {
+    _id: courseId,
+    courseId: 'CRS-UNIFIED-TEST',
+    status: 'published',
+    modules: [{
+      lessons: [
+        {
+          _id: 'lesson-ready',
+          lessonTitle: 'Ready Video',
+          s3Key: 'videos/ready-video.mp4',
+          hlsConversionStatus: 'COMPLETED',
+          videoParts: [{ s3Key: 'videos/ready-video.mp4', storageProvider: 's3' }],
+        },
+        {
+          _id: 'lesson-pending',
+          lessonTitle: 'Pending Video',
+          s3Key: 'videos/pending-video.mp4',
+          hlsConversionStatus: 'PENDING',
+          videoParts: [{ s3Key: 'videos/pending-video.mp4', storageProvider: 's3' }],
+        },
+      ],
+    }],
+  };
+
+  s3.s3Client.send = async (cmd) => {
+    if (cmd.constructor?.name === 'HeadObjectCommand') {
+      return { ContentLength: 5000000, ContentType: 'video/mp4' };
+    }
+    return {};
+  };
+
+  Student.findById = () => ({ lean: async () => student });
+  Course.find = () => [enrolledCourse];
+  Course.findOne = () => ({ lean: async () => enrolledCourse });
+
+  try {
+    // A) Completed video -> returns HLS master URL on media.whitecoat.academy, playbackType: 'hls', and cookies
+    VideoConversion.findOne = () => ({
+      lean: async () => ({
+        originalS3Key: 'videos/ready-video.mp4',
+        videoId: 'ready-video',
+        hlsConversionStatus: 'COMPLETED',
+        hlsMasterUrl: 'https://media.whitecoat.academy/hls/ready-video/ready-video.m3u8',
+        hlsOutputPrefix: 'hls/ready-video/',
+      }),
+    });
+
+    const { req: reqReady, res: resReady } = mockReqRes({
+      query: { s3Key: 'videos/ready-video.mp4', courseId: 'CRS-UNIFIED-TEST' },
+      user: { role: 'student', studentId: studentId.toString() },
+    });
+    await s3Controller.getMediaAccessUrl(reqReady, resReady);
+
+    assert.equal(resReady.statusCode, 200);
+    assert.equal(resReady.responseBody.playbackType, 'hls');
+    assert.equal(resReady.responseBody.hlsConversionStatus, 'COMPLETED');
+    assert.equal(resReady.responseBody.url, 'https://media.whitecoat.academy/hls/ready-video/ready-video.m3u8');
+    assert.ok(resReady.cookies['CloudFront-Policy']);
+    assert.ok(resReady.cookies['CloudFront-Signature']);
+    assert.ok(resReady.cookies['CloudFront-Key-Pair-Id']);
+
+    // B) Pending/processing video -> returns 409 status, message, playbackType: 'hls', and NO S3 URL
+    VideoConversion.findOne = () => ({
+      lean: async () => ({
+        originalS3Key: 'videos/pending-video.mp4',
+        videoId: 'pending-video',
+        hlsConversionStatus: 'PROCESSING',
+      }),
+    });
+
+    const { req: reqPending, res: resPending } = mockReqRes({
+      query: { s3Key: 'videos/pending-video.mp4', courseId: 'CRS-UNIFIED-TEST' },
+      user: { role: 'student', studentId: studentId.toString() },
+    });
+    await s3Controller.getMediaAccessUrl(reqPending, resPending);
+
+    assert.equal(resPending.statusCode, 409);
+    assert.equal(resPending.responseBody.success, false);
+    assert.equal(resPending.responseBody.status, 'PROCESSING');
+    assert.equal(resPending.responseBody.playbackType, 'hls');
+    assert.equal(resPending.responseBody.url, undefined, 'Never returns S3 URL to student for unready video');
+    assert.match(resPending.responseBody.message, /optimized for adaptive streaming/);
+
+    // C) Unauthorized student -> returns 403 Forbidden without any signed URL or cookie
+    const otherCourseId = new mongoose.Types.ObjectId();
+    const otherCourse = {
+      _id: otherCourseId,
+      courseId: 'CRS-UNAUTHORIZED-COURSE',
+      status: 'published',
+      modules: [{ lessons: [{ s3Key: 'videos/ready-video.mp4' }] }],
+    };
+    Course.findOne = () => ({ lean: async () => otherCourse });
+    Course.find = () => []; // Student is not enrolled in otherCourse
+    const { req: reqUnauth, res: resUnauth } = mockReqRes({
+      query: { s3Key: 'videos/ready-video.mp4', courseId: 'CRS-UNAUTHORIZED-COURSE' },
+      user: { role: 'student', studentId: studentId.toString() },
+    });
+    await s3Controller.getMediaAccessUrl(reqUnauth, resUnauth);
+
+    assert.equal(resUnauth.statusCode, 403);
+    assert.equal(resUnauth.responseBody.url, undefined);
+    assert.deepEqual(resUnauth.cookies, {});
+  } finally {
+    clearReadinessCache();
+    restoreSigner();
+    Course.findOne = origFindOneCourse;
+    Course.find = origFindCourse;
+    Student.findById = origFindByIdStudent;
     VideoConversion.findOne = origFindOneVC;
     s3.s3Client.send = origSend;
   }

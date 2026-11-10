@@ -604,16 +604,20 @@ const getMediaAccessUrl = async (req, res) => {
           // Persisted HLS metadata and readiness are optional; keep this student's authorized MP4 fallback.
         }
       }
-      await s3Client.send(new HeadObjectCommand({ Bucket: bucket, Key: key }));
-      const signed = await getSignedUrl(s3Client, new GetObjectCommand({ Bucket: bucket, Key: key, ResponseContentType: 'video/mp4', ResponseContentDisposition: 'inline' }), { expiresIn: MEDIA_URL_TTL_SECONDS });
-      return res.json({
-        success: true,
-        url: encodeSignedUrl(signed),
+      // If HLS conversion is not ready, do NOT fall back to direct S3 MP4 for student playback.
+      // Return a clear processing or unavailable status so the frontend shows a user-friendly message.
+      const currentStatus = String(hlsInfo?.hlsConversionStatus || lesson?.hlsConversionStatus || 'PENDING').toUpperCase();
+      const isProcessing = ['PENDING', 'PROCESSING', 'SUBMITTED', 'IN_PROGRESS'].includes(currentStatus);
+      return res.status(isProcessing ? 409 : 422).json({
+        success: false,
+        status: isProcessing ? 'PROCESSING' : 'UNAVAILABLE',
+        playbackType: 'hls',
+        hlsConversionStatus: currentStatus,
+        message: isProcessing
+          ? 'Video is currently being optimized for adaptive streaming. Please check back shortly.'
+          : 'Video stream is currently unavailable. Please contact support or check back later.',
         s3Key: key,
         key,
-        expiresIn: MEDIA_URL_TTL_SECONDS,
-        playbackType: 'mp4',
-        hlsConversionStatus: hlsInfo?.hlsConversionStatus || lesson.hlsConversionStatus || 'PENDING',
       });
     } catch (_) { return fail(res, 503, 'Media playback is temporarily unavailable.'); }
   }
