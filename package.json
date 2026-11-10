@@ -10,7 +10,10 @@
     "seed:faculty": "node scripts/seedFaculty.js",
     "admin:reset-password": "node scripts/reset_admin_password.js",
     "test:cloudinary": "node test-cloudinary.js",
-    "diagnose:pdf": "node scripts/diagnose_pdf_assets.js"
+    "diagnose:pdf": "node scripts/diagnose_pdf_assets.js",
+    "video:remux": "node scripts/remux_faststart_video.js",
+    "test:cloudfront": "node tests/cloudfront-playback.test.js",
+    "test": "node --test tests/cloudfront-playback.test.js tests/ios-safari-video-seeking.test.js tests/m4v-video-conversion.test.js tests/s3MediaSigner.plusEncoding.test.js"
   },
   "keywords": [
     "express",
@@ -23,8 +26,12 @@
   "dependencies": {
     "@aws-sdk/client-mediaconvert": "^3.1162.0",
     "@aws-sdk/client-s3": "^3.1144.0",
+<<<<<<< HEAD
+    "@aws-sdk/cloudfront-signer": "^3.1165.0",
+=======
     "@aws-sdk/client-secrets-manager": "^3.1163.0",
     "@aws-sdk/cloudfront-signer": "^3.1161.0",
+>>>>>>> f56b0cb44bf5e47764d240af60262e5a9218af38
     "@aws-sdk/s3-request-presigner": "^3.850.0",
     "@google/genai": "^2.21.0",
     "bcryptjs": "^3.0.3",

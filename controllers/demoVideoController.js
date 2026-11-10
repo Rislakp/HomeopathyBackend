@@ -7,6 +7,7 @@ const { GetObjectCommand } = require('@aws-sdk/client-s3');
 const { getSignedUrl } = require('@aws-sdk/s3-request-presigner');
 const { deleteCloudinaryByUrl } = require('../config/cloudinary');
 const { encodeSignedUrl, S3_MEDIA_URL_TTL_SECONDS } = require('../utils/s3MediaSigner');
+const { isCloudFrontConfigured, signCloudFrontPlaybackUrl } = require('../utils/cloudFrontMediaSigner');
 
 // Helper to sign S3 demo video for direct playback
 const signDemoVideo = async (doc) => {
@@ -15,6 +16,31 @@ const signDemoVideo = async (doc) => {
   const key = obj.s3Key || s3Service.getS3KeyFromUrl(obj.videoUrl);
   if (key && (obj.storageProvider === 's3' || obj.videoUrl?.includes('amazonaws.com') || key.startsWith('videos/'))) {
     try {
+<<<<<<< HEAD
+      let signed = null;
+      let deliveryProvider = 's3';
+
+      if (isCloudFrontConfigured()) {
+        try {
+          signed = signCloudFrontPlaybackUrl(key, { expiresIn: S3_MEDIA_URL_TTL_SECONDS });
+          deliveryProvider = 'cloudfront';
+        } catch (cfErr) {
+          console.warn('[DemoVideo] CloudFront signing failed, falling back to S3 presigned URL:', cfErr.message);
+        }
+      }
+
+      if (!signed) {
+        const contentType = key.toLowerCase().endsWith('.webm') ? 'video/webm' : (key.toLowerCase().endsWith('.mov') ? 'video/quicktime' : 'video/mp4');
+        const rawSigned = await getSignedUrl(s3Client, new GetObjectCommand({
+          Bucket: bucket,
+          Key: key,
+          ResponseContentType: contentType,
+          ResponseContentDisposition: 'inline',
+        }), { expiresIn: S3_MEDIA_URL_TTL_SECONDS });
+        signed = encodeSignedUrl(rawSigned);
+      }
+
+=======
       const keyLower = key.toLowerCase();
       const contentType = keyLower.endsWith('.mp4') || keyLower.endsWith('.m4v')
         ? 'video/mp4'
@@ -26,10 +52,12 @@ const signDemoVideo = async (doc) => {
         ResponseContentDisposition: 'inline',
       }), { expiresIn: S3_MEDIA_URL_TTL_SECONDS });
       const signed = encodeSignedUrl(rawSigned);
+>>>>>>> f56b0cb44bf5e47764d240af60262e5a9218af38
       obj.videoUrl = signed;
       obj.signedVideoUrl = signed;
       obj.storageProvider = 's3';
       obj.s3Key = key;
+      obj.deliveryProvider = deliveryProvider;
     } catch (e) {
       console.error('[DemoVideo] Presigning error:', e.message);
     }

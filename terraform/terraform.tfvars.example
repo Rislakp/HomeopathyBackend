@@ -1,0 +1,21 @@
+aws_region          = "us-east-1"
+s3_bucket_name      = "whitecoat-media-prod"
+domain_name         = "media.whitecoat.academy"
+public_key_pem_path = "./cloudfront_public.pem"
+key_pair_name       = "whitecoat-playback-key"
+key_group_name      = "whitecoat-playback-keygroup"
+
+# Leave empty to start with cloudfront_default_certificate,
+# or supply the ACM ARN in us-east-1 once requested/validated:
+# acm_certificate_arn = "arn:aws:acm:us-east-1:123456789012:certificate/abcdef01-2345-6789-abcd-ef0123456789"
+
+cors_allowed_origins = [
+  "https://student.whitecoat.academy",
+  "https://student-portal.whitecoat.academy",
+  "https://whitecoat.academy",
+  "https://admin.whitecoat.academy",
+  "http://localhost:3000",
+  "http://localhost:5000",
+  "http://localhost:5173",
+]
+
