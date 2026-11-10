@@ -16,7 +16,6 @@ const signDemoVideo = async (doc) => {
   const key = obj.s3Key || s3Service.getS3KeyFromUrl(obj.videoUrl);
   if (key && (obj.storageProvider === 's3' || obj.videoUrl?.includes('amazonaws.com') || key.startsWith('videos/'))) {
     try {
-<<<<<<< HEAD
       let signed = null;
       let deliveryProvider = 's3';
 
@@ -30,7 +29,10 @@ const signDemoVideo = async (doc) => {
       }
 
       if (!signed) {
-        const contentType = key.toLowerCase().endsWith('.webm') ? 'video/webm' : (key.toLowerCase().endsWith('.mov') ? 'video/quicktime' : 'video/mp4');
+        const keyLower = key.toLowerCase();
+        const contentType = keyLower.endsWith('.mp4') || keyLower.endsWith('.m4v')
+          ? 'video/mp4'
+          : (keyLower.endsWith('.mov') ? 'video/quicktime' : (keyLower.endsWith('.webm') ? 'video/webm' : 'video/mp4'));
         const rawSigned = await getSignedUrl(s3Client, new GetObjectCommand({
           Bucket: bucket,
           Key: key,
@@ -39,20 +41,6 @@ const signDemoVideo = async (doc) => {
         }), { expiresIn: S3_MEDIA_URL_TTL_SECONDS });
         signed = encodeSignedUrl(rawSigned);
       }
-
-=======
-      const keyLower = key.toLowerCase();
-      const contentType = keyLower.endsWith('.mp4') || keyLower.endsWith('.m4v')
-        ? 'video/mp4'
-        : (keyLower.endsWith('.mov') ? 'video/quicktime' : (keyLower.endsWith('.webm') ? 'video/webm' : 'video/mp4'));
-      const rawSigned = await getSignedUrl(s3Client, new GetObjectCommand({
-        Bucket: bucket,
-        Key: key,
-        ResponseContentType: contentType,
-        ResponseContentDisposition: 'inline',
-      }), { expiresIn: S3_MEDIA_URL_TTL_SECONDS });
-      const signed = encodeSignedUrl(rawSigned);
->>>>>>> f56b0cb44bf5e47764d240af60262e5a9218af38
       obj.videoUrl = signed;
       obj.signedVideoUrl = signed;
       obj.storageProvider = 's3';

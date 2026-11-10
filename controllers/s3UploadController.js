@@ -502,16 +502,12 @@ const courseContainsMediaKey = (course, key) => {
   for (const moduleItem of modules) {
     const lessons = getProp(moduleItem, 'lessons') || moduleItem.lessons || [];
     for (const lesson of lessons) {
-<<<<<<< HEAD
-      if (getProp(lesson, 'videoS3Key') === targetKey || getProp(lesson, 's3Key') === targetKey || getProp(lesson, 'mp4S3Key') === targetKey || getProp(lesson, 'm4vS3Key') === targetKey) return true;
-=======
       if (
         getProp(lesson, 'videoS3Key') === targetKey ||
         getProp(lesson, 's3Key') === targetKey ||
         getProp(lesson, 'm4vS3Key') === targetKey ||
         getProp(lesson, 'mp4S3Key') === targetKey
       ) return true;
->>>>>>> f56b0cb44bf5e47764d240af60262e5a9218af38
       if (getS3KeyFromUrl(getProp(lesson, 'videoUrl')) === targetKey) return true;
       if (normalizeS3Reference(getProp(lesson, 'videoUrl'))?.s3Key === targetKey) return true;
       if (getS3KeyFromUrl(getProp(lesson, 'fileUrl')) === targetKey) return true;
@@ -525,14 +521,10 @@ const courseContainsMediaKey = (course, key) => {
       for (const collection of ['videoParts', 'pdfNotes', 'assignments', 'attachments']) {
         const list = getProp(lesson, collection) || lesson[collection] || [];
         for (const item of list) {
-<<<<<<< HEAD
-          const itemKey = getProp(item, 's3Key') || getProp(item, 'm4vS3Key') || getProp(item, 'mp4S3Key') || getProp(item, 'key') ||
-=======
           const itemKey = getProp(item, 's3Key') ||
             getProp(item, 'm4vS3Key') ||
             getProp(item, 'mp4S3Key') ||
             getProp(item, 'key') ||
->>>>>>> f56b0cb44bf5e47764d240af60262e5a9218af38
             getS3KeyFromUrl(getProp(item, 'url')) ||
             getS3KeyFromUrl(getProp(item, 'secure_url')) ||
             getS3KeyFromUrl(getProp(item, 'secureUrl')) ||
@@ -758,18 +750,10 @@ const getMediaAccessUrl = async (req, res) => {
         { 'modules.lessons.url': { $regex: escapeRegex(key) } },
         { 'modules.lessons.path': { $regex: escapeRegex(key) } },
         { 'modules.lessons.mp4S3Key': key },
-        { 'modules.lessons.videoParts.s3Key': key },
-<<<<<<< HEAD
-        { 'modules.lessons.mp4S3Key': key },
-=======
->>>>>>> f56b0cb44bf5e47764d240af60262e5a9218af38
         { 'modules.lessons.m4vS3Key': key },
+        { 'modules.lessons.videoParts.s3Key': key },
         { 'modules.lessons.videoParts.mp4S3Key': key },
         { 'modules.lessons.videoParts.m4vS3Key': key },
-<<<<<<< HEAD
-=======
-        { 'modules.lessons.videoParts.mp4S3Key': key },
->>>>>>> f56b0cb44bf5e47764d240af60262e5a9218af38
         { 'modules.lessons.videoParts.url': { $regex: escapeRegex(key) } },
         { 'modules.lessons.videoParts.secure_url': { $regex: escapeRegex(key) } },
         { 'modules.lessons.videoParts.secureUrl': { $regex: escapeRegex(key) } },
@@ -973,7 +957,6 @@ const getMediaAccessUrl = async (req, res) => {
     // 4. Confirm the referenced private object still exists before issuing a URL.
     await s3Client.send(new HeadObjectCommand({ Bucket: bucket, Key: key }));
 
-<<<<<<< HEAD
     // 5. Generate signed URL (CloudFront if enabled, with fallback to S3 SigV4)
     let url = null;
     let deliveryProvider = 's3';
@@ -990,7 +973,10 @@ const getMediaAccessUrl = async (req, res) => {
     if (!url) {
       let contentType = undefined;
       if (prefix === 'videos/' || prefix === 'live_records/') {
-        contentType = key.endsWith('.webm') ? 'video/webm' : (key.endsWith('.mov') ? 'video/quicktime' : 'video/mp4');
+        const keyLower = key.toLowerCase();
+        contentType = keyLower.endsWith('.mp4') || keyLower.endsWith('.m4v')
+          ? 'video/mp4'
+          : (keyLower.endsWith('.mov') ? 'video/quicktime' : (keyLower.endsWith('.webm') ? 'video/webm' : 'video/mp4'));
       } else if (prefix === 'pdfs/') {
         contentType = 'application/pdf';
       }
@@ -1000,17 +986,6 @@ const getMediaAccessUrl = async (req, res) => {
         ...(contentType ? { ResponseContentType: contentType, ResponseContentDisposition: 'inline' } : {}),
       }), { expiresIn: MEDIA_URL_TTL_SECONDS });
       url = encodeSignedUrl(rawUrl);
-=======
-    // 5. Generate SigV4 signed URL
-    let contentType = undefined;
-    if (prefix === 'videos/' || prefix === 'live_records/') {
-      const keyLower = key.toLowerCase();
-      contentType = keyLower.endsWith('.mp4') || keyLower.endsWith('.m4v')
-        ? 'video/mp4'
-        : (keyLower.endsWith('.mov') ? 'video/quicktime' : (keyLower.endsWith('.webm') ? 'video/webm' : 'video/mp4'));
-    } else if (prefix === 'pdfs/') {
-      contentType = 'application/pdf';
->>>>>>> f56b0cb44bf5e47764d240af60262e5a9218af38
     }
 
     // HLS video integration: check conversion status and issue CloudFront signed cookies / URL
@@ -1071,20 +1046,16 @@ const getMediaAccessUrl = async (req, res) => {
     }
 
     const mediaOwnerId = resolvedCourse?.courseId || resolvedCourse?._id || recordingDoc?.courseId || recordingDoc?._id || demoVideoDoc?.courseId || 'authorized-media';
-<<<<<<< HEAD
     console.info('[S3 media] access URL issued', { courseId: String(mediaOwnerId), prefix, deliveryProvider, userId: req.user?.id });
-    return res.json({ success: true, url, key, s3Key: key, expiresIn: MEDIA_URL_TTL_SECONDS, deliveryProvider });
-=======
-    console.info('[S3 media] access URL issued', { courseId: String(mediaOwnerId), prefix, userId: req.user?.id });
     return res.json({
       success: true,
       url,
       key,
       s3Key: key,
       expiresIn: MEDIA_URL_TTL_SECONDS,
+      deliveryProvider,
       ...hlsResponseFields,
     });
->>>>>>> f56b0cb44bf5e47764d240af60262e5a9218af38
   } catch (error) {
     return handleS3Error(res, error, 'media-access');
   }
