@@ -19,6 +19,18 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Verify Code Integrity (No Conflict Markers & Valid Syntax)
+        shell: bash
+        run: |
+          if git grep -n -E '^(<<<<<<<|=======|>>>>>>>)' -- '*.js' '*.json' ':!node_modules'; then
+            echo "::error::Unresolved merge conflict markers detected in repository!"
+            exit 1
+          fi
+          node --check server.js
+
       - name: Configure AWS Credentials
         uses: aws-actions/configure-aws-credentials@v4
         with:
