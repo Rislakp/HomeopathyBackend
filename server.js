@@ -148,6 +148,11 @@ const corsOptionsDelegate = (req, callback) => {
     'X-Requested-With',
     'x-student-id',
     'x-user-id',
+    'x-auth-retried',
+    'Cache-Control',
+    'Pragma',
+    'If-Modified-Since',
+    'If-None-Match',
     'Access-Control-Request-Method',
     'Access-Control-Request-Headers',
   ];
