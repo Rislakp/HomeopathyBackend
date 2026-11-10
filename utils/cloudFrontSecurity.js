@@ -66,10 +66,50 @@ function getCloudFrontDomain() {
     'media.whitecoat.academy'
   ).trim();
   const normalized = domain.replace(/^https?:\/\//i, '').replace(/\/+$/, '');
-  if (!/^(?:[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\.)+[a-z]{2,}$/i.test(normalized)) {
-    return 'media.whitecoat.academy';
-  }
+  if (!/^(?:[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\.)+[a-z]{2,}$/i.test(normalized)) throw new Error('Invalid CloudFront media domain configuration');
   return normalized;
+}
+
+function getTrustedCloudFrontDomains() {
+  const configuredDomains = String(process.env.CLOUDFRONT_TRUSTED_HLS_DOMAINS || '')
+    .split(',')
+    .map((domain) => domain.trim())
+    .filter(Boolean);
+  const domains = new Set([getCloudFrontDomain().toLowerCase()]);
+  for (const configuredDomain of configuredDomains) {
+    const domain = configuredDomain.toLowerCase().replace(/^https?:\/\//i, '').replace(/\/+$/, '');
+    if (!/^(?:[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\.)+[a-z]{2,}$/i.test(domain)) {
+      throw new Error('Invalid trusted CloudFront HLS hostname configuration');
+    }
+    domains.add(domain);
+  }
+  return [...domains];
+}
+
+function isTrustedCloudFrontDomain(hostname) {
+  return getTrustedCloudFrontDomains().includes(String(hostname || '').trim().toLowerCase());
+}
+
+function getValidatedHlsMasterUrl(masterUrl, videoId) {
+  const id = String(videoId || '').trim();
+  if (!/^[A-Za-z0-9_-]+$/.test(id)) throw new Error('Invalid HLS video identifier');
+  let parsed;
+  try { parsed = new URL(String(masterUrl || '')); } catch (_) { throw new Error('Invalid HLS master playlist URL'); }
+  const prefix = `/hls/${id}/`;
+  let trustedHost = false;
+  try { trustedHost = isTrustedCloudFrontDomain(parsed.hostname); } catch (_) {}
+  const pathSegments = parsed.pathname.split('/').filter(Boolean);
+  const hasUnsafePathSegment = pathSegments.some((segment) => {
+    try {
+      const decoded = decodeURIComponent(segment);
+      return decoded === '.' || decoded === '..' || decoded.includes('\\');
+    } catch (_) { return true; }
+  });
+  if (parsed.protocol !== 'https:' || !trustedHost || parsed.port || parsed.username || parsed.password || parsed.hash ||
+      !parsed.pathname.startsWith(prefix) || !/\.m3u8$/i.test(parsed.pathname) || hasUnsafePathSegment) {
+    throw new Error('Invalid HLS master playlist URL');
+  }
+  return parsed.toString();
 }
 
 /**
@@ -97,23 +137,10 @@ function getFormattedPrivateKey() {
   return rawKey.replace(/\\n/g, '\n');
 }
 
-/**
- * Normalizes/aligns a persisted HLS master playlist URL with the configured CloudFront domain,
- * strictly preserving the persisted playlist filename, directory structure, and query params.
- */
-function getValidatedHlsMasterUrl(masterUrl, videoId) {
-  const domain = getCloudFrontDomain();
-  const id = String(videoId || '').trim();
-  if (!/^[A-Za-z0-9_-]+$/.test(id)) throw new Error('Invalid HLS video identifier');
-  let parsed;
-  try { parsed = new URL(String(masterUrl || '')); } catch (_) { throw new Error('Invalid HLS master playlist URL'); }
-  const prefix = `/hls/${id}/`;
-  if (parsed.protocol !== 'https:' || parsed.hostname.toLowerCase() !== domain.toLowerCase() || parsed.port || parsed.username || parsed.password || parsed.search || parsed.hash || !parsed.pathname.startsWith(prefix) || !/\.m3u8$/i.test(parsed.pathname) || parsed.pathname.split('/').some((part) => part === '.' || part === '..')) {
-    throw new Error('Invalid HLS master playlist URL');
-  }
-  return `https://${domain}${parsed.pathname}`;
-}
 function resolvePersistedHlsUrl(persistedUrl, videoId) {
+  // Existing conversion records can use a stable HLS folder ID that differs
+  // from the ID derived from the source filename. Validate the persisted path
+  // ID against the trusted host/prefix rules without rebuilding its filename.
   const urlVideoId = (String(persistedUrl || '').match(/\/hls\/([A-Za-z0-9_-]+)\//i) || [])[1];
   const effectiveId = urlVideoId || videoId;
   return getValidatedHlsMasterUrl(persistedUrl, effectiveId);
@@ -128,15 +155,17 @@ function generateHlsSignedCookies(videoId, ttlSeconds = DEFAULT_TTL_SECONDS, cus
   const videoIds = [...new Set((Array.isArray(videoId) ? videoId : [videoId]).map((id) => String(id || '').trim()))];
   if (!videoIds.length || videoIds.some((id) => !/^[A-Za-z0-9_-]+$/.test(id))) throw new Error('Invalid HLS video identifier');
   if (!isCloudFrontSigningConfigured()) throw new Error('CloudFront signing is not configured');
-  const domain = getCloudFrontDomain();
   ttlSeconds = getValidatedTtl(ttlSeconds);
   const privateKey = getFormattedPrivateKey();
   const keyPairId = getKeyPairId();
   const epochTime = Math.floor(Date.now() / 1000) + ttlSeconds;
-  const statements = videoIds.map((id) => {
+  const statements = videoIds.flatMap((id) => {
     const prefix = customPrefix && typeof customPrefix === 'string' && customPrefix.trim() ? customPrefix.trim().replace(/^\/+/, '').replace(/\/*$/, '') : `hls/${id}`;
-    if (!prefix || prefix.split('/').some((part) => part === '.' || part === '..')) throw new Error('Invalid HLS output prefix');
-    return { Resource: `https://${domain}/${prefix}/*`, Condition: { DateLessThan: { 'AWS:EpochTime': epochTime } } };
+    if (prefix !== `hls/${id}` || prefix.includes('..') || prefix.includes('//') || /[\\\r\n]/.test(prefix)) throw new Error('Invalid HLS output prefix');
+    return getTrustedCloudFrontDomains().map((trustedDomain) => ({
+      Resource: `https://${trustedDomain}/${prefix}/*`,
+      Condition: { DateLessThan: { 'AWS:EpochTime': epochTime } },
+    }));
   });
   try { return getSignedCookies({ policy: JSON.stringify({ Statement: statements }), keyPairId, privateKey }); }
   catch (_) { throw new Error('CloudFront signing failed'); }
@@ -214,6 +243,8 @@ module.exports = {
   getKeyPairId,
   getCookieDomain,
   getCloudFrontDomain,
+  getTrustedCloudFrontDomains,
+  isTrustedCloudFrontDomain,
   getValidatedTtl,
   resolvePersistedHlsUrl,
   getValidatedHlsMasterUrl,

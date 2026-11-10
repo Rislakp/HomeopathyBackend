@@ -39,6 +39,32 @@ function isEligibleVideoKey(key) {
   );
 }
 
+async function getVerifiedHlsConversionForS3Key(s3Key) {
+  const cleanKey = String(s3Key || '').trim();
+  if (!isEligibleVideoKey(cleanKey) || cleanKey.includes('..') || cleanKey.includes('//') || /[\\\r\n]/.test(cleanKey)) return null;
+  const connected = mongoose.connection?.readyState === 1;
+  if (!connected && VideoConversion.findOne === mongoose.Model.findOne) return null;
+
+  try {
+    const query = VideoConversion.findOne({ originalS3Key: cleanKey });
+    const record = query && typeof query.lean === 'function' ? await query.lean() : await query;
+    if (!record || String(record.originalS3Key || '').trim() !== cleanKey) return null;
+    const videoId = String(record.videoId || deriveVideoIdFromKey(cleanKey)).trim();
+    if (!/^[A-Za-z0-9_-]+$/.test(videoId)) return null;
+    return {
+      originalS3Key: cleanKey,
+      conversionId: record._id ? String(record._id) : '',
+      videoId,
+      hlsConversionStatus: String(record.hlsConversionStatus || record.status || 'none').toUpperCase(),
+      hlsMasterUrl: String(record.hlsMasterUrl || '').trim(),
+      hlsOutputPrefix: String(record.hlsOutputPrefix || '').trim(),
+      mediaConvertJobId: String(record.mediaConvertJobId || '').trim(),
+    };
+  } catch (_) {
+    return null;
+  }
+}
+
 /**
  * Constructs the CloudFront master playlist URL for a given videoId.
  * AWS MediaConvert generates {videoId}.m3u8 as the master playlist in S3.
@@ -329,7 +355,7 @@ function buildHlsJobSettings({ inputS3Uri, outputS3Destination, videoId, userMet
                 Width: 1116,
                 Height: 480,
                 ScalingBehavior: 'DEFAULT',
-                DropFrameTimecode: 'NON_DROP_FRAME',
+                DropFrameTimecode: 'DISABLED',
                 CodecSettings: {
                   Codec: 'H_264',
                   H264Settings: {
@@ -372,7 +398,7 @@ function buildHlsJobSettings({ inputS3Uri, outputS3Destination, videoId, userMet
                 Width: 838,
                 Height: 360,
                 ScalingBehavior: 'DEFAULT',
-                DropFrameTimecode: 'NON_DROP_FRAME',
+                DropFrameTimecode: 'DISABLED',
                 CodecSettings: {
                   Codec: 'H_264',
                   H264Settings: {
@@ -1054,6 +1080,7 @@ module.exports = {
   inFlightSubmissions,
   deriveVideoIdFromKey,
   isEligibleVideoKey,
+  getVerifiedHlsConversionForS3Key,
   getCloudFrontHlsMasterUrl,
   validateHlsOutputFiles,
   parseMediaPlaylist,

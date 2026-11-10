@@ -2,6 +2,7 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const crypto = require('crypto');
 const mongoose = require('mongoose');
+const { MediaConvertClient } = require('@aws-sdk/client-mediaconvert');
 
 const s3 = require('../config/s3');
 const { mediaConvertConfig } = require('../config/mediaconvert');
@@ -36,6 +37,7 @@ const {
 const {
   attachVerifiedHlsStream,
   addSignedS3MediaUrls,
+  attachCurriculumHlsCookies,
 } = require('../controllers/studentCurriculumController');
 
 const s3Controller = require('../controllers/s3UploadController');
@@ -232,6 +234,7 @@ test('4. MediaConvert Job configuration generates exact 480p and 360p adaptive H
   assert.equal(out480p.NameModifier, '_480p');
   assert.equal(out480p.VideoDescription.Width, 1116);
   assert.equal(out480p.VideoDescription.Height, 480);
+  assert.equal(out480p.VideoDescription.DropFrameTimecode, 'DISABLED');
   assert.equal(out480p.VideoDescription.CodecSettings.Codec, 'H_264');
   assert.equal(out480p.VideoDescription.CodecSettings.H264Settings.RateControlMode, 'QVBR');
   assert.equal(out480p.VideoDescription.CodecSettings.H264Settings.MaxBitrate, 1500000);
@@ -243,6 +246,7 @@ test('4. MediaConvert Job configuration generates exact 480p and 360p adaptive H
   assert.equal(out360p.NameModifier, '_360p');
   assert.equal(out360p.VideoDescription.Width, 838);
   assert.equal(out360p.VideoDescription.Height, 360);
+  assert.equal(out360p.VideoDescription.DropFrameTimecode, 'DISABLED');
   assert.equal(out360p.VideoDescription.CodecSettings.Codec, 'H_264');
   assert.equal(out360p.VideoDescription.CodecSettings.H264Settings.RateControlMode, 'QVBR');
   assert.equal(out360p.VideoDescription.CodecSettings.H264Settings.MaxBitrate, 800000);
@@ -552,6 +556,110 @@ test('8. Student curriculum attachVerifiedHlsStream attaches HLS URL when comple
   }
 });
 
+test('curriculum HLS trusts only the completed conversion record bound to the source S3 key', async () => {
+  const originalFindOneVC = VideoConversion.findOne;
+  try {
+    VideoConversion.findOne = (query) => {
+      assert.deepEqual(query, { originalS3Key: 'videos/source-one.mp4' });
+      return { lean: async () => ({
+        originalS3Key: 'videos/source-one.mp4',
+        videoId: 'source-one',
+        hlsConversionStatus: 'COMPLETED',
+        hlsMasterUrl: 'https://media.whitecoat.academy/hls/source-one/actual-master.m3u8',
+      }) };
+    };
+    const staleResource = await attachVerifiedHlsStream({
+      storageProvider: 's3',
+      s3Key: 'videos/source-one.mp4',
+      hlsConversionStatus: 'COMPLETED',
+      hlsMasterUrl: 'https://media.whitecoat.academy/hls/unrelated/unrelated.m3u8',
+    });
+    assert.equal(staleResource.playbackType, 'hls');
+    assert.equal(staleResource.hlsMasterUrl, 'https://media.whitecoat.academy/hls/source-one/actual-master.m3u8');
+
+    VideoConversion.findOne = () => ({ lean: async () => ({
+      originalS3Key: 'videos/source-one.mp4',
+      videoId: 'source-one',
+      hlsConversionStatus: 'COMPLETED',
+      hlsMasterUrl: 'https://media.whitecoat.academy/hls/other-video/wrong-master.m3u8',
+    }) });
+    const mismatchedId = await attachVerifiedHlsStream({
+      storageProvider: 's3',
+      s3Key: 'videos/source-one.mp4',
+      url: 'https://whitecoat-media-prod.s3.us-east-1.amazonaws.com/videos/source-one.mp4?X-Amz-Signature=local-test',
+    });
+    assert.equal(mismatchedId.playbackType, 'mp4');
+    assert.equal(mismatchedId.hlsMasterUrl, '');
+    assert.match(mismatchedId.url, /X-Amz-Signature=/);
+
+    VideoConversion.findOne = () => ({ lean: async () => ({
+      originalS3Key: 'videos/another-source.mp4',
+      videoId: 'source-one',
+      hlsConversionStatus: 'COMPLETED',
+      hlsMasterUrl: 'https://media.whitecoat.academy/hls/source-one/master.m3u8',
+    }) });
+    const unrelatedRecord = await attachVerifiedHlsStream({
+      storageProvider: 's3',
+      s3Key: 'videos/source-one.mp4',
+      url: 'https://whitecoat-media-prod.s3.us-east-1.amazonaws.com/videos/source-one.mp4?X-Amz-Signature=local-test',
+    });
+    assert.equal(unrelatedRecord.playbackType, 'mp4');
+    assert.equal(unrelatedRecord.hlsMasterUrl, '');
+  } finally {
+    VideoConversion.findOne = originalFindOneVC;
+  }
+});
+
+test('curriculum replaces direct S3 lesson URLs with each verified primary and per-part HLS URL', async (t) => {
+  const restoreSigner = configureTestCloudFrontSigner();
+  const originalFindOneVC = VideoConversion.findOne;
+  t.after(() => {
+    restoreSigner();
+    VideoConversion.findOne = originalFindOneVC;
+  });
+  const conversions = {
+    'videos/primary-part.mp4': {
+      originalS3Key: 'videos/primary-part.mp4', videoId: 'primary-part', hlsConversionStatus: 'COMPLETED',
+      hlsMasterUrl: 'https://media.whitecoat.academy/hls/primary-part/master-list.m3u8',
+    },
+    'videos/second-part.mp4': {
+      originalS3Key: 'videos/second-part.mp4', videoId: 'second-part', hlsConversionStatus: 'COMPLETED',
+      hlsMasterUrl: 'https://media.whitecoat.academy/hls/second-part/second.m3u8',
+    },
+    'videos/legacy-direct.mp4': {
+      originalS3Key: 'videos/legacy-direct.mp4', videoId: 'legacy-direct', hlsConversionStatus: 'COMPLETED',
+      hlsMasterUrl: 'https://media.whitecoat.academy/hls/legacy-direct/legacy-master.m3u8',
+    },
+  };
+  VideoConversion.findOne = ({ originalS3Key }) => ({ lean: async () => conversions[originalS3Key] || null });
+
+  const course = { modules: [{ lessons: [
+    {
+      videoUrl: 'https://whitecoat-media-prod.s3.us-east-1.amazonaws.com/videos/primary-part.mp4?old-signature=stale',
+      videoParts: [
+        { storageProvider: 's3', s3Key: 'videos/primary-part.mp4' },
+        { storageProvider: 's3', s3Key: 'videos/second-part.mp4' },
+      ],
+    },
+    {
+      videoUrl: 'https://whitecoat-media-prod.s3.us-east-1.amazonaws.com/videos/legacy-direct.mp4?old-signature=stale',
+      videoS3Key: 'videos/legacy-direct.mp4',
+      videoParts: [],
+    },
+  ] }] };
+  const formatted = await addSignedS3MediaUrls(course);
+  const response = { cookies: {}, cookie(name, value, options) { this.cookies[name] = { value, options }; return this; } };
+
+  assert.equal(attachCurriculumHlsCookies(response, formatted), true);
+  const [lesson, legacyDirectLesson] = formatted.modules[0].lessons;
+  assert.equal(lesson.videoParts[0].url, conversions['videos/primary-part.mp4'].hlsMasterUrl);
+  assert.equal(lesson.videoParts[1].url, conversions['videos/second-part.mp4'].hlsMasterUrl);
+  assert.equal(lesson.videoUrl, lesson.videoParts[0].url);
+  assert.notEqual(lesson.videoUrl, 'https://whitecoat-media-prod.s3.us-east-1.amazonaws.com/videos/primary-part.mp4?old-signature=stale');
+  assert.equal(legacyDirectLesson.videoParts[0].url, conversions['videos/legacy-direct.mp4'].hlsMasterUrl);
+  assert.equal(legacyDirectLesson.videoUrl, legacyDirectLesson.videoParts[0].url);
+});
+
 test('9. Multipart complete upload returns HLS status PENDING and non-blocking job metadata', async () => {
   const originalSend = s3.s3Client.send;
 
@@ -695,6 +803,12 @@ test('10. Lesson-level curriculum response receives hlsMasterUrl and hlsConversi
       standaloneLesson.hlsMasterUrl,
       'https://media.whitecoat.academy/hls/curriculum-hls/curriculum-hls.m3u8'
     );
+    assert.ok(
+      standaloneLesson.videoUrl && standaloneLesson.videoUrl.includes('X-Amz-Signature='),
+      'legacy key-only lesson retains its protected S3 fallback while curriculum cookies are unavailable'
+    );
+    assert.equal(standaloneLesson.videoParts[0].storageProvider, 's3');
+    assert.equal(standaloneLesson.videoParts[0].s3Key, 'videos/curriculum-hls.mp4');
   } finally {
     VideoConversion.findOne = originalFindOneVC;
     s3.s3Client.send = originalSend;
@@ -702,34 +816,50 @@ test('10. Lesson-level curriculum response receives hlsMasterUrl and hlsConversi
 });
 
 
-test('11. enqueueHlsConversion enforces synchronous duplicate-submission guard for concurrent calls', async () => {
-  const testKey = 'videos/concurrent-dedup-test.mp4';
-  inFlightSubmissions.delete(testKey);
+test('11. enqueueHlsConversion holds a synchronous duplicate lock and releases it after success and failure', async (t) => {
+  const successKey = 'videos/concurrent-dedup-success.mp4';
+  const failureKey = 'videos/concurrent-dedup-failure.mp4';
+  const originalS3Send = s3.s3Client.send;
+  const originalMediaConvertSend = MediaConvertClient.prototype.send;
+  t.after(() => {
+    s3.s3Client.send = originalS3Send;
+    MediaConvertClient.prototype.send = originalMediaConvertSend;
+    inFlightSubmissions.delete(successKey);
+    inFlightSubmissions.delete(failureKey);
+  });
 
-  // Call 1: First call should enqueue and reserve lock immediately
-  const submitJob = async () => ({ success: true, status: 'PENDING' });
-  const call1 = enqueueHlsConversion(testKey, { submitJob });
-  assert.equal(call1.enqueued, true);
-  assert.equal(call1.status, 'PENDING');
-  assert.equal(
-    call1.hlsMasterUrl,
-    'https://media.whitecoat.academy/hls/concurrent-dedup-test/concurrent-dedup-test.m3u8'
-  );
-  assert.equal(inFlightSubmissions.has(testKey), true, 'Synchronous lock held immediately');
+  s3.s3Client.send = async () => ({ ContentLength: 2048, ContentType: 'video/mp4' });
+  MediaConvertClient.prototype.send = async function send(command) {
+    if (command.constructor.name === 'DescribeEndpointsCommand') {
+      return { Endpoints: [{ Url: 'https://mediaconvert.test' }] };
+    }
+    if (command.constructor.name === 'CreateJobCommand') {
+      const sourceKey = command.input.Settings.Inputs[0].FileInput.split('/').slice(3).join('/');
+      if (sourceKey === failureKey) throw new Error('Local simulated MediaConvert rejection');
+      return { Job: { Id: 'job-dedup-success' } };
+    }
+    throw new Error(`Unexpected MediaConvert command: ${command.constructor.name}`);
+  };
 
-  // Call 2: Concurrent duplicate call before setImmediate executes
-  const call2 = enqueueHlsConversion(testKey, { submitJob });
-  assert.equal(call2.enqueued, false);
-  assert.equal(call2.alreadyInFlight, true);
-  assert.equal(call2.status, 'PENDING');
-
-  // Allow setImmediate loop tick to complete and verify cleanup
+  inFlightSubmissions.delete(successKey);
+  const first = enqueueHlsConversion(successKey);
+  assert.equal(first.enqueued, true);
+  assert.equal(inFlightSubmissions.has(successKey), true, 'Lock is set synchronously before scheduling');
+  const duplicate = enqueueHlsConversion(successKey);
+  assert.equal(duplicate.enqueued, false);
+  assert.equal(duplicate.alreadyInFlight, true, 'A synchronous duplicate is rejected');
   await new Promise((resolve) => setImmediate(resolve));
-  const start = Date.now();
-  while (inFlightSubmissions.has(testKey) && (Date.now() - start < 5000)) {
-    await new Promise((resolve) => setTimeout(resolve, 50));
-  }
-  assert.equal(inFlightSubmissions.has(testKey), false, 'In-flight lock cleaned up in finally block');
+  assert.equal(inFlightSubmissions.has(successKey), false, 'Lock is released after successful submission settles');
+
+  inFlightSubmissions.delete(failureKey);
+  const failed = enqueueHlsConversion(failureKey);
+  assert.equal(failed.enqueued, true);
+  assert.equal(inFlightSubmissions.has(failureKey), true, 'Failure case is locked synchronously too');
+  const failedDuplicate = enqueueHlsConversion(failureKey);
+  assert.equal(failedDuplicate.enqueued, false);
+  assert.equal(failedDuplicate.alreadyInFlight, true);
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(inFlightSubmissions.has(failureKey), false, 'Lock is released after failed submission settles');
 });
 
 
@@ -1107,47 +1237,34 @@ test('19. Student s3Key-only access resolves course enrollment and serves HLS pl
 
   const studentObjectId = new mongoose.Types.ObjectId();
   const courseObjectId = new mongoose.Types.ObjectId();
+  const studentProfile = {
+    _id: studentObjectId,
+    name: 'Enrolled Student',
+    status: 'Active',
+    subscriptionStatus: 'active',
+    isActive: true,
+    courseIds: [courseObjectId.toString()],
+  };
+  const authorizedCourse = {
+    _id: courseObjectId,
+    courseId: 'CRS-STUDENT-S3ONLY',
+    status: 'published',
+    modules: [{ lessons: [{
+      _id: 'lesson-s3only-1',
+      lessonTitle: 'S3-Only Video Lesson',
+      s3Key: 'videos/student-s3only.mp4',
+      videoParts: [{ title: 'Part 1', s3Key: 'videos/student-s3only.mp4', storageProvider: 's3' }],
+    }] }],
+  };
+  const authorizedCourses = [authorizedCourse];
 
   s3.s3Client.send = async () => ({ ContentLength: 5000000, ContentType: 'video/mp4' });
 
   Student.findById = () => ({
-    lean: async () => ({
-      _id: studentObjectId,
-      name: 'Enrolled Student',
-      status: 'Active',
-      subscriptionStatus: 'active',
-      isActive: true,
-      courseIds: [courseObjectId.toString()],
-    }),
+    lean: async () => studentProfile,
   });
 
-  Course.find = () => ({
-    lean: async () => [
-      {
-        _id: courseObjectId,
-        courseId: 'CRS-STUDENT-S3ONLY',
-        status: 'published',
-        modules: [
-          {
-            lessons: [
-              {
-                _id: 'lesson-s3only-1',
-                lessonTitle: 'S3-Only Video Lesson',
-                s3Key: 'videos/student-s3only.mp4',
-                videoParts: [
-                  {
-                    title: 'Part 1',
-                    s3Key: 'videos/student-s3only.mp4',
-                    storageProvider: 's3',
-                  },
-                ],
-              },
-            ],
-          },
-        ],
-      },
-    ],
-  });
+  Course.find = () => authorizedCourses;
 
   VideoConversion.findOne = () => ({
     lean: async () => ({
@@ -1172,6 +1289,47 @@ test('19. Student s3Key-only access resolves course enrollment and serves HLS pl
     assert.equal(res.responseBody.hlsConversionStatus, 'COMPLETED');
     assert.ok(res.responseBody.hlsMasterUrl.includes('/hls/student-s3only/student-s3only.m3u8'));
     assert.ok(res.cookies['CloudFront-Policy'], 'Cookies attached for s3Key-only student request');
+
+    const configuredPrivateKey = process.env.CLOUDFRONT_PRIVATE_KEY;
+    const configuredMediaConvertPrivateKey = mediaConvertConfig.cloudFrontPrivateKey;
+    try {
+      process.env.CLOUDFRONT_PRIVATE_KEY = '';
+      mediaConvertConfig.cloudFrontPrivateKey = '';
+      VideoConversion.findOne = () => ({ lean: async () => ({
+        originalS3Key: 'videos/legacy-only.mp4', videoId: 'legacy-only', hlsConversionStatus: 'COMPLETED',
+        hlsMasterUrl: 'https://media.whitecoat.academy/hls/legacy-only/master.m3u8',
+      }) });
+      const cookieFailureFallback = mockReqRes({ query: { s3Key: 'videos/student-s3only.mp4' }, user: { role: 'student', id: studentObjectId, studentId: studentObjectId.toString() } });
+      await s3Controller.getMediaAccessUrl(cookieFailureFallback.req, cookieFailureFallback.res);
+      assert.equal(cookieFailureFallback.res.statusCode, 200);
+      assert.equal(cookieFailureFallback.res.responseBody.playbackType, 'mp4');
+      assert.match(cookieFailureFallback.res.responseBody.url, /X-Amz-Signature=/);
+      assert.deepEqual(cookieFailureFallback.res.cookies, {});
+    } finally {
+      process.env.CLOUDFRONT_PRIVATE_KEY = configuredPrivateKey;
+      mediaConvertConfig.cloudFrontPrivateKey = configuredMediaConvertPrivateKey;
+    }
+
+    Course.find = () => [];
+    let denied = mockReqRes({ query: { s3Key: 'videos/student-s3only.mp4' }, user: { role: 'student', id: studentObjectId, studentId: studentObjectId.toString() } });
+    await s3Controller.getMediaAccessUrl(denied.req, denied.res);
+    assert.equal(denied.res.statusCode, 403);
+
+    const secondCourseId = new mongoose.Types.ObjectId();
+    studentProfile.courseIds.push(secondCourseId.toString());
+    authorizedCourses.push({
+      ...authorizedCourse,
+      _id: secondCourseId,
+      courseId: 'CRS-STUDENT-S3ONLY-2',
+    });
+    Course.find = () => authorizedCourses;
+    denied = mockReqRes({ query: { s3Key: 'videos/student-s3only.mp4' }, user: { role: 'student', id: studentObjectId, studentId: studentObjectId.toString() } });
+    await s3Controller.getMediaAccessUrl(denied.req, denied.res);
+    assert.equal(denied.res.statusCode, 409);
+
+    denied = mockReqRes({ query: {}, user: { role: 'student', id: studentObjectId, studentId: studentObjectId.toString() } });
+    await s3Controller.getMediaAccessUrl(denied.req, denied.res);
+    assert.equal(denied.res.statusCode, 400);
   } finally {
     restoreSigner();
     Course.findOne = origFindOneCourse;

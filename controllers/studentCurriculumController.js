@@ -10,7 +10,11 @@ const { verifyStudentCourseAccess } = require('../utils/courseAccessHelper');
 const { logActivity } = require('../utils/activityLogger');
 const { signS3Reference, normalizeS3Reference, resolveMediaRecord } = require('../utils/s3MediaSigner');
 const { calculateCourseTotalDurationMinutes } = require('../utils/courseDurationHelper');
-const { attachCurriculumHlsCookies, collectCurriculumHlsVideoIds } = require('../utils/studentCurriculumHls');
+const {
+  attachVerifiedHlsStream: attachVerifiedHlsMetadata,
+  attachCurriculumHlsCookies,
+  collectCurriculumHlsVideoIds,
+} = require('../utils/studentCurriculumHls');
 
 const isWebmMedia = (resource) => {
   const s3Key = String(resource?.s3Key || '').trim().toLowerCase();
@@ -32,63 +36,7 @@ const hasSafeM4vKey = (key) => typeof key === 'string' &&
   !key.includes('..') && !key.includes('//') && !/[\\\r\n]/.test(key);
 
 
-const attachVerifiedHlsStream = async (resource) => {
-  if (!resource || typeof resource !== 'object') return resource;
-  const output = { ...resource };
-
-  let hlsStatus = String(resource.hlsConversionStatus || 'none').toUpperCase();
-  let hlsMasterUrl = String(resource.hlsMasterUrl || '').trim();
-  let hlsOutputPrefix = String(resource.hlsOutputPrefix || '').trim();
-  let jobId = String(resource.mediaConvertJobId || '').trim();
-  let s3Key = String(resource.s3Key || resource.videoS3Key || '').trim();
-
-  if ((!hlsMasterUrl || hlsStatus === 'NONE') && s3Key) {
-    try {
-      const { getHlsConversionStatus } = require('../services/mediaConvertService');
-      const hlsInfo = await getHlsConversionStatus(s3Key);
-      if (hlsInfo) {
-        hlsStatus = String(hlsInfo.hlsConversionStatus || 'none').toUpperCase();
-        if (hlsStatus === 'COMPLETED' && hlsInfo.hlsMasterUrl) {
-          hlsMasterUrl = hlsInfo.hlsMasterUrl;
-          hlsOutputPrefix = hlsInfo.hlsOutputPrefix || `hls/${hlsInfo.videoId || ''}/`;
-        }
-        if (hlsInfo.mediaConvertJobId) jobId = hlsInfo.mediaConvertJobId;
-      }
-    } catch (_) {}
-  }
-
-  output.hlsConversionStatus = hlsStatus;
-  if (jobId) output.mediaConvertJobId = jobId;
-  if (hlsOutputPrefix) output.hlsOutputPrefix = hlsOutputPrefix;
-
-  if (hlsStatus === 'COMPLETED' && hlsMasterUrl) {
-    try {
-      const { generateHlsSignedUrl, resolvePersistedHlsUrl } = require('../utils/cloudFrontSecurity');
-      const { deriveVideoIdFromKey } = require('../services/mediaConvertService');
-      const urlVideoId = (hlsMasterUrl.match(/\/hls\/([^/]+)\//i) || [])[1];
-      const derivedId = resource?.videoId || urlVideoId || (s3Key ? deriveVideoIdFromKey(s3Key) : '');
-      const effectiveMasterUrl = resolvePersistedHlsUrl(hlsMasterUrl, derivedId);
-      const signedUrl = generateHlsSignedUrl(effectiveMasterUrl);
-      output.hlsMasterUrl = signedUrl;
-      output.hlsPlaybackUrl = signedUrl;
-      output.playbackType = 'hls';
-    } catch (hlsValErr) {
-      console.warn('[studentCurriculum] HLS validation error, falling back to MP4:', hlsValErr.message);
-      output.hlsMasterUrl = '';
-      output.hlsPlaybackUrl = '';
-      output.playbackType = 'mp4';
-    }
-  } else if (['PROCESSING', 'PENDING'].includes(hlsStatus)) {
-    output.hlsMasterUrl = '';
-    output.playbackType = 'mp4';
-  } else if (hlsStatus === 'FAILED') {
-    output.hlsMasterUrl = '';
-    output.playbackType = 'mp4';
-    output.hlsConversionError = resource.hlsConversionError || '';
-  }
-
-  return output;
-};
+const attachVerifiedHlsStream = attachVerifiedHlsMetadata;
 
 const attachVerifiedM4vRendition = async (resource) => {
   if (!resource || typeof resource !== 'object') return resource;
@@ -178,6 +126,37 @@ const attachVerifiedMp4Fallback = async (resource) => {
   return output;
 };
 
+const isDirectS3Url = (value) => {
+  try {
+    const host = new URL(String(value || '')).hostname.toLowerCase();
+    return /(?:^|\.)s3(?:[.-][a-z0-9-]+)*\.amazonaws\.com(?:\.cn)?$/.test(host);
+  } catch (_) {
+    return false;
+  }
+};
+
+const attachHlsStreamSafely = async (resource) => {
+  try {
+    return await attachVerifiedHlsStream(resource);
+  } catch (_) {
+    // HLS metadata is optional; an invalid record must not abort course serialization.
+    // Never include a URL or raw exception in logs because persisted URLs can contain tokens.
+    console.warn('[HLS] Could not resolve persisted conversion; using MP4 fallback', {
+      videoId: /^[A-Za-z0-9_-]+$/.test(String(resource?.videoId || '')) ? String(resource.videoId) : 'unknown',
+      mediaConvertJobId: /^[A-Za-z0-9_-]+$/.test(String(resource?.mediaConvertJobId || '')) ? String(resource.mediaConvertJobId) : 'unknown',
+      reason: 'hls_attachment_failed',
+    });
+    return {
+      ...resource,
+      hlsMasterUrl: '',
+      hlsPlaybackUrl: '',
+      hlsConversionStatus: 'FAILED',
+      hlsConversionError: 'Invalid persisted HLS master URL',
+      playbackType: 'mp4',
+    };
+  }
+};
+
 const addSignedS3MediaUrls = async (course) => {
   if (!course || typeof course !== 'object') return course;
   if (course.thumbnailMedia?.storageProvider === 's3') {
@@ -200,7 +179,12 @@ const addSignedS3MediaUrls = async (course) => {
               ? (isWebmMedia(resource) ? 'video/webm' : 'video/mp4')
               : type;
             const resolved = await resolveMediaRecord(resource, { responseContentType: mediaType, course });
-            if (field === 'videoParts') { const withMp4 = await attachVerifiedMp4Fallback(resolved); const withM4v = await attachVerifiedM4vRendition(withMp4); return attachVerifiedHlsStream(withM4v); } return resolved;
+            if (field === 'videoParts') {
+              const withMp4 = await attachVerifiedMp4Fallback(resolved);
+              const withM4v = await attachVerifiedM4vRendition(withMp4);
+              return attachHlsStreamSafely(withM4v);
+            }
+            return resolved;
           }));
         }
       }
@@ -290,13 +274,7 @@ const addSignedS3MediaUrls = async (course) => {
               lesson.fallbackMp4Url = fallbackRef.mp4Url;
             }
           }
-          const withHls = await attachVerifiedHlsStream({
-            ...s3Ref,
-            hlsMasterUrl: lesson.hlsMasterUrl,
-            hlsConversionStatus: lesson.hlsConversionStatus,
-            hlsOutputPrefix: lesson.hlsOutputPrefix,
-            mediaConvertJobId: lesson.mediaConvertJobId,
-          });
+          const withHls = await attachHlsStreamSafely(withM4v);
           if (withHls?.hlsMasterUrl) {
             lesson.hlsMasterUrl = withHls.hlsMasterUrl;
             lesson.hlsPlaybackUrl = withHls.hlsPlaybackUrl || withHls.hlsMasterUrl;
@@ -316,6 +294,9 @@ const addSignedS3MediaUrls = async (course) => {
           }
           if (withHls?.hlsConversionError) {
             lesson.hlsConversionError = withHls.hlsConversionError;
+          }
+          if (!Array.isArray(lesson.videoParts) || lesson.videoParts.length === 0) {
+            lesson.videoParts = [withHls];
           }
         }
       }

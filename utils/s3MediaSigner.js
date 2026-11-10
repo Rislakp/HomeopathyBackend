@@ -53,7 +53,7 @@ const normalizeS3Reference = (reference) => {
 
   if (source.storageProvider === 's3' && typeof source.s3Key === 'string' && source.s3Key) return source;
 
-  const rawUrl = source.url || source.secure_url || source.secureUrl || source.fileUrl || source.path || source.videoUrl || source.mediaUrl || source.s3Key;
+  const rawUrl = source.url || source.secure_url || source.secureUrl || source.fileUrl || source.path || source.videoUrl || source.mediaUrl || source.s3Key || source.key;
   if (typeof rawUrl !== 'string') return null;
   const trimmedUrl = rawUrl.trim();
 
@@ -68,22 +68,24 @@ const normalizeS3Reference = (reference) => {
     const parsed = new URL(trimmedUrl);
     let keyPath = '';
     const expectedHosts = new Set([
-      `${bucket}.s3.${region}.amazonaws.com`,
-      `${bucket}.s3.amazonaws.com`,
+      `${bucket}.s3.${region}.amazonaws.com`.toLowerCase(),
+      `${bucket}.s3.amazonaws.com`.toLowerCase(),
+      `s3.${region}.amazonaws.com`.toLowerCase(),
+      's3.amazonaws.com',
     ]);
     if (publicBaseUrl) {
-      try { expectedHosts.add(new URL(publicBaseUrl).hostname); } catch (_) { /* ignore invalid base URL */ }
+      try { expectedHosts.add(new URL(publicBaseUrl).hostname.toLowerCase()); } catch (_) { /* ignore invalid base URL */ }
     }
-    if (parsed.hostname.includes('amazonaws.com') && !expectedHosts.has(parsed.hostname)) {
-      expectedHosts.add(parsed.hostname);
-    }
-    if (!expectedHosts.has(parsed.hostname)) return null;
+    const hostname = parsed.hostname.toLowerCase();
+    if (parsed.protocol !== 'https:' || parsed.port || parsed.username || parsed.password || parsed.hash || !expectedHosts.has(hostname)) return null;
 
     let pathParts = decodeURIComponent(parsed.pathname.replace(/^\/+/, ''));
-    if (parsed.hostname.startsWith('s3.') || parsed.hostname.startsWith('s3-')) {
+    if (hostname === `s3.${region}.amazonaws.com`.toLowerCase() || hostname === 's3.amazonaws.com') {
       const segments = pathParts.split('/');
       if (segments[0] === bucket) {
         pathParts = segments.slice(1).join('/');
+      } else {
+        return null;
       }
     }
     keyPath = pathParts;
