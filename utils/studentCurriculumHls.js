@@ -9,17 +9,15 @@ async function attachVerifiedHlsStream(resource) {
   const s3Key = String(resource.s3Key || resource.videoS3Key || '').trim();
   if ((!masterUrl || status === 'NONE') && s3Key) {
     try {
-      const VideoConversion = require('../models/VideoConversion');
-      const connected = mongoose.connection?.readyState === 1;
-      if (connected || VideoConversion.findOne !== mongoose.Model.findOne) {
-        const query = VideoConversion.findOne({ originalS3Key: s3Key });
-        const conversion = query && typeof query.lean === 'function' ? await query.lean() : await query;
-        if (conversion) {
-          status = String(conversion.hlsConversionStatus || conversion.status || 'none').toUpperCase();
-          if (status === 'COMPLETED') masterUrl = String(conversion.hlsMasterUrl || '').trim();
-          output.hlsOutputPrefix = conversion.hlsOutputPrefix || output.hlsOutputPrefix || '';
-          output.mediaConvertJobId = conversion.mediaConvertJobId || output.mediaConvertJobId || '';
+      const { getHlsConversionStatus } = require('../services/mediaConvertService');
+      const hlsInfo = await getHlsConversionStatus(s3Key);
+      if (hlsInfo) {
+        status = String(hlsInfo.hlsConversionStatus || 'none').toUpperCase();
+        if (status === 'COMPLETED' && hlsInfo.hlsMasterUrl) {
+          masterUrl = String(hlsInfo.hlsMasterUrl).trim();
+          output.hlsOutputPrefix = hlsInfo.hlsOutputPrefix || '';
         }
+        output.mediaConvertJobId = hlsInfo.mediaConvertJobId || output.mediaConvertJobId || '';
       }
     } catch (_) {
       // Keep the original signed S3 video as fallback when conversion status is unavailable.

@@ -44,19 +44,15 @@ const attachVerifiedHlsStream = async (resource) => {
 
   if ((!hlsMasterUrl || hlsStatus === 'NONE') && s3Key) {
     try {
-      const VideoConversion = require('../models/VideoConversion');
-      const isDbConnected = mongoose.connection?.readyState === 1;
-      if (isDbConnected || (VideoConversion.findOne && VideoConversion.findOne !== mongoose.Model.findOne)) {
-        const q = VideoConversion.findOne({ originalS3Key: s3Key });
-        const conversion = (q && typeof q.lean === 'function') ? await q.lean() : await q;
-        if (conversion) {
-          hlsStatus = String(conversion.hlsConversionStatus || 'none').toUpperCase();
-          if (hlsStatus === 'COMPLETED' && conversion.hlsMasterUrl) {
-            hlsMasterUrl = conversion.hlsMasterUrl;
-            hlsOutputPrefix = conversion.hlsOutputPrefix || `hls/${conversion.videoId || ''}/`;
-          }
-          if (conversion.mediaConvertJobId) jobId = conversion.mediaConvertJobId;
+      const { getHlsConversionStatus } = require('../services/mediaConvertService');
+      const hlsInfo = await getHlsConversionStatus(s3Key);
+      if (hlsInfo) {
+        hlsStatus = String(hlsInfo.hlsConversionStatus || 'none').toUpperCase();
+        if (hlsStatus === 'COMPLETED' && hlsInfo.hlsMasterUrl) {
+          hlsMasterUrl = hlsInfo.hlsMasterUrl;
+          hlsOutputPrefix = hlsInfo.hlsOutputPrefix || `hls/${hlsInfo.videoId || ''}/`;
         }
+        if (hlsInfo.mediaConvertJobId) jobId = hlsInfo.mediaConvertJobId;
       }
     } catch (_) {}
   }
@@ -66,14 +62,22 @@ const attachVerifiedHlsStream = async (resource) => {
   if (hlsOutputPrefix) output.hlsOutputPrefix = hlsOutputPrefix;
 
   if (hlsStatus === 'COMPLETED' && hlsMasterUrl) {
-    const { generateHlsSignedUrl, resolvePersistedHlsUrl } = require('../utils/cloudFrontSecurity');
-    const { deriveVideoIdFromKey } = require('../services/mediaConvertService');
-    const derivedId = (s3Key ? deriveVideoIdFromKey(s3Key) : '') || (hlsMasterUrl.match(/\/hls\/([^/]+)\//i) || [])[1];
-    const effectiveMasterUrl = resolvePersistedHlsUrl(hlsMasterUrl, derivedId);
-    const signedUrl = generateHlsSignedUrl(effectiveMasterUrl);
-    output.hlsMasterUrl = signedUrl;
-    output.hlsPlaybackUrl = signedUrl;
-    output.playbackType = 'hls';
+    try {
+      const { generateHlsSignedUrl, resolvePersistedHlsUrl } = require('../utils/cloudFrontSecurity');
+      const { deriveVideoIdFromKey } = require('../services/mediaConvertService');
+      const urlVideoId = (hlsMasterUrl.match(/\/hls\/([^/]+)\//i) || [])[1];
+      const derivedId = resource?.videoId || urlVideoId || (s3Key ? deriveVideoIdFromKey(s3Key) : '');
+      const effectiveMasterUrl = resolvePersistedHlsUrl(hlsMasterUrl, derivedId);
+      const signedUrl = generateHlsSignedUrl(effectiveMasterUrl);
+      output.hlsMasterUrl = signedUrl;
+      output.hlsPlaybackUrl = signedUrl;
+      output.playbackType = 'hls';
+    } catch (hlsValErr) {
+      console.warn('[studentCurriculum] HLS validation error, falling back to MP4:', hlsValErr.message);
+      output.hlsMasterUrl = '';
+      output.hlsPlaybackUrl = '';
+      output.playbackType = 'mp4';
+    }
   } else if (['PROCESSING', 'PENDING'].includes(hlsStatus)) {
     output.hlsMasterUrl = '';
     output.playbackType = 'mp4';

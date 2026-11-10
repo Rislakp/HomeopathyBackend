@@ -114,7 +114,9 @@ function getValidatedHlsMasterUrl(masterUrl, videoId) {
   return `https://${domain}${parsed.pathname}`;
 }
 function resolvePersistedHlsUrl(persistedUrl, videoId) {
-  return getValidatedHlsMasterUrl(persistedUrl, videoId);
+  const urlVideoId = (String(persistedUrl || '').match(/\/hls\/([A-Za-z0-9_-]+)\//i) || [])[1];
+  const effectiveId = urlVideoId || videoId;
+  return getValidatedHlsMasterUrl(persistedUrl, effectiveId);
 }
 /**
  * Generates CloudFront signed cookies for HLS streaming (master playlist, variant playlists, and all segments).
