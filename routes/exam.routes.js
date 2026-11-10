@@ -5,6 +5,7 @@ const {
   extractMCQs,
   createGrandMockExam,
   getAllGrandMocks,
+  getAdminExamResults,
   getGrandMockById,
   updateGrandMockExam,
   deleteGrandMockExam,
@@ -14,7 +15,7 @@ const {
   deleteQuestionFromExam,
 } = require('../controllers/examController');
 const { requireAdmin, requireRole } = require('../middleware/rbac');
-const { downloadAnswerKey } = require('../src/student/answerKey.controller');
+const { downloadAnswerKey, getAnswerKey } = require('../src/student/answerKey.controller');
 
 const requireAuthUser = requireRole('student', 'admin', 'superadmin');
 
@@ -67,9 +68,19 @@ router.get('/api/exams/:id', requireAuthUser, getGrandMockById);
 router.get('/api/v1/exams/grand-mock/:id', requireAuthUser, getGrandMockById);
 router.get('/api/v1/exams/:id', requireAuthUser, getGrandMockById);
 
+// Admin Route: Get exam student results
+router.get('/api/v1/admin/exams/:examId/results', requireAdmin, getAdminExamResults);
+router.get('/api/admin/exams/:examId/results', requireAdmin, getAdminExamResults);
+router.get('/api/v1/exams/:examId/results', requireAdmin, getAdminExamResults);
+router.get('/api/exams/:examId/results', requireAdmin, getAdminExamResults);
+router.get('/api/v1/admin/exams/:id/results', requireAdmin, getAdminExamResults);
+router.get('/api/admin/exams/:id/results', requireAdmin, getAdminExamResults);
+router.get('/api/v1/exams/:id/results', requireAdmin, getAdminExamResults);
+router.get('/api/exams/:id/results', requireAdmin, getAdminExamResults);
+
 // Admin Route: Update Grand Mock Exam
-router.put('/api/exams/grand-mock/:id', updateGrandMockExam);
-router.put('/api/exams/:id', updateGrandMockExam);
+router.put('/api/exams/grand-mock/:id', requireAdmin, updateGrandMockExam);
+router.put('/api/exams/:id', requireAdmin, updateGrandMockExam);
 
 // Admin Routes: Granular Question operations
 router.post('/api/exams/:id/questions', requireAdmin, addQuestionToExam);
@@ -81,15 +92,22 @@ router.put('/api/exams/grand-mock/:id/questions/:questionId', requireAdmin, upda
 router.delete('/api/exams/:id/questions/:questionId', requireAdmin, deleteQuestionFromExam);
 router.delete('/api/exams/grand-mock/:id/questions/:questionId', requireAdmin, deleteQuestionFromExam);
 
+// Endpoints to get answer key JSON
+router.get('/api/exams/:id/answer-key', requireAuthUser, getAnswerKey);
+router.get('/api/exams/grand-mock/:id/answer-key', requireAuthUser, getAnswerKey);
+router.get('/api/exams/:id/results/:resultId/answer-key', requireAuthUser, getAnswerKey);
+
 // Endpoint to download watermarked answer key PDF
 router.get('/api/exams/:id/answer-key/download', requireAuthUser, downloadAnswerKey);
 router.post('/api/exams/:id/answer-key/download', requireAuthUser, downloadAnswerKey);
 router.get('/api/exams/grand-mock/:id/answer-key/download', requireAuthUser, downloadAnswerKey);
 router.post('/api/exams/grand-mock/:id/answer-key/download', requireAuthUser, downloadAnswerKey);
+router.get('/api/exams/:id/results/:resultId/answer-key/download', requireAuthUser, downloadAnswerKey);
+router.post('/api/exams/:id/results/:resultId/answer-key/download', requireAuthUser, downloadAnswerKey);
 
 // Route to delete exam by ID
-router.delete('/api/exams/grand-mock/:id', deleteGrandMockExam);
-router.delete('/api/exams/:id', deleteExam);
+router.delete('/api/exams/grand-mock/:id', requireAdmin, deleteGrandMockExam);
+router.delete('/api/exams/:id', requireAdmin, deleteExam);
 
 module.exports = router;
 

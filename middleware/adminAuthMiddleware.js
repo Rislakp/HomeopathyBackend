@@ -5,10 +5,9 @@ let User;
 try { User = require('../models/User'); } catch (e) { /* optional */ }
 
 const getJwtSecret = () => {
-  return (
-    process.env.JWT_SECRET ||
-    'white_coat_academy_secret_jwt_key_2026_super_secure'
-  );
+  const secret = process.env.JWT_SECRET || (process.env.NODE_ENV !== 'production' ? 'white_coat_academy_secret_jwt_key_2026_super_secure' : undefined);
+  if (!secret) throw new Error('JWT_SECRET is not configured');
+  return secret;
 };
 
 /**

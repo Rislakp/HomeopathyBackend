@@ -1,11 +1,12 @@
 const mongoose = require('mongoose');
 const { CreateJobCommand, GetJobCommand } = require('@aws-sdk/client-mediaconvert');
-const { GetObjectCommand, HeadObjectCommand } = require('@aws-sdk/client-s3');
+const { GetObjectCommand, HeadObjectCommand, ListObjectsV2Command } = require('@aws-sdk/client-s3');
 const { s3Client } = require('../config/s3');
 const { mediaConvertConfig, getMediaConvertClient } = require('../config/mediaconvert');
 const Course = require('../models/Course');
 const Recording = require('../models/Recording');
 const VideoConversion = require('../models/VideoConversion');
+const DemoVideo = require('../models/DemoVideo');
 
 // In-memory set to prevent duplicate concurrent submissions for the same video
 const inFlightSubmissions = new Set();
@@ -75,6 +76,9 @@ function getCloudFrontHlsMasterUrl(videoId) {
   return `https://${domain}/hls/${cleanId}/${cleanId}.m3u8`;
 }
 
+/**
+ * Constructs the AWS Elemental MediaConvert Job specification for adaptive HLS outputs (480p and 360p).
+ */
 function parseMediaConvertS3Path(uri, videoId) {
   if (typeof uri !== 'string') return null;
   const match = uri.trim().match(/^s3:\/\/([^/]+)\/(.+)$/i);
@@ -295,6 +299,7 @@ async function validateHlsOutputFiles(detail, videoId) {
 /**
  * Constructs the AWS Elemental MediaConvert Job specification for adaptive HLS outputs (480p and 360p).
  */
+
 function buildHlsJobSettings({ inputS3Uri, outputS3Destination, videoId, userMetadata = {} }) {
   return {
     Role: mediaConvertConfig.roleArn,
@@ -330,13 +335,10 @@ function buildHlsJobSettings({ inputS3Uri, outputS3Destination, videoId, userMet
             Type: 'HLS_GROUP_SETTINGS',
             HlsGroupSettings: {
               SegmentLength: 6,
-              SegmentLengthControl: 'GOP_MULTIPLE',
-              SegmentControl: 'SEGMENTED_FILES',
               MinSegmentLength: 0,
               Destination: outputS3Destination,
               DirectoryStructure: 'SINGLE_DIRECTORY',
               ManifestDurationFormat: 'INTEGER',
-              TargetDurationCompatibilityMode: 'LEGACY',
               StreamInfResolution: 'INCLUDE',
               ClientCache: 'ENABLED',
               CaptionLanguageSetting: 'OMIT',
@@ -363,7 +365,9 @@ function buildHlsJobSettings({ inputS3Uri, outputS3Destination, videoId, userMet
                     QualityTuningLevel: 'SINGLE_PASS',
                     CodecProfile: 'MAIN',
                     CodecLevel: 'AUTO',
-                    GopSizeUnits: 'AUTO',
+                    GopSize: 2,
+                    GopSizeUnits: 'SECONDS',
+                    GopClosedCadence: 1,
                     NumberBFramesBetweenReferenceFrames: 2,
                     InterlaceMode: 'PROGRESSIVE',
                   },
@@ -404,7 +408,9 @@ function buildHlsJobSettings({ inputS3Uri, outputS3Destination, videoId, userMet
                     QualityTuningLevel: 'SINGLE_PASS',
                     CodecProfile: 'MAIN',
                     CodecLevel: 'AUTO',
-                    GopSizeUnits: 'AUTO',
+                    GopSize: 2,
+                    GopSizeUnits: 'SECONDS',
+                    GopClosedCadence: 1,
                     NumberBFramesBetweenReferenceFrames: 2,
                     InterlaceMode: 'PROGRESSIVE',
                   },
@@ -433,7 +439,7 @@ function buildHlsJobSettings({ inputS3Uri, outputS3Destination, videoId, userMet
 }
 
 /**
- * Synchronizes HLS fields across course lessons, recordings, and VideoConversion.
+ * Synchronizes HLS fields across Course, Recording, DemoVideo, and VideoConversion models.
  */
 async function syncHlsDatabaseRecords({
   s3Key,
@@ -449,25 +455,20 @@ async function syncHlsDatabaseRecords({
   const cleanKey = String(s3Key || '').trim();
   const cleanVideoId = String(videoId || deriveVideoIdFromKey(cleanKey)).trim();
   const normStatus = String(status || 'PENDING').toUpperCase();
-  const hlsOutputPrefix = normStatus === 'COMPLETED'
-    ? (String(reportedHlsOutputPrefix || '').trim() || `hls/${cleanVideoId}/`)
-    : `hls/${cleanVideoId}/`;
-  const hlsMasterUrl = normStatus === 'COMPLETED'
-    ? (String(reportedHlsMasterUrl || '').trim() || getCloudFrontHlsMasterUrl(cleanVideoId))
-    : '';
+  const hlsOutputPrefix = reportedHlsOutputPrefix || `hls/${cleanVideoId}/`;
+  const hlsMasterUrl = normStatus === 'COMPLETED' ? reportedHlsMasterUrl : '';
 
   const updateFields = {
     hlsConversionStatus: normStatus,
+    hlsMasterUrl,
     hlsOutputPrefix,
   };
   if (jobId) updateFields.mediaConvertJobId = jobId;
   if (error) updateFields.hlsConversionError = error;
   if (normStatus === 'COMPLETED') {
-    updateFields.hlsMasterUrl = hlsMasterUrl;
     updateFields.hlsConvertedAt = convertedAt || new Date();
     updateFields.hlsConversionError = '';
   }
-  if (normStatus === 'FAILED') updateFields.hlsMasterUrl = '';
   if (originalVideoUrl) updateFields.originalVideoUrl = originalVideoUrl;
 
   const isDbConnected = mongoose.connection?.readyState === 1;
@@ -555,6 +556,14 @@ async function syncHlsDatabaseRecords({
     // 3. Update Recording records
     if (cleanKey && (isDbConnected || (Recording.updateMany && Recording.updateMany !== mongoose.Model.updateMany))) {
       await Recording.updateMany(
+        { s3Key: cleanKey },
+        { $set: updateFields }
+      );
+    }
+
+    // 4. Update DemoVideo records
+    if (cleanKey && (isDbConnected || (DemoVideo.updateMany && DemoVideo.updateMany !== mongoose.Model.updateMany))) {
+      await DemoVideo.updateMany(
         { s3Key: cleanKey },
         { $set: updateFields }
       );
@@ -745,7 +754,8 @@ function enqueueHlsConversion(s3Key, options = {}) {
   // Asynchronously submit job to AWS Elemental MediaConvert
   setImmediate(async () => {
     try {
-      await submitHlsConversionJob({
+      const submitJob = typeof options.submitJob === 'function' ? options.submitJob : submitHlsConversionJob;
+      await submitJob({
         s3Key: cleanKey,
         videoId,
         userMetadata: options.userMetadata || {},
@@ -906,6 +916,100 @@ async function checkMediaConvertJob(jobId) {
 }
 
 /**
+ * Automatically discovers completed HLS outputs in S3 for a given video key or videoId.
+ * Checks candidate prefixes:
+ * - hls/{videoId}/
+ * - hls/{trailingName}/
+ * If a valid master playlist and variant/segments exist in S3, updates the database and returns HLS metadata.
+ */
+async function discoverHlsInS3(s3KeyOrVideoId) {
+  const target = String(s3KeyOrVideoId || '').trim();
+  if (!target) return null;
+
+  const cleanKey = target.replace(/^\/+/, '');
+  const filename = cleanKey.split('/').pop() || cleanKey;
+  const withoutExt = filename.replace(/\.[a-zA-Z0-9]+$/, '');
+
+  const candidates = new Set();
+  const directId = deriveVideoIdFromKey(target);
+  if (directId) candidates.add(directId);
+  if (withoutExt) candidates.add(withoutExt);
+
+  // If filename has a UUID pattern like 1792646336243-cd382b58-b74b-439b-a662-4ee16630dd1e-PHARMACY-4
+  const uuidMatch = withoutExt.match(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}-(.+)$/i);
+  if (uuidMatch && uuidMatch[1]) {
+    candidates.add(uuidMatch[1]);
+  }
+  const parts = withoutExt.split('-');
+  if (parts.length > 1) {
+    const lastPart = parts[parts.length - 1];
+    if (lastPart && /^[A-Za-z0-9_-]+$/.test(lastPart)) {
+      candidates.add(lastPart);
+    }
+  }
+
+  const bucketName = mediaConvertConfig.bucket;
+  const domain = mediaConvertConfig.cloudFrontDomain;
+
+  for (const candidateId of candidates) {
+    const prefix = `hls/${candidateId}/`;
+    try {
+      const res = await s3Client.send(new ListObjectsV2Command({
+        Bucket: bucketName,
+        Prefix: prefix,
+        MaxKeys: 30,
+      }));
+
+      const contents = res?.Contents || [];
+      if (contents.length > 0) {
+        // Find master playlist (.m3u8 that doesn't contain resolution markers like _360p or _480p)
+        const masterObj = contents.find(
+          (c) => c.Key.endsWith('.m3u8') && !c.Key.includes('_360p') && !c.Key.includes('_480p') && Number(c.Size) > 0
+        );
+        const hasVariantOrSegment = contents.some(
+          (c) => (c.Key.endsWith('.m3u8') && (c.Key.includes('_360p') || c.Key.includes('_480p'))) ||
+                 (c.Key.endsWith('.ts') && Number(c.Size) > 0)
+        );
+
+        if (masterObj && hasVariantOrSegment) {
+          const hlsMasterUrl = `https://${domain}/${masterObj.Key}`;
+          console.info(`[MediaConvert S3 Auto-Discovery] Found completed HLS in S3 for ${target}:`, {
+            videoId: candidateId,
+            prefix,
+            masterKey: masterObj.Key,
+          });
+
+          // Sync database so future lookups are fast and persistent
+          await syncHlsDatabaseRecords({
+            s3Key: target.startsWith('videos/') || target.startsWith('live_records/') ? target : '',
+            videoId: candidateId,
+            status: 'COMPLETED',
+            hlsMasterUrl,
+            hlsOutputPrefix: prefix,
+            convertedAt: masterObj.LastModified || new Date(),
+          }).catch((err) => console.warn('[MediaConvert S3 Auto-Discovery] DB sync warning:', err.message));
+
+          return {
+            s3Key: target,
+            videoId: candidateId,
+            status: 'COMPLETED',
+            hlsConversionStatus: 'COMPLETED',
+            hlsMasterUrl,
+            hlsOutputPrefix: prefix,
+            mediaConvertJobId: '',
+            error: '',
+          };
+        }
+      }
+    } catch (_) {
+      // Ignore S3 list error in offline/test environment
+    }
+  }
+
+  return null;
+}
+
+/**
  * Returns comprehensive HLS conversion status for a given video key or videoId.
  */
 async function getHlsConversionStatus(s3KeyOrVideoId) {
@@ -919,6 +1023,16 @@ async function getHlsConversionStatus(s3KeyOrVideoId) {
         $or: [{ originalS3Key: target }, { videoId: target }, { mediaConvertJobId: target }],
       });
       record = (q && typeof q.lean === 'function') ? await q.lean() : await q;
+    } catch (_) {}
+  }
+
+  if (!record || String(record.hlsConversionStatus || record.status || '').toUpperCase() !== 'COMPLETED') {
+    // Attempt S3 auto-discovery if record is missing or not marked completed
+    try {
+      const discovered = await discoverHlsInS3(target);
+      if (discovered) {
+        return discovered;
+      }
     } catch (_) {}
   }
 
@@ -941,7 +1055,11 @@ async function getHlsConversionStatus(s3KeyOrVideoId) {
 
   let hlsMasterUrl = '';
   if (normStatus === 'COMPLETED') {
-    hlsMasterUrl = record.hlsMasterUrl || '';
+    if (record.hlsMasterUrl && typeof record.hlsMasterUrl === 'string' && record.hlsMasterUrl.trim()) {
+      hlsMasterUrl = record.hlsMasterUrl.trim();
+    } else {
+      hlsMasterUrl = getCloudFrontHlsMasterUrl(videoId);
+    }
   }
 
   return {
@@ -973,4 +1091,5 @@ module.exports = {
   handleJobStateChange,
   checkMediaConvertJob,
   getHlsConversionStatus,
+  discoverHlsInS3,
 };

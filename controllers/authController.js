@@ -1,4 +1,4 @@
-﻿const mongoose = require('mongoose');
+const mongoose = require('mongoose');
 const jwt = require('jsonwebtoken');
 const User = require('../models/User');
 const Course = require('../models/Course');
@@ -11,13 +11,42 @@ try {
 
 const EMAIL_REGEX = /^\w+([\.-]?\w+)*@\w+([\.-]?\w+)*(\.\w{2,3})+$/;
 
+const getJwtRefreshSecret = () => {
+  const secret = process.env.JWT_REFRESH_SECRET || (process.env.JWT_SECRET ? process.env.JWT_SECRET + '_refresh' : undefined) || (process.env.NODE_ENV !== 'production' ? 'white_coat_academy_secret_jwt_refresh_key_2026_super_secure' : undefined);
+  if (!secret) throw new Error('JWT_REFRESH_SECRET or JWT_SECRET is not configured');
+  return secret;
+};
+
+/**
+ * Generate cryptographically signed refresh token with explicit configurable expiry
+ */
+const generateRefreshToken = (user) => {
+  const secret = getJwtRefreshSecret();
+  const userId = user._id ? user._id.toString() : (user.id || user.userId);
+  const role = (user.role || 'student').toLowerCase().trim();
+  const tokenVersion = user.tokenVersion !== undefined ? user.tokenVersion : 0;
+
+  return jwt.sign(
+    {
+      id: userId,
+      userId: userId,
+      tokenVersion: tokenVersion,
+      role: role,
+      type: 'refresh',
+    },
+    secret,
+    {
+      expiresIn: process.env.JWT_REFRESH_EXPIRES_IN || '30d',
+    }
+  );
+};
+
 /**
  * Generate JWT token containing user id, email, and role from database
  */
 const generateToken = (user, studentDoc = null) => {
-  const secret =
-    process.env.JWT_SECRET ||
-    'white_coat_academy_secret_jwt_key_2026_super_secure';
+  const secret = process.env.JWT_SECRET || (process.env.NODE_ENV !== 'production' ? 'white_coat_academy_secret_jwt_key_2026_super_secure' : undefined);
+  if (!secret) throw new Error('JWT_SECRET is not configured');
   const role = (user.role || 'student').toLowerCase().trim();
 
   let courseRef = (studentDoc && studentDoc.courseRef) || user.courseRef || null;
@@ -31,6 +60,26 @@ const generateToken = (user, studentDoc = null) => {
 
   const studentId = studentDoc ? studentDoc._id.toString() : (user.studentId || null);
 
+  // ── Multi-course: collect all enrolled course IDs for JWT claim ──────────
+  const seenIds = new Set();
+  const courseIdsArray = [];
+  const addCId = (id) => {
+    const s = String(id || '').trim();
+    if (!s || seenIds.has(s.toLowerCase())) return;
+    seenIds.add(s.toLowerCase());
+    courseIdsArray.push(s);
+  };
+  // From studentDoc (authoritative source)
+  if (studentDoc) {
+    if (Array.isArray(studentDoc.courseIds)) studentDoc.courseIds.forEach(addCId);
+    if (studentDoc.courseId) addCId(studentDoc.courseId);
+    if (studentDoc.courseRef) addCId(String(studentDoc.courseRef));
+  }
+  // From user (fallback)
+  if (Array.isArray(user.courseIds)) user.courseIds.forEach(addCId);
+  if (user.courseId) addCId(user.courseId);
+  if (courseId) addCId(courseId);
+
   return jwt.sign(
     {
       id: user._id ? user._id.toString() : user.id,
@@ -38,12 +87,15 @@ const generateToken = (user, studentDoc = null) => {
       studentId: studentId,
       email: user.email,
       role: role,
+      // Legacy single-course claim (backward compatibility)
       courseId: courseId,
       courseRef: courseRef ? courseRef.toString() : null,
+      // Multi-course claim
+      courseIds: courseIdsArray,
     },
     secret,
     {
-      expiresIn: process.env.JWT_EXPIRES_IN || '30d',
+      expiresIn: process.env.JWT_EXPIRES_IN || '15m',
     }
   );
 };
@@ -97,6 +149,29 @@ const buildUserResponse = async (user, studentDoc = null, options = {}) => {
     courseTitle = targetCourse.courseTitle || targetCourse.title || courseTitle;
   }
 
+  // ── Multi-course: collect all enrolled course IDs ────────────────────────
+  const seenRCIds = new Set();
+  const registeredCourseIds = [];
+  const addRCId = (id) => {
+    const s = String(id || '').trim();
+    if (!s || seenRCIds.has(s)) return;
+    seenRCIds.add(s);
+    registeredCourseIds.push(s);
+  };
+  if (studentDoc) {
+    if (Array.isArray(studentDoc.courseIds)) studentDoc.courseIds.forEach(addRCId);
+    if (studentDoc.courseId) addRCId(studentDoc.courseId);
+    if (studentDoc.courseRef) addRCId(String(studentDoc.courseRef));
+  }
+  if (Array.isArray(user.courseIds)) user.courseIds.forEach(addRCId);
+  if (user.courseId) addRCId(user.courseId);
+  if (courseId) addRCId(courseId);
+  // Ensure the resolved primary courseId is in registeredCourseIds after targetCourse resolution
+  if (targetCourse) {
+    const resolvedId = targetCourse.courseId || (targetCourse._id ? targetCourse._id.toString() : '');
+    if (resolvedId) addRCId(resolvedId);
+  }
+
   const response = {
     id: user._id ? user._id.toString() : user.id,
     name: user.name,
@@ -105,10 +180,18 @@ const buildUserResponse = async (user, studentDoc = null, options = {}) => {
     phone: user.phone || user.contactNumber || '',
     contactNumber: user.contactNumber || user.phone || '',
     qualification: user.qualification || '',
+    collegeName: (studentDoc && studentDoc.collegeName) || user.collegeName || '',
+    college_name: (studentDoc && studentDoc.collegeName) || user.collegeName || '',
+    college: (studentDoc && studentDoc.collegeName) || user.collegeName || '',
     preferredCourse: preferredCourse,
     course: courseTitle,
+    // Legacy single-course fields (backward compatibility)
     courseId: courseId,
+    registeredCourseId: courseId,
     courseRef: courseRef ? courseRef.toString() : null,
+    // Multi-course fields
+    courseIds: registeredCourseIds,
+    registeredCourseIds: registeredCourseIds,
     dateOfBirth: user.dateOfBirth || '',
     courses: [],
   };
@@ -258,6 +341,9 @@ const registerStudent = async (req, res) => {
       phone,
       contactNumber,
       qualification,
+      collegeName,
+      college_name,
+      college,
       course,
       selectedCourse,
       preferredCourse,
@@ -266,17 +352,38 @@ const registerStudent = async (req, res) => {
     const finalDob = (dateOfBirth || dob || '').toString().trim();
     const finalPhone = (contactNumber || phone || '').toString().trim();
     const finalQualification = (qualification || '').toString().trim();
+    const finalCollegeName = (collegeName || req.body.college_name || college || '').toString().trim();
     const finalName = (name || '').toString().trim();
-    const finalCourse = (course || selectedCourse || preferredCourse || '').toString().trim();
+
+    // ── Multi-course: resolve selected course IDs ─────────────────────────────
+    // Accept: registeredCourseIds[], selectedCourses[], courses[]
+    // Or legacy single-value: course, selectedCourse, preferredCourse
+    const rawInput = req.body.registeredCourseIds || req.body.selectedCourses || req.body.courses || null;
+    let selectedCourseIds = [];
+
+    if (rawInput !== null && rawInput !== undefined) {
+      if (Array.isArray(rawInput)) {
+        selectedCourseIds = rawInput.map(c => String(c).trim()).filter(Boolean);
+      } else if (typeof rawInput === 'string' && rawInput.trim()) {
+        selectedCourseIds = [rawInput.trim()];
+      }
+    }
+    // Fall back to legacy single-course fields
+    const singleLegacy = (course || selectedCourse || preferredCourse || '').toString().trim();
+    if (selectedCourseIds.length === 0 && singleLegacy) {
+      selectedCourseIds = [singleLegacy];
+    }
+    // De-duplicate
+    selectedCourseIds = [...new Set(selectedCourseIds)];
+    // Primary course (first selected) for legacy fields
+    const finalCourse = selectedCourseIds[0] || '';
 
     // -----------------------------
     // VALIDATION
     // -----------------------------
     const errors = [];
 
-    if (!finalName) {
-      errors.push('Name is required');
-    }
+    if (!finalName) errors.push('Name is required');
 
     if (!email || typeof email !== 'string' || !email.trim()) {
       errors.push('Email is required');
@@ -288,35 +395,28 @@ const registerStudent = async (req, res) => {
       errors.push('Password must be at least 6 characters');
     }
 
-    if (!finalDob) {
-      errors.push('Date of birth is required');
-    }
+    if (!finalDob) errors.push('Date of birth is required');
+    if (!finalPhone) errors.push('Contact number is required');
+    if (!finalQualification) errors.push('Qualification is required');
 
-    if (!finalPhone) {
-      errors.push('Contact number is required');
-    }
-
-    if (!finalQualification) {
-      errors.push('Qualification is required');
-    }
-
-    if ((course !== undefined || selectedCourse !== undefined || preferredCourse !== undefined) && !finalCourse) {
-      errors.push('Course cannot be empty');
+    // At least one course must be selected
+    if (selectedCourseIds.length === 0) {
+      errors.push('At least one course must be selected');
     }
 
     if (errors.length > 0) {
-      return res.status(400).json({
-        success: false,
-        message: 'Validation failed',
-        errors,
-      });
+      return res.status(400).json({ success: false, message: 'Validation failed', errors });
     }
 
     const cleanEmail = email.trim().toLowerCase();
 
-    let enrolledCourse = null;
-    if (finalCourse) {
-      const cleanCourse = finalCourse.trim();
+    // Resolve each selected course against the DB
+    const resolvedCourses = [];
+    const finalCourseIds = [];
+
+    for (const rawCourseVal of selectedCourseIds) {
+      const cleanCourse = rawCourseVal.trim();
+      if (!cleanCourse) continue;
       const escapedCourse = cleanCourse.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
       const courseQuery = [
         { courseId: new RegExp('^' + escapedCourse + '$', 'i') },
@@ -331,25 +431,45 @@ const registerStudent = async (req, res) => {
       if (/^unani$/i.test(cleanCourse)) {
         courseQuery.push({ category: /^unani$/i });
       }
-      enrolledCourse = await Course.findOne({ $or: courseQuery }).select('_id courseId courseTitle category');
+
+      let foundCourse = null;
+      try {
+        foundCourse = await Course.findOne({ $or: courseQuery }).select('_id courseId courseTitle category').lean();
+      } catch (e) { /* ignore */ }
+
+      if (foundCourse) {
+        const resolvedId = foundCourse.courseId || foundCourse._id.toString();
+        resolvedCourses.push({
+          courseRef: foundCourse._id,
+          courseId: resolvedId,
+          courseTitle: foundCourse.courseTitle || foundCourse.title || cleanCourse,
+        });
+        finalCourseIds.push(resolvedId);
+      } else {
+        // Course not in DB — store raw value (handles UNANI and future courses)
+        console.warn('[registerStudent] Course not found in DB for value="' + cleanCourse + '". Storing as raw string.');
+        finalCourseIds.push(cleanCourse);
+      }
     }
 
-    if (!enrolledCourse) {
-      // Course not found in DB - allow registration to proceed.
-      // preferredCourse is stored as a string; courseRef/courseId will be empty.
-      // This handles valid programs (e.g. UNANI) that may not yet have a
-      // corresponding Course document in the database.
-      console.warn('[registerStudent] Course not found for preferredCourse="' + finalCourse + '". Proceeding without courseRef.');
-    }
+    // Primary single-course values (backward-compatible legacy fields)
+    const primaryResolved = resolvedCourses[0] || null;
+    const resolvedCourseRef = primaryResolved ? primaryResolved.courseRef : null;
+    const resolvedCourseId = primaryResolved
+      ? primaryResolved.courseId
+      : (finalCourseIds[0] || finalCourse);
+    const resolvedCourseTitle = primaryResolved
+      ? primaryResolved.courseTitle
+      : (finalCourseIds[0] || finalCourse);
+
+    // Final de-duplicated courseIds list
+    const uniqueCourseIds = [...new Set(finalCourseIds)];
+
     // -----------------------------
     // CHECK DUPLICATE USER (EMAIL / PHONE)
     // -----------------------------
     const existingUser = await User.findOne({
-      $or: [
-        { email: cleanEmail },
-        { phone: finalPhone },
-        { contactNumber: finalPhone },
-      ],
+      $or: [{ email: cleanEmail }, { phone: finalPhone }, { contactNumber: finalPhone }],
     });
 
     if (existingUser) {
@@ -364,11 +484,7 @@ const registerStudent = async (req, res) => {
 
     if (Student) {
       const existingStudent = await Student.findOne({
-        $or: [
-          { email: cleanEmail },
-          { phone: finalPhone },
-          { contactNumber: finalPhone },
-        ],
+        $or: [{ email: cleanEmail }, { phone: finalPhone }, { contactNumber: finalPhone }],
       });
       if (existingStudent) {
         const isEmailDup = existingStudent.email === cleanEmail;
@@ -380,10 +496,6 @@ const registerStudent = async (req, res) => {
         });
       }
     }
-
-    const resolvedCourseRef = enrolledCourse ? enrolledCourse._id : null;
-    const resolvedCourseId = enrolledCourse ? (enrolledCourse.courseId || enrolledCourse._id.toString()) : '';
-    const resolvedCourseTitle = enrolledCourse ? (enrolledCourse.courseTitle || enrolledCourse.title || finalCourse) : finalCourse;
 
     let createdUser = null;
     let createdStudent = null;
@@ -401,10 +513,12 @@ const registerStudent = async (req, res) => {
         contactNumber: finalPhone,
         phone: finalPhone,
         qualification: finalQualification,
+        collegeName: finalCollegeName,
         preferredCourse: finalCourse,
         course: resolvedCourseTitle,
         courseId: resolvedCourseId,
         courseRef: resolvedCourseRef,
+        courseIds: uniqueCourseIds,
         status: 'Pending',
         accountStatus: 'Pending',
         isApproved: false,
@@ -423,45 +537,22 @@ const registerStudent = async (req, res) => {
             contactNumber: finalPhone,
             phone: finalPhone,
             qualification: finalQualification,
+            collegeName: finalCollegeName,
             preferredCourse: finalCourse,
             course: resolvedCourseTitle,
             courseId: resolvedCourseId,
             courseRef: resolvedCourseRef,
+            courseIds: uniqueCourseIds,
             status: 'Pending',
             accountStatus: 'Pending',
             isApproved: false,
             isActive: false,
           });
         } catch (studentErr) {
-          // Log but never block registration â€” Student doc is supplementary
+          // Log but never block registration — Student doc is supplementary
           console.warn('[registerStudent] Student sync warning:', studentErr.message);
         }
       }
-    // -----------------------------
-    // SYNC STUDENT MODEL IF AVAILABLE
-    // -----------------------------
-    let studentDoc = null;
-    if (Student) {
-      try {
-        studentDoc = await Student.create({
-          userId: user._id,
-          name: finalName,
-          email: cleanEmail,
-          dateOfBirth: finalDob,
-          contactNumber: finalPhone,
-          phone: finalPhone,
-          qualification: finalQualification,
-          preferredCourse: finalCourse,
-          course: resolvedCourseTitle,
-          courseId: resolvedCourseId,
-          courseRef: resolvedCourseRef,
-          // course & subscription now have safe defaults in the schema
-        });
-      } catch (studentErr) {
-        // Log but never block registration Ã¢â‚¬â€ Student doc is supplementary
-        console.warn('[registerStudent] Student sync warning:', studentErr.message);
-      }
-    }
 
       // -----------------------------
       // GENERATE TOKEN & RESPONSE
@@ -578,11 +669,15 @@ const universalLogin = async (req, res) => {
     }
 
     const token = generateToken(user, studentDocForResponse);
+    const refreshToken = generateRefreshToken(user);
 
     return res.status(200).json({
       success: true,
       message: 'Login successful',
       token,
+      accessToken: token,
+      refreshToken,
+      expiresIn: process.env.JWT_EXPIRES_IN || '15m',
       role: userRole,
       user: await buildUserResponse(user, studentDocForResponse, { isLogin: true }),
     });
@@ -679,11 +774,15 @@ const studentLogin = async (req, res) => {
 
     // 2. Generate standard JWT token with full course identity
     const token = generateToken(user, studentDocFound);
+    const refreshToken = generateRefreshToken(user);
 
     return res.status(200).json({
       success: true,
       message: 'Login successful',
       token,
+      accessToken: token,
+      refreshToken,
+      expiresIn: process.env.JWT_EXPIRES_IN || '15m',
       role: 'student',
       user: await buildUserResponse(user, studentDocFound, { isLogin: true }),
     });
@@ -805,7 +904,8 @@ const adminLogin = async (req, res) => {
     }
 
     // Generate token
-    const secret = process.env.JWT_SECRET || 'white_coat_academy_secret_jwt_key_2026_super_secure';
+    const secret = process.env.JWT_SECRET || (process.env.NODE_ENV !== 'production' ? 'white_coat_academy_secret_jwt_key_2026_super_secure' : undefined);
+    if (!secret) throw new Error('JWT_SECRET is not configured');
     const token = jwt.sign(
       {
         id: userObj.id,
@@ -814,13 +914,17 @@ const adminLogin = async (req, res) => {
         role: userObj.role,
       },
       secret,
-      { expiresIn: process.env.JWT_EXPIRES_IN || '30d' }
+      { expiresIn: process.env.JWT_EXPIRES_IN || '15m' }
     );
+    const refreshToken = generateRefreshToken(userObj);
 
     return res.status(200).json({
       success: true,
       message: 'Admin login successful',
       token,
+      accessToken: token,
+      refreshToken,
+      expiresIn: process.env.JWT_EXPIRES_IN || '15m',
       role: userObj.role,
       user: userObj,
     });
@@ -955,113 +1059,405 @@ const updateUserRole = async (req, res) => {
   }
 };
 
+const crypto = require('crypto');
+const bcrypt = require('bcryptjs');
+const { sendPasswordResetEmail } = require('../services/emailService');
+
+/**
+ * @route   POST /api/auth/forgot-password
+ * @desc    Generate a secure recovery token
+ * @access  Public
+ */
+const forgotPassword = async (req, res) => {
+  try {
+    const { email } = req.body;
+    if (!email) {
+      return res.status(400).json({ success: false, message: 'Please provide an email address' });
+    }
+
+    const cleanEmail = email.trim().toLowerCase();
+    const user = await User.findOne({ email: cleanEmail });
+    
+    let admin = null;
+    try {
+      const Admin = require('../models/admin.model');
+      admin = await Admin.findOne({ email: cleanEmail });
+    } catch (e) {}
+
+    if (!user && !admin) {
+      return res.status(200).json({ success: true, message: 'Password recovery token generated and sent to email.' });
+    }
+
+    const resetToken = crypto.randomBytes(32).toString('hex');
+    const resetTokenHash = crypto.createHash('sha256').update(resetToken).digest('hex');
+
+    if (user) {
+      user.resetPasswordToken = resetTokenHash;
+      user.resetPasswordExpire = Date.now() + 15 * 60 * 1000; // 15 mins
+      await user.save({ validateBeforeSave: false });
+    }
+
+    if (admin) {
+      admin.resetPasswordToken = resetTokenHash;
+      admin.resetPasswordExpire = Date.now() + 15 * 60 * 1000;
+      await admin.save({ validateBeforeSave: false });
+    }
+
+    // In a real application, send this token via Email. 
+    try {
+      const recipientName = (user && user.name) || (admin && admin.name) || 'User';
+      const portalBaseUrl = admin ? (process.env.ADMIN_PORTAL_URL || 'https://admin.whitecoat.academy') : (process.env.FRONTEND_URL || 'https://whitecoat.academy');
+      const resetUrl = `${portalBaseUrl}/reset-password?token=${resetToken}&email=${encodeURIComponent(cleanEmail)}`;
+      await sendPasswordResetEmail({ to: cleanEmail, name: recipientName, resetToken, resetUrl, expiresInMinutes: 15 });
+    } catch (e) {
+      console.error('[forgotPassword] Error sending email:', e.message);
+    }
+    return res.status(200).json({
+      success: true,
+      message: 'Password recovery token generated and sent to email.'
+    });
+  } catch (error) {
+    return res.status(500).json({ success: false, message: 'Server error', error: error.message });
+  }
+};
+
 /**
  * @route   POST /api/auth/reset-password
- * @route   PUT  /api/auth/reset-password
- * @route   POST /api/auth/update-password
- * @route   PUT  /api/auth/update-password
- * @desc    Direct password reset/update without OTP verification
+ * @desc    Reset password using recovery token
  * @access  Public
  */
 const resetPassword = async (req, res) => {
   try {
-    const {
-      email,
-      newPassword,
-      password,
-      confirmPassword,
-      confirmNewPassword,
-    } = req.body;
+    const { email, token, newPassword, password, confirmPassword } = req.body;
 
-    // 1. Email validation
-    if (!email || typeof email !== 'string' || !email.trim()) {
-      return res.status(400).json({
-        success: false,
-        message: 'Please provide a valid email address',
-      });
+    if (!email || !token) {
+      return res.status(400).json({ success: false, message: 'Please provide email and verification token' });
+    }
+
+    const targetPassword = newPassword || password;
+    if (!targetPassword || targetPassword.length < 6) {
+      return res.status(400).json({ success: false, message: 'Password must be at least 6 characters' });
+    }
+
+    if (confirmPassword && targetPassword !== confirmPassword) {
+      return res.status(400).json({ success: false, message: 'Passwords do not match' });
     }
 
     const cleanEmail = email.trim().toLowerCase();
-    if (!EMAIL_REGEX.test(cleanEmail)) {
-      return res.status(400).json({
-        success: false,
-        message: 'Please provide a valid email address',
-      });
-    }
+    const resetTokenHash = crypto.createHash('sha256').update(token).digest('hex');
 
-    // 2. New Password validation
-    const targetPassword = newPassword || password;
-    if (
-      !targetPassword ||
-      typeof targetPassword !== 'string' ||
-      !targetPassword.trim()
-    ) {
-      return res.status(400).json({
-        success: false,
-        message: 'Please provide a new password',
-      });
-    }
+    let user = await User.findOne({ 
+      email: cleanEmail,
+      resetPasswordToken: resetTokenHash,
+      resetPasswordExpire: { $gt: Date.now() }
+    });
 
-    if (targetPassword.length < 6) {
-      return res.status(400).json({
-        success: false,
-        message: 'Password must be at least 6 characters long',
-      });
-    }
-
-    // 3. Confirm Password check (if provided)
-    const targetConfirmPassword =
-      confirmPassword !== undefined ? confirmPassword : confirmNewPassword;
-    if (
-      targetConfirmPassword !== undefined &&
-      targetConfirmPassword !== null &&
-      targetConfirmPassword !== '' &&
-      targetPassword !== targetConfirmPassword
-    ) {
-      return res.status(400).json({
-        success: false,
-        message: 'New password and confirm password do not match',
-      });
-    }
-
-    // 4. Check user existence in DB
-    const user = await User.findOne({ email: cleanEmail });
     let admin = null;
-
     try {
       const Admin = require('../models/admin.model');
-      admin = await Admin.findOne({ email: cleanEmail });
-    } catch (e) {
-      // Admin model lookup is supplementary
-    }
+      admin = await Admin.findOne({ 
+        email: cleanEmail,
+        resetPasswordToken: resetTokenHash,
+        resetPasswordExpire: { $gt: Date.now() }
+      });
+    } catch (e) {}
 
     if (!user && !admin) {
-      return res.status(404).json({
-        success: false,
-        message: 'User not found with this email',
-      });
+      return res.status(400).json({ success: false, message: 'Invalid or expired recovery token' });
     }
 
-    // 5. Update and securely save (pre-save hook hashes with bcrypt automatically)
     if (user) {
       user.password = targetPassword;
+      user.resetPasswordToken = undefined;
+      user.resetPasswordExpire = undefined;
       await user.save();
     }
 
     if (admin) {
-      admin.password = targetPassword;
+      const salt = await bcrypt.genSalt(10);
+      admin.password = await bcrypt.hash(targetPassword, salt);
+      admin.tokenVersion = (admin.tokenVersion || 0) + 1;
+      admin.resetPasswordToken = undefined;
+      admin.resetPasswordExpire = undefined;
       await admin.save();
     }
 
+    return res.status(200).json({ success: true, message: 'Password updated successfully' });
+  } catch (error) {
+    return res.status(500).json({ success: false, message: 'Server error', error: error.message });
+  }
+};
+
+/**
+ * @route   POST /api/auth/update-password
+ * @desc    Change password (authenticated)
+ * @access  Private
+ */
+const updatePassword = async (req, res) => {
+  try {
+    const { oldPassword, newPassword, confirmPassword } = req.body;
+
+    if (!oldPassword || !newPassword) {
+      return res.status(400).json({ success: false, message: 'Please provide old and new password' });
+    }
+
+    if (newPassword.length < 6) {
+      return res.status(400).json({ success: false, message: 'New password must be at least 6 characters' });
+    }
+
+    if (confirmPassword && newPassword !== confirmPassword) {
+      return res.status(400).json({ success: false, message: 'Passwords do not match' });
+    }
+
+    const userId = req.user.id || req.user._id || req.user.userId;
+    let user = await User.findById(userId);
+    let admin = null;
+    let isMatch = false;
+
+    if (user) {
+      isMatch = await user.matchPassword(oldPassword);
+    } else {
+      try {
+        const Admin = require('../models/admin.model');
+        const bcrypt = require('bcryptjs');
+        admin = await Admin.findById(userId);
+        if (admin) isMatch = await bcrypt.compare(oldPassword, admin.password);
+      } catch(e) {}
+    }
+
+    if (!user && !admin) {
+      return res.status(404).json({ success: false, message: 'User not found' });
+    }
+
+    if (!isMatch) {
+      return res.status(401).json({ success: false, message: 'Incorrect old password' });
+    }
+
+    if (user) {
+      user.password = newPassword;
+      user.tokenVersion = (user.tokenVersion || 0) + 1;
+      await user.save();
+    }
+    if (admin) {
+      const bcrypt = require('bcryptjs');
+      admin.password = await bcrypt.hash(newPassword, 10);
+      admin.tokenVersion = (admin.tokenVersion || 0) + 1;
+      await admin.save();
+    }
+
+    return res.status(200).json({ success: true, message: 'Password updated successfully' });
+  } catch (error) {
+    return res.status(500).json({ success: false, message: 'Server error', error: error.message });
+  }
+};
+
+/**
+ * @route   POST /api/auth/refresh
+ * @route   POST /api/auth/refresh-token
+ * @desc    Exchange a valid refresh token for a fresh access token & rotated refresh token
+ * @access  Public
+ */
+const refreshTokenHandler = async (req, res) => {
+  try {
+    const rawRefreshToken =
+      (req.body && (req.body.refreshToken || req.body.token)) ||
+      req.headers['x-refresh-token'] ||
+      (req.headers.authorization && req.headers.authorization.startsWith('Bearer ')
+        ? req.headers.authorization.split(' ')[1]
+        : null);
+
+    if (!rawRefreshToken || typeof rawRefreshToken !== 'string' || !rawRefreshToken.trim()) {
+      return res.status(400).json({
+        success: false,
+        message: 'Refresh token is required',
+        code: 'REFRESH_TOKEN_REQUIRED',
+      });
+    }
+
+    const refreshToken = rawRefreshToken.trim();
+
+    let decoded;
+    try {
+      decoded = jwt.verify(refreshToken, getJwtRefreshSecret(), { clockTolerance: 60 });
+    } catch (err) {
+      if (err.name === 'TokenExpiredError') {
+        return res.status(401).json({
+          success: false,
+          message: 'Refresh token has expired. Please log in again.',
+          code: 'REFRESH_TOKEN_EXPIRED',
+          error: err.message,
+        });
+      }
+      return res.status(401).json({
+        success: false,
+        message: 'Invalid refresh token.',
+        code: 'REFRESH_TOKEN_INVALID',
+        error: err.message,
+      });
+    }
+
+    // Verify token type to prevent re-using access token as refresh token
+    if (decoded.type && decoded.type !== 'refresh') {
+      return res.status(401).json({
+        success: false,
+        message: 'Provided token is not a valid refresh token.',
+        code: 'INVALID_TOKEN_TYPE',
+      });
+    }
+
+    const userId = decoded.userId || decoded.id;
+    if (!userId) {
+      return res.status(401).json({
+        success: false,
+        message: 'Invalid refresh token payload.',
+        code: 'INVALID_TOKEN_PAYLOAD',
+      });
+    }
+
+    // Lookup user in primary User collection first
+    let user = await User.findById(userId);
+    let admin = null;
+    let userRole = decoded.role || 'student';
+
+    if (!user) {
+      try {
+        const Admin = require('../models/admin.model');
+        admin = await Admin.findById(userId);
+      } catch (e) {}
+    }
+
+    if (!user && !admin) {
+      return res.status(401).json({
+        success: false,
+        message: 'User associated with this token no longer exists.',
+        code: 'USER_NOT_FOUND',
+      });
+    }
+
+    const targetUser = user || admin;
+    userRole = (targetUser.role || userRole).toString().toLowerCase().trim();
+
+    // Revocation check: verify tokenVersion matches user's current tokenVersion
+    const currentVersion = targetUser.tokenVersion !== undefined ? targetUser.tokenVersion : 0;
+    const decodedVersion = decoded.tokenVersion !== undefined ? decoded.tokenVersion : 0;
+    if (decodedVersion !== currentVersion) {
+      return res.status(401).json({
+        success: false,
+        message: 'Session has been revoked or invalidated. Please log in again.',
+        code: 'SESSION_REVOKED',
+      });
+    }
+
+    // Enforce student approval and account status on refresh (cannot bypass)
+    let studentDoc = null;
+    if (userRole === 'student') {
+      if (Student) {
+        studentDoc = await Student.findOne({
+          $or: [
+            { userId: targetUser._id },
+            { email: targetUser.email ? targetUser.email.toLowerCase() : '' },
+          ],
+        });
+      }
+
+      const accountStatus = studentDoc ? studentDoc.accountStatus : targetUser.accountStatus;
+      const status = studentDoc ? studentDoc.status : targetUser.status;
+
+      // Block rejected or inactive
+      if (accountStatus === 'Rejected' || status === 'Inactive') {
+        return res.status(403).json({
+          success: false,
+          message: 'Your account has been rejected or deactivated. Session ended.',
+          code: 'ACCOUNT_DEACTIVATED',
+        });
+      }
+
+      // Require Approved or Active
+      if (accountStatus !== 'Approved' && status !== 'Active') {
+        return res.status(403).json({
+          success: false,
+          message: 'Your account is pending admin approval. Cannot refresh session.',
+          code: 'ACCOUNT_PENDING_APPROVAL',
+        });
+      }
+    }
+
+    // Generate fresh access token (with up-to-date course enrollment claims)
+    let newAccessToken;
+    if (admin && !user) {
+      const secret = process.env.JWT_SECRET || (process.env.NODE_ENV !== 'production' ? 'white_coat_academy_secret_jwt_key_2026_super_secure' : undefined);
+      newAccessToken = jwt.sign(
+        {
+          id: admin._id.toString(),
+          userId: admin._id.toString(),
+          adminId: admin._id.toString(),
+          email: admin.email,
+          role: userRole,
+        },
+        secret,
+        { expiresIn: process.env.JWT_EXPIRES_IN || '15m' }
+      );
+    } else {
+      newAccessToken = generateToken(user, studentDoc);
+    }
+
+    // Rotate refresh token
+    const newRefreshToken = generateRefreshToken(targetUser);
+
+    const userResponse = user
+      ? await buildUserResponse(user, studentDoc, { isLogin: true })
+      : {
+          id: admin._id.toString(),
+          _id: admin._id.toString(),
+          name: admin.name,
+          email: admin.email,
+          role: userRole,
+        };
+
     return res.status(200).json({
       success: true,
-      message: 'Password updated successfully',
+      message: 'Token refreshed successfully',
+      token: newAccessToken,
+      accessToken: newAccessToken,
+      refreshToken: newRefreshToken,
+      expiresIn: process.env.JWT_EXPIRES_IN || '15m',
+      role: userRole,
+      user: userResponse,
     });
   } catch (error) {
-    console.error('Reset/Update Password Error:', error);
+    console.error('Refresh Token Error:', error);
     return res.status(500).json({
       success: false,
-      message: 'Internal server error while updating password',
+      message: 'Internal server error during token refresh',
+      error: error.message,
+    });
+  }
+};
+
+/**
+ * @route   POST /api/auth/logout
+ * @desc    Revoke all active refresh sessions for the user by incrementing tokenVersion
+ * @access  Private (requireAuth)
+ */
+const logoutHandler = async (req, res) => {
+  try {
+    const userId = req.user?.id || req.user?.userId;
+    if (userId) {
+      await User.findByIdAndUpdate(userId, { $inc: { tokenVersion: 1 } });
+      try {
+        const Admin = require('../models/admin.model');
+        await Admin.findByIdAndUpdate(userId, { $inc: { tokenVersion: 1 } });
+      } catch (e) {}
+    }
+    return res.status(200).json({
+      success: true,
+      message: 'Logged out successfully. All sessions revoked.',
+    });
+  } catch (error) {
+    console.error('Logout Error:', error);
+    return res.status(500).json({
+      success: false,
+      message: 'Internal server error during logout',
       error: error.message,
     });
   }
@@ -1078,8 +1474,16 @@ module.exports = {
   getMe,
   updateUserRole,
   resetPassword,
-  updatePassword: resetPassword,
+  forgotPassword,
+  updatePassword,
+  updatePasswordDirect: updatePassword,
   resetPasswordDirect: resetPassword,
   generateToken,
+  generateRefreshToken,
+  getJwtRefreshSecret,
+  refreshToken: refreshTokenHandler,
+  refreshTokenHandler,
+  logout: logoutHandler,
+  logoutHandler,
   buildUserResponse,
 };

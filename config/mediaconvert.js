@@ -76,7 +76,7 @@ const mediaConvertConfig = {
   cookieDomain: (
     process.env.CLOUDFRONT_COOKIE_DOMAIN ||
     ''
-  ).trim(),
+  ).trim().replace(/^["']|["']$/g, ''),
 
   explicitEndpoint: (
     process.env.AWS_MEDIACONVERT_ENDPOINT ||
@@ -147,3 +147,4 @@ module.exports = {
   getMediaConvertEndpoint,
   getMediaConvertClient,
 };
+

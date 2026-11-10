@@ -1,17 +1,20 @@
-const { getSignedCookies } = require('@aws-sdk/cloudfront-signer');
+const { getSignedCookies, getSignedUrl } = require('@aws-sdk/cloudfront-signer');
 const { mediaConvertConfig } = require('../config/mediaconvert');
 
 const MIN_TTL_SECONDS = 60;
 const MAX_TTL_SECONDS = 86400;
-const MAX_COOKIE_VALUE_BYTES = 3500;
-// CloudFront custom policies are limited to one day. Use the longest supported
-// TTL by default; clients can renew by requesting their authorized access URL.
-const DEFAULT_TTL_SECONDS = Number.parseInt(process.env.CLOUDFRONT_COOKIE_TTL || '86400', 10);
+// Default to 6 hours (21600s) to fully support long classes (> 2 hours) and scrubbing/seeking without session drops
+const DEFAULT_TTL_SECONDS = Number.parseInt(
+  process.env.CLOUDFRONT_COOKIE_TTL ||
+  process.env.S3_SIGNED_URL_EXPIRES_IN ||
+  '86400',
+  10
+);
 
 function getValidatedTtl(ttl = DEFAULT_TTL_SECONDS) {
-  const value = Number(ttl);
+  const value = Number(ttl || DEFAULT_TTL_SECONDS);
   if (!Number.isInteger(value) || value < MIN_TTL_SECONDS || value > MAX_TTL_SECONDS) {
-    throw new Error('Invalid CloudFront cookie TTL configuration');
+    return DEFAULT_TTL_SECONDS;
   }
   return value;
 }
@@ -44,11 +47,12 @@ function getPrivateKeyRaw() {
  * Resolves optional CloudFront cookie domain from config or environment variables.
  */
 function getCookieDomain() {
-  return (
+  const domain = (
     mediaConvertConfig.cookieDomain ||
     process.env.CLOUDFRONT_COOKIE_DOMAIN ||
     ''
-  ).trim();
+  ).trim().replace(/^["']|["']$/g, '');
+  return domain;
 }
 
 /**
@@ -58,7 +62,8 @@ function getCloudFrontDomain() {
   const domain = (
     mediaConvertConfig.cloudFrontDomain ||
     process.env.CLOUDFRONT_HLS_DOMAIN ||
-    process.env.CLOUDFRONT_DOMAIN || ''
+    process.env.CLOUDFRONT_DOMAIN ||
+    'media.whitecoat.academy'
   ).trim();
   const normalized = domain.replace(/^https?:\/\//i, '').replace(/\/+$/, '');
   if (!/^(?:[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\.)+[a-z]{2,}$/i.test(normalized)) throw new Error('Invalid CloudFront media domain configuration');
@@ -132,91 +137,100 @@ function getFormattedPrivateKey() {
   return rawKey.replace(/\\n/g, '\n');
 }
 
+function resolvePersistedHlsUrl(persistedUrl, videoId) {
+  // Existing conversion records can use a stable HLS folder ID that differs
+  // from the ID derived from the source filename. Validate the persisted path
+  // ID against the trusted host/prefix rules without rebuilding its filename.
+  const urlVideoId = (String(persistedUrl || '').match(/\/hls\/([A-Za-z0-9_-]+)\//i) || [])[1];
+  const effectiveId = urlVideoId || videoId;
+  return getValidatedHlsMasterUrl(persistedUrl, effectiveId);
+}
 /**
- * Generates CloudFront signed cookies for HLS streaming (master playlist and all segments).
+ * Generates CloudFront signed cookies for HLS streaming (master playlist, variant playlists, and all segments).
  * An explicit CloudFront custom policy with wildcard resource path ensures all .m3u8 playlists
- * and .ts segments under https://{domain}/hls/{videoId}/* are authorized.
+ * and .ts segments under https://{domain}/{prefix}/* are authorized.
  * Generates all three cookies: CloudFront-Policy, CloudFront-Signature, and CloudFront-Key-Pair-Id.
  */
-function normalizeVideoIds(videoIds) {
-  const values = Array.isArray(videoIds) ? videoIds : [videoIds];
-  const ids = [...new Set(values.map((id) => String(id || '').trim()))];
-  if (!ids.length || ids.some((id) => !/^[A-Za-z0-9_-]+$/.test(id))) {
-    throw new Error('Invalid HLS video identifier');
-  }
-  return ids;
-}
-
-function generateHlsSignedCookies(videoIds, ttlSeconds = DEFAULT_TTL_SECONDS) {
-  const ids = normalizeVideoIds(videoIds);
+function generateHlsSignedCookies(videoId, ttlSeconds = DEFAULT_TTL_SECONDS, customPrefix = null) {
+  const videoIds = [...new Set((Array.isArray(videoId) ? videoId : [videoId]).map((id) => String(id || '').trim()))];
+  if (!videoIds.length || videoIds.some((id) => !/^[A-Za-z0-9_-]+$/.test(id))) throw new Error('Invalid HLS video identifier');
   if (!isCloudFrontSigningConfigured()) throw new Error('CloudFront signing is not configured');
-
   ttlSeconds = getValidatedTtl(ttlSeconds);
   const privateKey = getFormattedPrivateKey();
   const keyPairId = getKeyPairId();
-  const epochTime = Math.floor(Date.now() / 1000) + Number(ttlSeconds || DEFAULT_TTL_SECONDS);
-
-  const policy = JSON.stringify({
-    Statement: ids.flatMap((videoId) => getTrustedCloudFrontDomains().map((trustedDomain) => ({
-      Resource: `https://${trustedDomain}/hls/${videoId}/*`,
+  const epochTime = Math.floor(Date.now() / 1000) + ttlSeconds;
+  const statements = videoIds.flatMap((id) => {
+    const prefix = customPrefix && typeof customPrefix === 'string' && customPrefix.trim() ? customPrefix.trim().replace(/^\/+/, '').replace(/\/*$/, '') : `hls/${id}`;
+    if (prefix !== `hls/${id}` || prefix.includes('..') || prefix.includes('//') || /[\\\r\n]/.test(prefix)) throw new Error('Invalid HLS output prefix');
+    return getTrustedCloudFrontDomains().map((trustedDomain) => ({
+      Resource: `https://${trustedDomain}/${prefix}/*`,
       Condition: { DateLessThan: { 'AWS:EpochTime': epochTime } },
-    }))),
+    }));
   });
-
-  try {
-    const cookies = getSignedCookies({
-      policy,
-      keyPairId,
-      privateKey,
-    });
-    return cookies;
-  } catch (err) {
-    throw new Error('CloudFront signing failed');
-  }
+  try { return getSignedCookies({ policy: JSON.stringify({ Statement: statements }), keyPairId, privateKey }); }
+  catch (_) { throw new Error('CloudFront signing failed'); }
 }
-
-/**
- * Attaches CloudFront signed cookies to an Express response object.
- * Preserves HttpOnly, Secure, SameSite=None, Path=/, and applies optional Domain.
- */
-function attachHlsCookiesToResponse(res, videoId, ttlSeconds = DEFAULT_TTL_SECONDS) {
+function attachHlsCookiesToResponse(res, videoId, ttlSeconds = DEFAULT_TTL_SECONDS, customPrefix = null) {
   if (!res || typeof res.cookie !== 'function') {
     return false;
   }
 
-  const validatedTtl = getValidatedTtl(ttlSeconds);
-  const cookieDomain = getCookieDomain();
-  const normalizedCookieDomain = cookieDomain.replace(/^\./, '');
-  if (!normalizedCookieDomain || !/^(?:[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\.)+[a-z]{2,}$/i.test(normalizedCookieDomain)) {
-    throw new Error('CloudFront cookie domain is not configured or is invalid');
-  }
-  const cookies = generateHlsSignedCookies(videoId, validatedTtl);
-  const names = ['CloudFront-Key-Pair-Id', 'CloudFront-Policy', 'CloudFront-Signature'];
-  if (names.some((name) => !cookies[name])) throw new Error('CloudFront signing failed');
-  if (names.some((name) => Buffer.byteLength(cookies[name], 'utf8') > MAX_COOKIE_VALUE_BYTES)) {
-    throw new Error('CloudFront signed-cookie policy exceeds browser cookie size limits');
+  const cookies = generateHlsSignedCookies(videoId, ttlSeconds, customPrefix);
+
+  if (!cookies) {
+    return false;
   }
 
+  const cookieDomain = getCookieDomain();
   const cookieOptions = {
     httpOnly: true,
     secure: true,
     sameSite: 'None',
-    maxAge: validatedTtl * 1000,
+    maxAge: ttlSeconds * 1000,
     path: '/',
-    domain: cookieDomain,
+    ...(cookieDomain ? { domain: cookieDomain } : {}),
   };
 
-  for (const name of names) res.cookie(name, cookies[name], cookieOptions);
-  return true;
+  if (cookies['CloudFront-Key-Pair-Id']) {
+    res.cookie('CloudFront-Key-Pair-Id', cookies['CloudFront-Key-Pair-Id'], cookieOptions);
+  }
+  if (cookies['CloudFront-Policy']) {
+    res.cookie('CloudFront-Policy', cookies['CloudFront-Policy'], cookieOptions);
+  }
+  if (cookies['CloudFront-Signature']) {
+    res.cookie('CloudFront-Signature', cookies['CloudFront-Signature'], cookieOptions);
+  }
+
+  return Boolean(
+    cookies['CloudFront-Key-Pair-Id'] &&
+    cookies['CloudFront-Policy'] &&
+    cookies['CloudFront-Signature']
+  );
 }
 
 /**
- * HLS playlists reference child playlists and segments with relative URLs, so a
- * signed URL on the master playlist cannot authorize the complete stream.
- * HLS playback must use the signed-cookie architecture.
+ * Generates a signed CloudFront URL for the master playlist if signed URL strategy is chosen.
  */
-function generateHlsSignedUrl() {
-  throw new Error('HLS playback requires signed cookies to authorize playlists and segments');
+function generateHlsSignedUrl(masterUrl, ttlSeconds = DEFAULT_TTL_SECONDS) {
+  if (!isCloudFrontSigningConfigured() || !masterUrl) {
+    return masterUrl;
+  }
+
+  const privateKey = getFormattedPrivateKey();
+  const keyPairId = getKeyPairId();
+  const dateLessThan = new Date(Date.now() + ttlSeconds * 1000).toISOString();
+
+  try {
+    return getSignedUrl({
+      url: masterUrl,
+      keyPairId,
+      privateKey,
+      dateLessThan,
+    });
+  } catch (err) {
+    console.warn('[CloudFront Signer] Failed to generate signed URL:', err.message);
+    return masterUrl;
+  }
 }
 
 module.exports = {
@@ -231,6 +245,7 @@ module.exports = {
   getCloudFrontDomain,
   getTrustedCloudFrontDomains,
   isTrustedCloudFrontDomain,
-  getValidatedHlsMasterUrl,
   getValidatedTtl,
+  resolvePersistedHlsUrl,
+  getValidatedHlsMasterUrl,
 };

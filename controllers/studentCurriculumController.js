@@ -1,12 +1,130 @@
+const mongoose = require('mongoose');
 const Course = require('../models/Course');
 const Student = require('../models/Student');
 const LessonProgress = require('../models/LessonProgress');
 const CourseProgress = require('../models/CourseProgress');
 const ContentItemProgress = require('../models/ContentItemProgress');
+const { HeadObjectCommand } = require('@aws-sdk/client-s3');
+const { s3Client, bucket } = require('../config/s3');
 const { verifyStudentCourseAccess } = require('../utils/courseAccessHelper');
 const { logActivity } = require('../utils/activityLogger');
-const { signS3Reference } = require('../utils/s3MediaSigner');
-const { attachVerifiedHlsStream, collectCurriculumHlsVideoIds, attachCurriculumHlsCookies } = require('../utils/studentCurriculumHls');
+const { signS3Reference, normalizeS3Reference, resolveMediaRecord } = require('../utils/s3MediaSigner');
+const { calculateCourseTotalDurationMinutes } = require('../utils/courseDurationHelper');
+const {
+  attachVerifiedHlsStream: attachVerifiedHlsMetadata,
+  attachCurriculumHlsCookies,
+  collectCurriculumHlsVideoIds,
+} = require('../utils/studentCurriculumHls');
+
+const isWebmMedia = (resource) => {
+  const s3Key = String(resource?.s3Key || '').trim().toLowerCase();
+  if (s3Key.endsWith('.mp4') || s3Key.endsWith('.m4v')) return false;
+  const reference = resource?.s3Key || resource?.url || resource?.secure_url || resource?.fileUrl || '';
+  try {
+    return new URL(reference, 'https://media.invalid').pathname.toLowerCase().endsWith('.webm');
+  } catch (_) {
+    return String(reference).split(/[?#]/)[0].toLowerCase().endsWith('.webm');
+  }
+};
+
+const hasSafeMp4Key = (key) => typeof key === 'string' &&
+  /^videos\/[a-zA-Z0-9][a-zA-Z0-9._/-]*\.(mp4|m4v)$/i.test(key) &&
+  !key.includes('..') && !key.includes('//') && !/[\\\r\n]/.test(key);
+
+const hasSafeM4vKey = (key) => typeof key === 'string' &&
+  /^videos\/[a-zA-Z0-9][a-zA-Z0-9._\/-]*\.m4v$/i.test(key) &&
+  !key.includes('..') && !key.includes('//') && !/[\\\r\n]/.test(key);
+
+
+const attachVerifiedHlsStream = attachVerifiedHlsMetadata;
+
+const attachVerifiedM4vRendition = async (resource) => {
+  if (!resource || typeof resource !== 'object') return resource;
+  const output = { ...resource };
+  for (const field of ['m4vUrl', 'iosM4vUrl', 'iosVideoUrl', 'fallbackM4vUrl']) delete output[field];
+
+  let m4vKey = String(resource.m4vS3Key || '').trim();
+  let status = resource.m4vConversionStatus || 'none';
+
+  if (!m4vKey && resource.s3Key) {
+    try {
+      const VideoConversion = require('../models/VideoConversion');
+      const conversion = await VideoConversion.findOne({ originalS3Key: resource.s3Key }).lean();
+      if (conversion) {
+        status = conversion.status;
+        if (conversion.status === 'completed' && conversion.m4vS3Key) {
+          m4vKey = conversion.m4vS3Key;
+        }
+      }
+    } catch (_) {}
+  }
+
+  output.m4vConversionStatus = status;
+  if (!m4vKey || !hasSafeM4vKey(m4vKey)) return output;
+
+  try {
+    const metadata = await s3Client.send(new HeadObjectCommand({ Bucket: bucket, Key: m4vKey }));
+    if (!(Number(metadata?.ContentLength) > 0)) return output;
+    const signed = await signS3Reference({
+      storageProvider: 's3',
+      s3Key: m4vKey,
+      contentType: 'video/mp4',
+      resourceType: 'video',
+      title: resource.title || resource.fileName || '',
+    }, 'video/mp4');
+    if (!signed?.url) return output;
+    output.m4vS3Key = m4vKey;
+    output.m4vStorageProvider = 's3';
+    output.m4vUrl = signed.url;
+    output.iosM4vUrl = signed.url;
+    output.iosVideoUrl = signed.url;
+    output.m4vConversionStatus = 'completed';
+  } catch (_) {
+    return output;
+  }
+  return output;
+};
+
+const attachVerifiedMp4Fallback = async (resource) => {
+  if (!resource || typeof resource !== 'object') return resource;
+  const output = { ...resource };
+  // Never pass through stale or caller-supplied fallback URLs. A fallback is
+  // returned only after verifying the explicitly stored S3 object exists.
+  for (const field of ['mp4Url', 'fallbackMp4Url', 'fallbackVideoUrl', 'fallbackMp4S3Key', 'fallbackS3Key', 'mp4S3Key', 'mp4StorageProvider']) delete output[field];
+  if (!isWebmMedia(resource)) {
+    delete output.mp4S3Key;
+    delete output.mp4StorageProvider;
+    return output;
+  }
+
+  const key = String(resource.mp4S3Key || '').trim();
+  if (resource.mp4StorageProvider !== 's3' || !hasSafeMp4Key(key)) {
+    delete output.mp4S3Key;
+    delete output.mp4StorageProvider;
+    return output;
+  }
+
+  try {
+    const metadata = await s3Client.send(new HeadObjectCommand({ Bucket: bucket, Key: key }));
+    if (!(Number(metadata?.ContentLength) > 0) || String(metadata?.ContentType || '').toLowerCase() !== 'video/mp4') return output;
+    const fallback = await signS3Reference({
+      storageProvider: 's3',
+      s3Key: key,
+      contentType: 'video/mp4',
+      resourceType: 'video',
+      title: resource.title || resource.fileName || '',
+    }, 'video/mp4');
+    if (!fallback?.url) return output;
+    output.mp4S3Key = key;
+    output.mp4StorageProvider = 's3';
+    output.mp4Url = fallback.url;
+    output.fallbackVideoUrl = fallback.url;
+  } catch (error) {
+    // A missing/unavailable rendition must not break the existing WebM item.
+    return output;
+  }
+  return output;
+};
 
 const isDirectS3Url = (value) => {
   try {
@@ -57,43 +175,130 @@ const addSignedS3MediaUrls = async (course) => {
       for (const [field, type] of [['videoParts', undefined], ['pdfNotes', 'application/pdf'], ['assignments', undefined], ['attachments', undefined]]) {
         if (Array.isArray(lesson[field])) {
           lesson[field] = await Promise.all(lesson[field].map(async (resource) => {
-            const signed = await signS3Reference(resource, type);
-            return field === 'videoParts' ? attachHlsStreamSafely(signed) : signed;
+            const mediaType = field === 'videoParts'
+              ? (isWebmMedia(resource) ? 'video/webm' : 'video/mp4')
+              : type;
+            const resolved = await resolveMediaRecord(resource, { responseContentType: mediaType, course });
+            if (field === 'videoParts') {
+              const withMp4 = await attachVerifiedMp4Fallback(resolved);
+              const withM4v = await attachVerifiedM4vRendition(withMp4);
+              return attachHlsStreamSafely(withM4v);
+            }
+            return resolved;
           }));
         }
       }
-      const legacyVideoKey = lesson.videoS3Key || lesson.s3Key;
-      if (legacyVideoKey && !(lesson.videoParts || []).length && (!lesson.videoUrl || isDirectS3Url(lesson.videoUrl))) {
-        const signedLegacyVideo = await signS3Reference({
-          storageProvider: 's3',
-          s3Key: legacyVideoKey,
-          resourceType: 'video',
-          contentType: 'video/mp4',
-        });
-        const legacyVideo = await attachHlsStreamSafely(signedLegacyVideo);
-        lesson.videoParts = [legacyVideo];
-        lesson.videoUrl = legacyVideo.url || '';
-        for (const field of ['hlsMasterUrl', 'hlsPlaybackUrl', 'hlsOutputPrefix', 'hlsConversionStatus', 'mediaConvertJobId', 'hlsConversionError', 'playbackType']) {
-          if (legacyVideo[field] !== undefined) lesson[field] = legacyVideo[field];
+      const firstVideo = (lesson.videoParts || []).find((resource) => resource.storageProvider === 's3' && resource.s3Key);
+      if (firstVideo) {
+        if (firstVideo.m4vUrl) {
+          lesson.m4vUrl = firstVideo.m4vUrl;
+          lesson.iosM4vUrl = firstVideo.m4vUrl;
+          lesson.iosVideoUrl = firstVideo.m4vUrl;
+          lesson.m4vS3Key = firstVideo.m4vS3Key;
+          lesson.m4vStorageProvider = firstVideo.m4vStorageProvider;
+          lesson.m4vConversionStatus = firstVideo.m4vConversionStatus;
         }
-      }
-      const primaryVideo = (lesson.videoParts || [])[0];
-      if (primaryVideo) {
-        const primaryUrl = primaryVideo.url || primaryVideo.secure_url || primaryVideo.secureUrl || '';
-        if (primaryUrl) lesson.videoUrl = primaryUrl;
-      }
-      const primaryS3Key = primaryVideo?.storageProvider === 's3'
-        ? (primaryVideo.s3Key || primaryVideo.videoS3Key || '')
-        : '';
-      const lessonHls = await attachHlsStreamSafely({
-        ...lesson,
-        s3Key: primaryS3Key,
-        videoS3Key: '',
-        hlsMasterUrl: primaryVideo?.storageProvider === 's3' ? primaryVideo.hlsMasterUrl : '',
-        hlsConversionStatus: primaryVideo?.storageProvider === 's3' ? primaryVideo.hlsConversionStatus : 'none',
-      });
-      for (const field of ['hlsMasterUrl', 'hlsPlaybackUrl', 'hlsConversionStatus', 'hlsOutputPrefix', 'mediaConvertJobId', 'hlsConversionError', 'playbackType']) {
-        if (lessonHls[field] !== undefined) lesson[field] = lessonHls[field];
+        if (firstVideo.mp4Url) {
+          lesson.mp4Url = firstVideo.mp4Url;
+          lesson.fallbackVideoUrl = firstVideo.fallbackVideoUrl || firstVideo.mp4Url;
+          lesson.fallbackMp4Url = firstVideo.fallbackVideoUrl || firstVideo.mp4Url;
+          lesson.mp4S3Key = firstVideo.mp4S3Key;
+          lesson.mp4StorageProvider = firstVideo.mp4StorageProvider;
+        }
+        if (firstVideo.hlsMasterUrl) {
+          lesson.hlsMasterUrl = firstVideo.hlsMasterUrl;
+          lesson.hlsPlaybackUrl = firstVideo.hlsPlaybackUrl || firstVideo.hlsMasterUrl;
+          lesson.playbackType = firstVideo.playbackType || 'hls';
+        } else {
+          lesson.hlsMasterUrl = '';
+          lesson.playbackType = firstVideo.playbackType || 'mp4';
+        }
+        if (firstVideo.hlsConversionStatus && firstVideo.hlsConversionStatus !== 'NONE') {
+          lesson.hlsConversionStatus = firstVideo.hlsConversionStatus;
+        }
+        if (firstVideo.hlsOutputPrefix) {
+          lesson.hlsOutputPrefix = firstVideo.hlsOutputPrefix;
+        }
+        if (firstVideo.mediaConvertJobId) {
+          lesson.mediaConvertJobId = firstVideo.mediaConvertJobId;
+        }
+        if (firstVideo.hlsConversionError) {
+          lesson.hlsConversionError = firstVideo.hlsConversionError;
+        }
+        const isLessonUrlLiveVideo = lesson.videoUrl &&
+          !lesson.videoUrl.includes('meet.google.com') &&
+          !lesson.videoUrl.includes('tel.meet') &&
+          !lesson.videoUrl.includes('amazonaws.com') &&
+          !lesson.videoUrl.includes('X-Amz-Signature') &&
+          lesson.videoUrl.includes('cloudinary.com');
+        if (!isLessonUrlLiveVideo) {
+          const compatibleUrl = firstVideo.mp4Url || firstVideo.m4vUrl || firstVideo.url;
+          lesson.videoUrl = compatibleUrl;
+        }
+      } else if (!firstVideo && (lesson.videoS3Key || lesson.s3Key || lesson.storageProvider === 's3' || (lesson.videoUrl && (lesson.videoUrl.includes('.amazonaws.com/') || lesson.videoUrl.startsWith('videos/'))))) {
+        const candidateKey = lesson.videoS3Key || lesson.s3Key || (lesson.videoUrl && lesson.videoUrl.startsWith('videos/') ? lesson.videoUrl : undefined);
+        const s3Ref = normalizeS3Reference({
+          storageProvider: 's3',
+          s3Key: candidateKey,
+          videoUrl: lesson.videoUrl,
+        });
+        if (s3Ref && s3Ref.s3Key) {
+          const videoType = (s3Ref.s3Key || '').toLowerCase().endsWith('.webm') ? 'video/webm' : 'video/mp4';
+          const signed = await signS3Reference(s3Ref, videoType);
+          if (signed?.url) {
+            lesson.videoUrl = signed.url;
+          }
+          const withM4v = await attachVerifiedM4vRendition({
+              ...s3Ref,
+              m4vS3Key: lesson.m4vS3Key,
+              m4vStorageProvider: lesson.m4vStorageProvider || 's3',
+              m4vConversionStatus: lesson.m4vConversionStatus,
+            });
+            if (withM4v?.m4vUrl) {
+              lesson.m4vUrl = withM4v.m4vUrl;
+              lesson.iosM4vUrl = withM4v.m4vUrl;
+              lesson.iosVideoUrl = withM4v.m4vUrl;
+              lesson.m4vS3Key = withM4v.m4vS3Key;
+              lesson.m4vStorageProvider = withM4v.m4vStorageProvider;
+              lesson.m4vConversionStatus = withM4v.m4vConversionStatus;
+            }
+            if (videoType === 'video/webm' && lesson.mp4S3Key) {
+            const fallbackRef = await attachVerifiedMp4Fallback({
+              ...s3Ref,
+              mp4S3Key: lesson.mp4S3Key,
+              mp4StorageProvider: lesson.mp4StorageProvider || 's3',
+            });
+            if (fallbackRef?.mp4Url) {
+              lesson.mp4Url = fallbackRef.mp4Url;
+              lesson.fallbackVideoUrl = fallbackRef.fallbackVideoUrl;
+              lesson.fallbackMp4Url = fallbackRef.mp4Url;
+            }
+          }
+          const withHls = await attachHlsStreamSafely(withM4v);
+          if (withHls?.hlsMasterUrl) {
+            lesson.hlsMasterUrl = withHls.hlsMasterUrl;
+            lesson.hlsPlaybackUrl = withHls.hlsPlaybackUrl || withHls.hlsMasterUrl;
+            lesson.playbackType = withHls.playbackType || 'hls';
+          } else if (withHls?.hlsConversionStatus && withHls.hlsConversionStatus !== 'NONE') {
+            lesson.hlsMasterUrl = '';
+            lesson.playbackType = withHls.playbackType || 'mp4';
+          }
+          if (withHls?.hlsConversionStatus && withHls.hlsConversionStatus !== 'NONE') {
+            lesson.hlsConversionStatus = withHls.hlsConversionStatus;
+          }
+          if (withHls?.hlsOutputPrefix) {
+            lesson.hlsOutputPrefix = withHls.hlsOutputPrefix;
+          }
+          if (withHls?.mediaConvertJobId) {
+            lesson.mediaConvertJobId = withHls.mediaConvertJobId;
+          }
+          if (withHls?.hlsConversionError) {
+            lesson.hlsConversionError = withHls.hlsConversionError;
+          }
+          if (!Array.isArray(lesson.videoParts) || lesson.videoParts.length === 0) {
+            lesson.videoParts = [withHls];
+          }
+        }
       }
       const firstPdf = (lesson.pdfNotes || []).find((resource) => resource.storageProvider === 's3' && resource.s3Key);
       if (firstPdf && !lesson.pdfUrl) {
@@ -259,6 +464,7 @@ function buildProgressSummary(course, contentProgressDocs, studyTimeSeconds = 0)
   return {
     courseId: course.courseId || (course._id ? course._id.toString() : ''),
     courseObjId: course._id ? course._id.toString() : '',
+    totalDurationMinutes: calculateCourseTotalDurationMinutes(course),
     totalItems,
     totalLessons: totalItems,        // alias kept for backward-compat
     completedItems,
@@ -356,6 +562,7 @@ async function resolveStudent(reqUser) {
 function ensureAbsoluteUrl(url) {
   if (!url) return '';
   if (url.startsWith('http://') || url.startsWith('https://')) return url;
+  if (/^(?:meet\.google\.com|tel\.meet|zoom\.us|teams\.microsoft\.com)/i.test(url)) return `https://${url}`;
   const baseUrl = process.env.BASE_URL || 'https://homeopathybackend-1.onrender.com';
   const cleanUrl = url.startsWith('/') ? url : `/${url}`;
   return `${baseUrl}${cleanUrl}`;
@@ -375,8 +582,21 @@ function formatCourseForStudent(courseDoc) {
     course.modules = course.modules.map((mod) => {
       if (Array.isArray(mod.lessons)) {
         mod.lessons = mod.lessons.map((les) => {
-          if (les.videoUrl) les.videoUrl = ensureAbsoluteUrl(les.videoUrl);
-          if (les.meetingUrl) les.meetingUrl = ensureAbsoluteUrl(les.meetingUrl);
+          if (les.videoUrl) {
+            les.videoUrl = ensureAbsoluteUrl(les.videoUrl);
+            if (/meet\.google\.com|tel\.meet/i.test(les.videoUrl) && !les.meetingUrl) {
+              les.meetingUrl = les.videoUrl;
+            }
+          }
+          if (les.meetingUrl) {
+            // Strip accidental expired S3 video/PDF URLs stored in meetingUrl
+            if (!/meet\.google\.com|tel\.meet|zoom\.us|teams/i.test(les.meetingUrl) &&
+                (les.meetingUrl.includes('.amazonaws.com') || les.meetingUrl.includes('X-Amz-Signature') || /\.mp4|\.webm/i.test(les.meetingUrl))) {
+              les.meetingUrl = '';
+            } else {
+              les.meetingUrl = ensureAbsoluteUrl(les.meetingUrl);
+            }
+          }
 
           ['videoParts', 'pdfNotes', 'assignments', 'attachments'].forEach((resKey) => {
             if (Array.isArray(les[resKey])) {
@@ -412,6 +632,8 @@ function formatCourseForStudent(courseDoc) {
     });
   }
 
+  course.totalDurationMinutes = calculateCourseTotalDurationMinutes(course);
+
   return course;
 }
 
@@ -428,18 +650,31 @@ const getMyCourses = async (req, res) => {
     if (isStaff) {
       courses = await Course.find({ status: 'Published' }).sort({ createdAt: -1 });
     } else {
-      const courseRef = student?.courseRef || req.user?.courseRef;
-      const courseId = student?.courseId || req.user?.courseId || student?.registeredCourseId || req.user?.registeredCourseId;
+      // ── Multi-course: build OR query from all enrolled course IDs ────────────
+      const { getStudentEnrolledCourseIds } = require('../utils/courseAccessHelper');
+      const { rawIds, objectIds } = getStudentEnrolledCourseIds(student || {
+        courseId: req.user?.courseId,
+        courseRef: req.user?.courseRef,
+        courseIds: req.user?.courseIds || [],
+        course: req.user?.course,
+      });
+
+      // Also include course title string from student/user
       const courseTitle = student?.course || req.user?.course || req.user?.preferredCourse;
+
       const queryOr = [];
 
-      if (courseRef && require('mongoose').Types.ObjectId.isValid(courseRef)) {
-        queryOr.push({ _id: courseRef });
+      if (objectIds.length > 0) {
+        queryOr.push({ _id: { $in: objectIds } });
       }
-      if (courseId) {
-        queryOr.push({ courseId: courseId });
-        if (require('mongoose').Types.ObjectId.isValid(courseId)) {
-          queryOr.push({ _id: courseId });
+      if (rawIds.length > 0) {
+        queryOr.push({ courseId: { $in: rawIds } });
+        // Also try matching ObjectId _id for any valid ObjectIds in rawIds
+        const objIdMatches = rawIds
+          .filter(id => require('mongoose').Types.ObjectId.isValid(id))
+          .map(id => new (require('mongoose').Types.ObjectId)(id));
+        if (objIdMatches.length > 0) {
+          queryOr.push({ _id: { $in: objIdMatches } });
         }
       }
       if (courseTitle) {
@@ -448,16 +683,21 @@ const getMyCourses = async (req, res) => {
       }
 
       if (queryOr.length > 0) {
-        courses = await Course.find({ $or: queryOr });
+        courses = await Course.find({
+          $and: [
+            { $or: queryOr },
+            { status: new RegExp('^published$', 'i') },
+          ]
+        });
       }
 
       if (!courses || courses.length === 0) {
-        courses = await Course.find({ status: 'Published' }).sort({ createdAt: -1 });
+        courses = await Course.find({ status: new RegExp('^published$', 'i') }).sort({ createdAt: -1 });
       }
     }
 
     if (!isStaff && (!courses || courses.length === 0)) {
-      courses = await Course.find({}).sort({ createdAt: -1 }).limit(1);
+      courses = await Course.find({ status: new RegExp('^published$', 'i') }).sort({ createdAt: -1 }).limit(1);
     }
 
     const formatted = await Promise.all(courses.map(async (c) => {
@@ -516,6 +756,7 @@ const getMyCourses = async (req, res) => {
         thumbnail: formattedCourse.thumbnail || formattedCourse.bannerUrl,
         bannerUrl: formattedCourse.bannerUrl,
         duration: formattedCourse.duration,
+        totalDurationMinutes: calculateCourseTotalDurationMinutes(formattedCourse),
         modules: formattedCourse.modules || [],
         totalModules: Array.isArray(formattedCourse.modules) ? formattedCourse.modules.length : (c.modules ? c.modules.length : totalModules),
         totalLessons: summary.totalLessons,
@@ -551,6 +792,7 @@ const getMyCourses = async (req, res) => {
   }
 };
 
+
 /**
  * GET /api/student/courses/:courseId/learn
  * Fetch full course curriculum with subscription gate verification
@@ -570,6 +812,13 @@ const getMyCourseContent = async (req, res) => {
     }
 
     if (!course) {
+      return res.status(404).json({
+        success: false,
+        message: 'Course not found',
+      });
+    }
+
+    if (!isStaff && String(course.status || '').toLowerCase() !== 'published') {
       return res.status(404).json({
         success: false,
         message: 'Course not found',
@@ -717,12 +966,14 @@ const getMyCourseContent = async (req, res) => {
     formattedCourse.status = summary.status;
     formattedCourse.studyTimeSeconds = summary.studyTimeSeconds;
     formattedCourse.studyTimeHours = summary.studyTimeHours;
+    formattedCourse.totalDurationMinutes = calculateCourseTotalDurationMinutes(formattedCourse);
 
     attachCurriculumHlsCookies(res, formattedCourse);
     return res.status(200).json({
       success: true,
       data: {
         course: formattedCourse,
+        totalDurationMinutes: formattedCourse.totalDurationMinutes,
         progress: progressMap,
         summary: summary,
         progressSummary: summary,
@@ -748,6 +999,7 @@ const getMyCourseContent = async (req, res) => {
       progressPercentage: summary.completionPercentage,
       percentage: summary.percentage,
       progress: summary.progress,
+      totalDurationMinutes: formattedCourse.totalDurationMinutes,
       totalLessons: summary.totalLessons,
       completedLessons: summary.completedLessons,
       status: summary.status,
@@ -1179,6 +1431,7 @@ const getMyProgress = async (req, res) => {
       status: summary.status,
       studyTimeSeconds: summary.studyTimeSeconds,
       studyTimeHours: summary.studyTimeHours,
+      totalDurationMinutes: summary.totalDurationMinutes || calculateCourseTotalDurationMinutes(course),
     });
   } catch (error) {
     console.error('getMyProgress Error:', error);
@@ -1348,8 +1601,12 @@ module.exports = {
   buildProgressSummary,
   saveCourseSummary,
   extractDurationSeconds,
+  formatCourseForStudent,
+  attachVerifiedMp4Fallback,
+  attachVerifiedM4vRendition,
+  hasSafeM4vKey,
   attachVerifiedHlsStream,
-  collectCurriculumHlsVideoIds,
   attachCurriculumHlsCookies,
+  collectCurriculumHlsVideoIds,
   addSignedS3MediaUrls,
 };

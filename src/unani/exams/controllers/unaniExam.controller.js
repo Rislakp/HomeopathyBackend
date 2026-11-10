@@ -1,3 +1,4 @@
+const mongoose = require('mongoose');
 const unaniExamService = require('../services/unaniExam.service');
 const {
   validateUnaniExamCreateOrUpdate,
@@ -361,6 +362,13 @@ async function startExam(req, res) {
       });
     }
 
+    if (testData.error) {
+      return res.status(403).json({
+        success: false,
+        message: testData.error,
+      });
+    }
+
     return res.status(200).json({
       success: true,
       message: 'Unani exam started successfully.',
@@ -435,6 +443,13 @@ async function getResultById(req, res) {
       return res.status(404).json({
         success: false,
         message: 'Unani exam result not found.',
+      });
+    }
+
+    if (result.mismatchedExam) {
+      return res.status(400).json({
+        success: false,
+        message: result.message || 'Result does not belong to the specified exam.',
       });
     }
 
@@ -681,7 +696,8 @@ async function submitStudentExam(req, res) {
  */
 async function getStudentResultByExam(req, res) {
   try {
-    const result = await unaniExamService.getStudentResultByExam(req.params.examId, req.user);
+    const resultId = req.query?.resultId || req.params?.resultId;
+    const result = await unaniExamService.getStudentResultByExam(req.params.examId, req.user, resultId);
     if (result.notFound) {
       return res.status(404).json({
         success: false,
@@ -704,6 +720,338 @@ async function getStudentResultByExam(req, res) {
     return res.status(500).json({
       success: false,
       message: 'Failed to fetch Unani exam result.',
+      error: error.message,
+    });
+  }
+}
+
+/**
+ * PUT/POST /api/unani-exams/:examId/rank-image
+ * Update Unani Rank Student Profile Image
+ */
+async function updateRankImage(req, res) {
+  try {
+    const { examId } = req.params;
+    const studentId = (req.body && req.body.studentId) || (req.query && req.query.studentId);
+    const finalUrl = (req.body && (req.body.imageUrl || req.body.profileImage || req.body.avatar)) || '';
+
+    const result = await unaniExamService.updateRankImage(examId, studentId, finalUrl);
+    if (result.error) {
+      return res.status(result.status || 400).json({
+        success: false,
+        message: result.error,
+      });
+    }
+
+    return res.status(200).json({
+      success: true,
+      message: 'Unani rank student profile image updated successfully',
+      data: result,
+    });
+  } catch (error) {
+    return res.status(500).json({
+      success: false,
+      message: 'Failed to update Unani rank student profile image',
+      error: error.message,
+    });
+  }
+}
+
+/**
+ * DELETE /api/unani-exams/:examId/rank-image
+ * Delete Unani Rank Student Profile Image
+ */
+async function deleteRankImage(req, res) {
+  try {
+    const { examId } = req.params;
+    const studentId = (req.body && req.body.studentId) || (req.query && req.query.studentId);
+
+    const result = await unaniExamService.deleteRankImage(examId, studentId);
+    if (result.error) {
+      return res.status(result.status || 400).json({
+        success: false,
+        message: result.error,
+      });
+    }
+
+    return res.status(200).json({
+      success: true,
+      message: 'Unani rank student profile image removed successfully',
+      data: result,
+    });
+  } catch (error) {
+    return res.status(500).json({
+      success: false,
+      message: 'Failed to delete Unani rank student profile image',
+      error: error.message,
+    });
+  }
+}
+
+/**
+ * GET /api/unani-exams/student/:examId/answer-key
+ * GET /api/unani-exams/:examId/answer-key
+ * GET /api/unani-exams/:examId/results/:resultId/answer-key
+ * Retrieve Answer Key (Student completed attempt or Admin master/evaluation)
+ */
+async function getAnswerKey(req, res) {
+  try {
+    const examId = req.params.examId || req.params.id;
+    const resultId = req.params.resultId || req.query?.resultId || req.body?.resultId;
+    const userRole = String(req.user?.role || '').toLowerCase().trim();
+    const isAdmin = ['admin', 'superadmin'].includes(userRole);
+
+    let result;
+    if (isAdmin) {
+      result = await unaniExamService.getAdminExamAnswerKey(examId, req.user, {
+        resultId,
+        studentId: req.query.studentId,
+      });
+    } else {
+      result = await unaniExamService.getStudentExamAnswerKey(examId, req.user, resultId);
+    }
+
+    if (result.notFound) {
+      return res.status(404).json({
+        success: false,
+        message: result.message || 'Unani exam or result not found.',
+      });
+    }
+
+    if (result.forbidden) {
+      return res.status(403).json({
+        success: false,
+        message: result.message || 'Forbidden: Access to this answer key is restricted.',
+      });
+    }
+
+    if (result.unauthenticated) {
+      return res.status(401).json({
+        success: false,
+        message: result.message || 'Unauthorized: Student identity could not be resolved.',
+      });
+    }
+
+    return res.status(200).json({
+      success: true,
+      data: result.data,
+    });
+  } catch (error) {
+    return res.status(500).json({
+      success: false,
+      message: 'Failed to retrieve Unani answer key.',
+      error: error.message,
+    });
+  }
+}
+
+/**
+ * GET/POST /api/unani-exams/student/:examId/answer-key/download
+ * GET/POST /api/unani-exams/:examId/answer-key/download
+ * GET/POST /api/unani-exams/:examId/results/:resultId/answer-key/download
+ * Generate and download watermarked PDF answer key for Unani exam
+ */
+async function downloadAnswerKeyPDF(req, res) {
+  try {
+    const examId = req.params.examId || req.params.id;
+    const resultId = req.params.resultId || req.query?.resultId || req.body?.resultId;
+    const userRole = String(req.user?.role || '').toLowerCase().trim();
+    const isAdmin = ['admin', 'superadmin'].includes(userRole);
+
+    let authResult;
+    if (isAdmin) {
+      authResult = await unaniExamService.getAdminExamAnswerKey(examId, req.user, {
+        resultId,
+        studentId: req.query.studentId || req.body?.studentId,
+      });
+    } else {
+      authResult = await unaniExamService.getStudentExamAnswerKey(examId, req.user, resultId);
+    }
+
+    if (authResult.notFound) {
+      return res.status(404).json({
+        success: false,
+        message: authResult.message || 'Unani exam or result not found.',
+      });
+    }
+
+    if (authResult.forbidden) {
+      return res.status(403).json({
+        success: false,
+        message: authResult.message || 'Forbidden: A completed attempt is required to download this answer key.',
+      });
+    }
+
+    if (authResult.unauthenticated) {
+      return res.status(401).json({
+        success: false,
+        message: authResult.message || 'Unauthorized: Student identity could not be resolved.',
+      });
+    }
+
+    const { exam, result } = authResult;
+
+    // Resolve user details for watermark/header
+    let userDetails = {
+      id: req.user ? (req.user.id || req.user.userId || req.user.studentId) : null,
+      name: req.user ? req.user.name : null,
+      email: req.user ? req.user.email : null,
+      role: req.user ? req.user.role : 'student',
+    };
+
+    if (!userDetails.name || !userDetails.email) {
+      let StudentModel;
+      let UserModel;
+      try { StudentModel = require('../../../../models/Student'); } catch (e) {}
+      try { UserModel = require('../../../../models/User'); } catch (e) {}
+
+      if (userDetails.id) {
+        let uDoc = null;
+        if (StudentModel && mongoose.Types.ObjectId.isValid(userDetails.id)) {
+          uDoc = await StudentModel.findById(userDetails.id).lean();
+        }
+        if (!uDoc && UserModel && mongoose.Types.ObjectId.isValid(userDetails.id)) {
+          uDoc = await UserModel.findById(userDetails.id).lean();
+        }
+        if (uDoc) {
+          userDetails.name = userDetails.name || uDoc.name;
+          userDetails.email = userDetails.email || uDoc.email;
+        }
+      }
+    }
+
+    userDetails.name = userDetails.name || 'Student';
+    userDetails.email = userDetails.email || 'N/A';
+    userDetails.id = userDetails.id || 'N/A';
+
+    const pdfBuffer = await unaniExamService.generateUnaniAnswerKeyPDF(exam, userDetails, result);
+
+    const safeTitle = (exam.title || 'unani_exam').toLowerCase().replace(/[^a-z0-9_-]/g, '_');
+    const filename = `unani-${safeTitle}-answer-key.pdf`;
+
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+    res.setHeader('Content-Length', pdfBuffer.length);
+    res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+
+    return res.status(200).send(pdfBuffer);
+  } catch (error) {
+    console.error('Error generating Unani watermarked answer key PDF:', error);
+    return res.status(500).json({
+      success: false,
+      message: 'Failed to generate watermarked answer key PDF.',
+      error: error.message,
+    });
+  }
+}
+
+/**
+ * PUT /api/unani-exams/:examId/answer-key
+ * PATCH /api/unani-exams/:examId/answer-key
+ * Bulk update/manage question answer keys for an Unani exam (Admin only)
+ */
+async function updateAnswerKey(req, res) {
+  try {
+    const examId = req.params.examId || req.params.id;
+    const result = await unaniExamService.updateExamAnswerKey(examId, req.body);
+
+    if (result.error) {
+      return res.status(result.status || 400).json({
+        success: false,
+        message: result.error,
+      });
+    }
+
+    return res.status(200).json({
+      success: true,
+      message: 'Unani exam answer key updated successfully.',
+      updatedCount: result.updatedCount,
+      totalQuestions: result.totalQuestions,
+      data: result.data,
+    });
+  } catch (error) {
+    return res.status(500).json({
+      success: false,
+      message: 'Failed to update Unani exam answer key.',
+      error: error.message,
+    });
+  }
+}
+
+
+/**
+ * GET /api/unani-exams/student/:examId/eligibility
+ * Check reattempt eligibility for an Unani exam
+ */
+async function checkReattemptEligibility(req, res) {
+  try {
+    const result = await unaniExamService.checkReattemptEligibility(req.params.examId, req.user);
+    if (result.notFound) {
+      return res.status(404).json({
+        success: false,
+        eligible: false,
+        message: result.message || 'Unani exam not found',
+        reason: result.message || 'Unani exam not found',
+      });
+    }
+    if (result.unauthorized) {
+      return res.status(401).json({
+        success: false,
+        eligible: false,
+        message: result.message || 'Unauthorized',
+        reason: result.message || 'Unauthorized',
+      });
+    }
+
+    return res.status(200).json({
+      success: true,
+      ...result,
+    });
+  } catch (error) {
+    return res.status(500).json({
+      success: false,
+      eligible: false,
+      message: 'Failed to check Unani exam eligibility.',
+      reason: error.message,
+    });
+  }
+}
+
+
+/**
+ * GET /api/unani-exams/student/results
+ * GET /api/unani-exams/student/:examId/results
+ * GET /api/unani-exams/student/:examId/history
+ * Fetch student Unani result history (all attempts)
+ */
+async function getStudentResultHistory(req, res) {
+  try {
+    const examId = req.params.examId || req.query.examId;
+    const result = await unaniExamService.getStudentResultHistory(req.user, { examId });
+
+    if (result.unauthenticated) {
+      return res.status(401).json({
+        success: false,
+        message: result.message || 'Authentication required.',
+      });
+    }
+
+    if (result.notFound) {
+      return res.status(404).json({
+        success: false,
+        message: result.message || 'Unani exam not found.',
+      });
+    }
+
+    return res.status(200).json({
+      success: true,
+      count: result.count,
+      data: result.data,
+    });
+  } catch (error) {
+    return res.status(500).json({
+      success: false,
+      message: 'Failed to fetch Unani result history.',
       error: error.message,
     });
   }
@@ -734,4 +1082,11 @@ module.exports = {
   getStudentExamById,
   submitStudentExam,
   getStudentResultByExam,
+  getStudentResultHistory,
+  updateRankImage,
+  deleteRankImage,
+  getAnswerKey,
+  downloadAnswerKeyPDF,
+  updateAnswerKey,
+  checkReattemptEligibility,
 };

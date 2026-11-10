@@ -1,4 +1,4 @@
-﻿require('dotenv').config({ path: require('path').join(__dirname, '.env') });
+require('dotenv').config({ path: require('path').join(__dirname, '.env') });
 
 // â”€â”€ Process-level safety net â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 // Catches any async promise rejection that escapes a try/catch.
@@ -30,8 +30,14 @@ if (!fs.existsSync(uploadsDir)) {
 
 const app = express();
 
+if (process.env.NODE_ENV === 'production' && !process.env.JWT_SECRET) {
+  console.error('FATAL ERROR: JWT_SECRET environment variable is missing in production environment.');
+  process.exit(1);
+}
+
 // CORS Allowlist
 const allowedOrigins = [
+  'https://unani-landing-screen.onrender.com',
   'https://whitecoat.academy',
   'https://www.whitecoat.academy',
   'https://admin.whitecoat.academy',
@@ -53,14 +59,23 @@ const allowedOrigins = [
   'http://localhost:5173',
 ];
 
-if (process.env.ALLOWED_ORIGINS) {
-  process.env.ALLOWED_ORIGINS.split(',').forEach((origin) => {
-    const trimmed = origin.trim();
-    if (trimmed && !allowedOrigins.includes(trimmed)) {
-      allowedOrigins.push(trimmed);
-    }
-  });
-}
+// Support environment variables (ALLOWED_ORIGINS, CORS_ORIGINS, CORS_ORIGIN)
+const envOriginVars = [
+  process.env.ALLOWED_ORIGINS,
+  process.env.CORS_ORIGINS,
+  process.env.CORS_ORIGIN,
+];
+
+envOriginVars.forEach((envVar) => {
+  if (envVar) {
+    envVar.split(',').forEach((origin) => {
+      const trimmed = origin.trim().replace(/^["']|["']$/g, '').replace(/\/+$/, '');
+      if (trimmed && !allowedOrigins.some((o) => o.replace(/\/+$/, '') === trimmed)) {
+        allowedOrigins.push(trimmed);
+      }
+    });
+  }
+});
 
 // Helper to check if origin is localhost or 127.0.0.1 on any port (http or https)
 const isLocalhostOrigin = (origin) => {
@@ -71,11 +86,15 @@ const isLocalhostOrigin = (origin) => {
 const isOriginAllowed = (origin) => {
   if (!origin) return true; // Mobile apps, Postman, curl, server-to-server
 
-  // Direct allowlist match
-  if (allowedOrigins.includes(origin)) return true;
+  const cleanOrigin = origin.trim().replace(/\/+$/, '');
+
+  // Direct allowlist match (normalized)
+  if (allowedOrigins.some((allowed) => allowed.trim().replace(/\/+$/, '') === cleanOrigin)) {
+    return true;
+  }
 
   // Localhost & 127.0.0.1 dynamic development ports (Flutter Web, Vite, React, etc.)
-  if (isLocalhostOrigin(origin)) {
+  if (isLocalhostOrigin(cleanOrigin)) {
     return true;
   }
 
@@ -87,17 +106,17 @@ const isOriginAllowed = (origin) => {
     /^https?:\/\/(10\.0\.2\.2|0\.0\.0\.0)(:\d+)?$/i,
   ];
 
-  if (domainPatterns.some((pattern) => pattern.test(origin))) {
+  if (domainPatterns.some((pattern) => pattern.test(cleanOrigin))) {
     return true;
   }
 
   // Mobile WebViews and hybrid app schemes
   if (
-    origin.startsWith('file://') ||
-    origin.startsWith('capacitor://') ||
-    origin.startsWith('ionic://') ||
-    origin.startsWith('tauri://') ||
-    origin.startsWith('app://')
+    cleanOrigin.startsWith('file://') ||
+    cleanOrigin.startsWith('capacitor://') ||
+    cleanOrigin.startsWith('ionic://') ||
+    cleanOrigin.startsWith('tauri://') ||
+    cleanOrigin.startsWith('app://')
   ) {
     return true;
   }
@@ -125,6 +144,7 @@ const corsOptionsDelegate = (req, callback) => {
     'Content-Type',
     'Accept',
     'Origin',
+    'Range',
     'X-Requested-With',
     'x-student-id',
     'x-user-id',
@@ -143,8 +163,8 @@ const corsOptionsDelegate = (req, callback) => {
     credentials: true,
     methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS', 'HEAD'],
     allowedHeaders: allowedHeaders,
-    exposedHeaders: ['Content-Range', 'X-Content-Range', 'ETag', 'Authorization'],
-    optionsSuccessStatus: 200,
+    exposedHeaders: ['Content-Range', 'X-Content-Range', 'Accept-Ranges', 'Content-Length', 'Content-Type', 'ETag', 'Authorization'],
+    optionsSuccessStatus: 204,
     maxAge: 86400,
   });
 };
@@ -163,11 +183,20 @@ app.use(express.urlencoded({ limit: '1mb', extended: true }));
 app.use(requestLogger);
 
 // â”€â”€ Request timeout middleware â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-// Uses 120s timeout for video uploads/recordings, 30s for general REST endpoints.
+// Upload routes (video/recording/demo-video) get 5 minutes to complete the
+// full cycle: receive body → S3 multipart upload → DB save → JSON response.
+// General REST endpoints are capped at 30 seconds.
 app.use((req, res, next) => {
   const url = (req.originalUrl || req.url || '').toLowerCase();
-  const isUploadRoute = url.includes('/upload') || url.includes('/recordings') || url.includes('/media');
-  const timeoutMs = isUploadRoute ? 60000 : 30000;
+  const isUploadRoute =
+    url.includes('/upload') ||
+    url.includes('/recording') ||
+    url.includes('/live-record') ||
+    url.includes('/demo-video') ||
+    url.includes('/media') ||
+    ((req.method === 'POST' || req.method === 'PUT' || req.method === 'PATCH') &&
+      (url.includes('/lessons') || url.includes('/courses')));
+  const timeoutMs = isUploadRoute ? 300000 : 30000;
 
   res.setTimeout(timeoutMs, () => {
     if (!res.headersSent) {
@@ -270,6 +299,9 @@ app.use('/api/media', require('./routes/uploadRoutes'));
 app.use('/api/uploads', require('./routes/uploadRoutes'));
 app.use('/api/upload-image', require('./routes/uploadRoutes'));
 app.use('/api/s3-upload', require('./routes/s3UploadRoutes'));
+app.use('/api/s3', require('./routes/s3UploadRoutes'));
+app.use('/api/v1/s3', require('./routes/s3UploadRoutes'));
+app.post('/api/webhooks/mediaconvert', require('./controllers/s3UploadController').handleMediaConvertWebhook);
 
 app.use('/courses', require('./routes/studentCurriculumRoutes'));
 app.use('/api/courses', require('./routes/courseRoutes'));
@@ -277,23 +309,33 @@ app.use('/api/v1/courses', require('./routes/courseRoutes'));
 app.use('/api/admin/courses', require('./routes/adminCourseRoutes'));
 app.use('/api/v1/demo-videos', require('./routes/demoVideoRoutes'));
 app.use('/api/demo-videos', require('./routes/demoVideoRoutes'));
-app.use('/api/subscriptions', require('./routes/subscriptionPlanRoutes'));
-app.use('/api/v1/subscriptions', require('./routes/subscriptionPlanRoutes'));
+// Subscriptions and Plans
+const subscriptionPlanRoutes = require('./routes/subscriptionPlanRoutes');
+const subscriptionPlanController = require('./controllers/subscriptionPlanController');
+app.use('/api/subscriptions', subscriptionPlanRoutes);
+app.use('/api/v1/subscriptions', subscriptionPlanRoutes);
+app.use('/subscriptions', subscriptionPlanRoutes);
+app.get('/api/plans', subscriptionPlanController.getActiveSubscriptionPlans);
+app.get('/api/v1/plans', subscriptionPlanController.getActiveSubscriptionPlans);
+app.get('/plans', subscriptionPlanController.getActiveSubscriptionPlans);
+
 app.use('/api', require('./routes/recordingRoutes'));
 app.use('/api/v1', require('./routes/recordingRoutes'));
-
-
 
 const unaniSubscriptionRoutes = require('./src/unani/subscriptions/routes/unaniSubscription.routes');
 app.use(unaniSubscriptionRoutes);
 
+// Student Faculty routes (public/student access)
 const studentFacultyRoutes = require('./routes/studentFacultyRoutes');
 app.use('/api/student/faculty', studentFacultyRoutes);
 app.use('/api/v1/student/faculty', studentFacultyRoutes);
+app.use('/student/faculty', studentFacultyRoutes);
 
 // Student curriculum and progress routes
-app.use('/api/student', require('./routes/studentCurriculumRoutes'));
-app.use('/api/v1/student', require('./routes/studentCurriculumRoutes'));
+const studentCurriculumRoutes = require('./routes/studentCurriculumRoutes');
+app.use('/api/student', studentCurriculumRoutes);
+app.use('/api/v1/student', studentCurriculumRoutes);
+app.use('/student', studentCurriculumRoutes);
 
 // Student self-service profile and management routes
 const studentProfileRoutes = require('./routes/studentRoutes');
@@ -301,14 +343,14 @@ app.use('/api/students', studentProfileRoutes);
 app.use('/api/v1/students', studentProfileRoutes);
 app.use('/api/student', studentProfileRoutes);
 app.use('/api/v1/student', studentProfileRoutes);
+app.use('/student', studentProfileRoutes);
 app.use('/api/admin/students', require('./routes/adminStudentRoutes'));
 app.use('/api/v1/admin/students', require('./routes/adminStudentRoutes'));
+
 
 const rankImageRoutes = require('./routes/academicExamRankImage.routes');
 app.use('/api/exams', rankImageRoutes);
 app.use('/api/v1/exams', rankImageRoutes);
-app.use('/api/unani-exams', require('./routes/unaniExamRoutes'));
-app.use('/api/v1/unani-exams', require('./routes/unaniExamRoutes'));
 
 const examRoutes = require('./routes/exam.routes');
 app.use(examRoutes);
@@ -318,6 +360,10 @@ const adminExamRoutes = require('./src/admin/admin.routes');
 app.use(adminExamRoutes);
 const unaniExamRoutes = require('./src/unani/exams/routes/unaniExam.routes');
 app.use(unaniExamRoutes);
+const unaniRankRoutes = require('./src/unani/ranks/routes/unaniRank.routes');
+app.use(unaniRankRoutes);
+const unaniReviewRoutes = require('./src/unani/reviews/routes/unaniReview.routes');
+app.use(unaniReviewRoutes);
 
 const facultyRoutes = require('./routes/facultyRoutes');
 app.use('/api/faculty', facultyRoutes);
@@ -356,8 +402,11 @@ app.use((err, req, res, next) => {
 
 const PORT = process.env.PORT || 5000;
 
+const loadHlsSecrets = require('./utils/loadHlsSecrets');
+
 const startServer = async () => {
   try {
+    await loadHlsSecrets();
     await connectDB();
     const { seedInitialAdmin } = require('./controllers/adminAuthController');
     await seedInitialAdmin();
@@ -366,10 +415,11 @@ const startServer = async () => {
       console.log(`ðŸš€ Server running on port ${PORT}`);
     });
 
-    // Normal requests are capped by middleware at 30s; route-level response
-    // timeouts allow uploads/extraction up to 60s. Do not leave a 10-minute
-    // global socket timeout that masks stalled database work.
-    server.timeout = 35000;
+    // Disable the Node.js socket-level timeout so that the per-route
+    // res.setTimeout() middleware is the sole timeout mechanism.
+    // Render's reverse proxy enforces its own outer deadline (26 min),
+    // so we do not need a redundant socket cut that races with large uploads.
+    server.timeout = 0;
     server.keepAliveTimeout = 65000;
     server.headersTimeout = 66000;
 

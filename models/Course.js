@@ -1,5 +1,6 @@
 const mongoose = require('mongoose');
 const Counter = require('./Counter');
+const { calculateCourseTotalDurationMinutes } = require('../utils/courseDurationHelper');
 
 // Shared subdocument schema for any file/resource (video part, PDF note, attachment)
 const resourceSchema = new mongoose.Schema({
@@ -21,12 +22,24 @@ const resourceSchema = new mongoose.Schema({
   bytes:         { type: Number, default: 0 },
   storageProvider: { type: String, trim: true, default: '' },
   s3Key:         { type: String, trim: true, default: '' },
-  hlsMasterUrl: { type: String, trim: true, default: '' },
-  hlsOutputPrefix: { type: String, trim: true, default: '' },
-  mediaConvertJobId: { type: String, trim: true, default: '' },
-  hlsConversionStatus: { type: String, enum: ['none', 'pending', 'processing', 'completed', 'failed', 'PENDING', 'PROCESSING', 'COMPLETED', 'FAILED'], default: 'none' },
-  hlsConversionError: { type: String, trim: true, default: '' },
-  hlsConvertedAt: { type: Date, default: null },
+  // Optional, explicitly attached H.264/AAC rendition for WebM playback fallback.
+  mp4S3Key:      { type: String, trim: true, default: '' },
+  mp4StorageProvider: { type: String, trim: true, default: '' },
+  m4vS3Key:      { type: String, trim: true, default: '' },
+  m4vStorageProvider: { type: String, trim: true, default: '' },
+  m4vConversionStatus: { type: String, enum: ['none', 'pending', 'processing', 'completed', 'failed'], default: 'none' },
+  m4vConversionError: { type: String, trim: true, default: '' },
+  originalVideoUrl:    { type: String, trim: true, default: '' },
+  hlsMasterUrl:        { type: String, trim: true, default: '' },
+  hlsOutputPrefix:     { type: String, trim: true, default: '' },
+  mediaConvertJobId:   { type: String, trim: true, default: '' },
+  hlsConversionStatus: {
+    type: String,
+    enum: ['none', 'pending', 'processing', 'completed', 'failed', 'PENDING', 'PROCESSING', 'COMPLETED', 'FAILED'],
+    default: 'none',
+  },
+  hlsConversionError:  { type: String, trim: true, default: '' },
+  hlsConvertedAt:      { type: Date, default: null },
   resourceType:  { type: String, trim: true, default: '' },
   fileName:      { type: String, trim: true, default: '' },
   originalFileName: { type: String, trim: true, default: '' },
@@ -130,19 +143,43 @@ const lessonSchema = new mongoose.Schema({
     trim: true,
     default: '',
   },
-  // Source key fields let MediaConvert lifecycle updates stay attached to legacy lessons.
-  s3Key: { type: String, trim: true, default: '' },
-  videoS3Key: { type: String, trim: true, default: '' },
   videoParts:   { type: [resourceSchema], default: [] },
-  hlsMasterUrl: { type: String, trim: true, default: '' },
-  hlsOutputPrefix: { type: String, trim: true, default: '' },
-  mediaConvertJobId: { type: String, trim: true, default: '' },
-  hlsConversionStatus: { type: String, enum: ['none', 'pending', 'processing', 'completed', 'failed', 'PENDING', 'PROCESSING', 'COMPLETED', 'FAILED'], default: 'none' },
-  hlsConversionError: { type: String, trim: true, default: '' },
-  hlsConvertedAt: { type: Date, default: null },
   pdfNotes:     { type: [resourceSchema], default: [] },
   assignments:  { type: [resourceSchema], default: [] },
   attachments:  { type: [resourceSchema], default: [] },
+  videoS3Key:   { type: String, trim: true, default: '' },
+  s3Key:        { type: String, trim: true, default: '' },
+  storageProvider: { type: String, trim: true, default: '' },
+  storageProvider: {
+    type: String,
+    trim: true,
+    default: '',
+  },
+  s3Key: {
+    type: String,
+    trim: true,
+    default: '',
+  },
+  videoS3Key: {
+    type: String,
+    trim: true,
+    default: '',
+  },
+  m4vS3Key: { type: String, trim: true, default: '' },
+  m4vStorageProvider: { type: String, trim: true, default: '' },
+  m4vConversionStatus: { type: String, enum: ['none', 'pending', 'processing', 'completed', 'failed'], default: 'none' },
+  m4vConversionError: { type: String, trim: true, default: '' },
+  originalVideoUrl:    { type: String, trim: true, default: '' },
+  hlsMasterUrl:        { type: String, trim: true, default: '' },
+  hlsOutputPrefix:     { type: String, trim: true, default: '' },
+  mediaConvertJobId:   { type: String, trim: true, default: '' },
+  hlsConversionStatus: {
+    type: String,
+    enum: ['none', 'pending', 'processing', 'completed', 'failed', 'PENDING', 'PROCESSING', 'COMPLETED', 'FAILED'],
+    default: 'none',
+  },
+  hlsConversionError:  { type: String, trim: true, default: '' },
+  hlsConvertedAt:      { type: Date, default: null },
   status: {
     type: String,
     enum: ['Published', 'Draft'],
@@ -308,6 +345,11 @@ courseSchema.virtual('totalModules').get(function() {
 // Virtual for enrolledCount
 courseSchema.virtual('enrolledCount').get(function() {
   return this.enrolledStudents ? this.enrolledStudents.length : 0;
+});
+
+// Virtual for totalDurationMinutes (configured course duration in minutes derived from modules/lessons)
+courseSchema.virtual('totalDurationMinutes').get(function() {
+  return calculateCourseTotalDurationMinutes(this);
 });
 
 // Auto-generate unique courseId before validation

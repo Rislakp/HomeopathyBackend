@@ -1,6 +1,7 @@
 const User = require('../models/User');
 let Student;
 try { Student = require('../models/Student'); } catch (e) { /* optional */ }
+const { calculateCourseTotalDurationMinutes } = require('../utils/courseDurationHelper');
 
 const EMAIL_REGEX = /^\w+([\.-]?\w+)*@\w+([\.-]?\w+)*(\.\w{2,3})+$/;
 
@@ -27,6 +28,24 @@ const buildProfileResponse = async (user, studentDoc = null) => {
   const resolvedPhone = (studentDoc && (studentDoc.phone || studentDoc.contactNumber)) || user.phone || user.contactNumber || '';
   const canonicalId = (user && user._id) ? user._id.toString() : ((studentDoc && studentDoc._id) ? studentDoc._id.toString() : (user.id || ''));
 
+  // ── Multi-course: collect all enrolled course IDs ─────────────────────────
+  const seenIds = new Set();
+  const registeredCourseIds = [];
+  const addRCId = (id) => {
+    const s = String(id || '').trim();
+    if (!s || seenIds.has(s)) return;
+    seenIds.add(s);
+    registeredCourseIds.push(s);
+  };
+  if (studentDoc) {
+    if (Array.isArray(studentDoc.courseIds)) studentDoc.courseIds.forEach(addRCId);
+    if (studentDoc.courseId) addRCId(studentDoc.courseId);
+    if (studentDoc.courseRef) addRCId(String(studentDoc.courseRef));
+  }
+  if (Array.isArray(user.courseIds)) user.courseIds.forEach(addRCId);
+  if (user.courseId) addRCId(user.courseId);
+  if (courseId) addRCId(courseId);
+
   const base = {
     _id: canonicalId,
     id: canonicalId,
@@ -35,13 +54,20 @@ const buildProfileResponse = async (user, studentDoc = null) => {
     role: (user.role || 'student').toLowerCase().trim(),
     phone: resolvedPhone,
     contactNumber: resolvedPhone,
+    // Legacy single-course fields (backward compatibility)
     registeredCourseId: courseId || '',
     courseId: courseId || '',
     course: courseTitle,
     preferredCourse: user.preferredCourse || courseTitle,
     courseRef: courseRef ? courseRef.toString() : null,
+    // Multi-course fields
+    courseIds: registeredCourseIds,
+    registeredCourseIds: registeredCourseIds,
     dateOfBirth: (studentDoc && studentDoc.dateOfBirth) || user.dateOfBirth || '',
     qualification: (studentDoc && studentDoc.qualification) || user.qualification || '',
+    collegeName: (studentDoc && studentDoc.collegeName) || user.collegeName || '',
+    college_name: (studentDoc && studentDoc.collegeName) || user.collegeName || '',
+    college: (studentDoc && studentDoc.collegeName) || user.collegeName || '',
     subscription: (studentDoc && studentDoc.subscription) || 'Free',
     subscriptionStatus: (studentDoc && studentDoc.subscriptionStatus) || user.subscriptionStatus || (studentDoc && studentDoc.subscription ? 'Active' : 'None'),
     subscriptionExpiresAt: (studentDoc && studentDoc.subscriptionExpiresAt) || null,
@@ -108,6 +134,7 @@ const buildProfileResponse = async (user, studentDoc = null) => {
         courseTitle: targetCourse.courseTitle || courseTitle || 'Assigned Course',
         thumbnail: targetCourse.thumbnail || targetCourse.bannerUrl || '',
         bannerUrl: targetCourse.bannerUrl || targetCourse.thumbnail || '',
+        totalDurationMinutes: calculateCourseTotalDurationMinutes(targetCourse),
         totalModules: Array.isArray(targetCourse.modules) ? targetCourse.modules.length : 0,
         totalLessons: summary.totalLessons,
         completedLessons: summary.completedLessons,
@@ -232,6 +259,9 @@ const getProfile = async (req, res) => {
         courseId: studentDoc.courseId || '',
         registeredCourseId: studentDoc.courseId || '',
         courseRef: studentDoc.courseRef || null,
+        // Multi-course
+        courseIds: Array.isArray(studentDoc.courseIds) ? studentDoc.courseIds : [],
+        registeredCourseIds: Array.isArray(studentDoc.courseIds) ? studentDoc.courseIds : [],
         dateOfBirth: studentDoc.dateOfBirth || '',
         qualification: studentDoc.qualification || '',
         subscription: studentDoc.subscription || 'Free',
@@ -375,6 +405,9 @@ const updateProfile = async (req, res) => {
       'dateOfBirth',
       'dob',
       'qualification',
+      'collegeName',
+      'college_name',
+      'college',
       'preferredCourse',
       'course',
     ];
@@ -412,6 +445,11 @@ const updateProfile = async (req, res) => {
 
     if (req.body.qualification !== undefined) {
       updates.qualification = req.body.qualification.toString().trim();
+    }
+
+    if (req.body.collegeName !== undefined || req.body.college_name !== undefined || req.body.college !== undefined) {
+      const collegeVal = (req.body.collegeName !== undefined ? req.body.collegeName : (req.body.college_name !== undefined ? req.body.college_name : req.body.college || '')).toString().trim();
+      updates.collegeName = collegeVal;
     }
 
     if (req.body.preferredCourse !== undefined || req.body.course !== undefined) {
@@ -470,6 +508,8 @@ const updateProfile = async (req, res) => {
           studentUpdates.dateOfBirth = updates.dateOfBirth;
         if (updates.qualification !== undefined)
           studentUpdates.qualification = updates.qualification;
+        if (updates.collegeName !== undefined)
+          studentUpdates.collegeName = updates.collegeName;
         if (updates.preferredCourse !== undefined) {
           studentUpdates.preferredCourse = updates.preferredCourse;
           studentUpdates.course = updates.preferredCourse;
