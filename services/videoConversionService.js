@@ -1,6 +1,7 @@
 const fs = require('fs');
 const path = require('path');
-const { spawn, execFile } = require('child_process');
+const os = require('os');
+const { spawn, execFile, execFileSync } = require('child_process');
 const {
   GetObjectCommand,
   HeadObjectCommand,
@@ -16,9 +17,89 @@ const Course = require('../models/Course');
 const Recording = require('../models/Recording');
 
 /**
+ * Checks whether FFmpeg and FFprobe binaries are available and executable.
+ * Supports custom paths via FFMPEG_PATH and FFPROBE_PATH environment variables.
+ */
+function checkBinaryAvailability() {
+  const ffmpegCmd = (process.env.FFMPEG_PATH || 'ffmpeg').trim();
+  const ffprobeCmd = (process.env.FFPROBE_PATH || 'ffprobe').trim();
+  let ffmpegVer = null;
+  let ffprobeVer = null;
+  let err = null;
+
+  try {
+    const out = execFileSync(ffmpegCmd, ['-version'], {
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'ignore'],
+      timeout: 10000,
+    });
+    ffmpegVer = out.split('\n')[0].trim();
+  } catch (e) {
+    err = `FFmpeg binary '${ffmpegCmd}' is not executable: ${e.message}`;
+  }
+
+  try {
+    const out = execFileSync(ffprobeCmd, ['-version'], {
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'ignore'],
+      timeout: 10000,
+    });
+    ffprobeVer = out.split('\n')[0].trim();
+  } catch (e) {
+    const ffprobeErr = `FFprobe binary '${ffprobeCmd}' is not executable: ${e.message}`;
+    err = err ? `${err}; ${ffprobeErr}` : ffprobeErr;
+  }
+
+  return {
+    available: !err,
+    ffmpegVersion: ffmpegVer,
+    ffprobeVersion: ffprobeVer,
+    ffmpegPath: ffmpegCmd,
+    ffprobePath: ffprobeCmd,
+    error: err || null,
+  };
+}
+
+/**
+ * Calculates FFmpeg GOP parameters dynamically targeting approximately a 2-second keyframe interval.
+ * Note: These options apply ONLY when encoding video; do NOT apply to '-c copy' remuxing.
+ *
+ * @param {number|string} fps - Input/target frame rate (e.g. 24, 29.97, 30, '30000/1001')
+ * @returns {string[]} Array of FFmpeg CLI arguments
+ */
+function calculateGopOptions(fps) {
+  let numFps = 30;
+  if (typeof fps === 'number' && Number.isFinite(fps) && fps > 0) {
+    numFps = fps;
+  } else if (typeof fps === 'string') {
+    if (fps.includes('/')) {
+      const [num, den] = fps.split('/').map(Number);
+      if (den && Number.isFinite(num / den) && num / den > 0) {
+        numFps = num / den;
+      }
+    } else {
+      const parsed = parseFloat(fps);
+      if (Number.isFinite(parsed) && parsed > 0) {
+        numFps = parsed;
+      }
+    }
+  }
+
+  const validFps = Math.min(Math.max(numFps, 1), 120);
+  const gopSize = Math.max(12, Math.round(validFps * 2.0));
+
+  return [
+    '-g', String(gopSize),
+    '-keyint_min', String(gopSize),
+    '-sc_threshold', '0',
+  ];
+}
+
+/**
  * Validates whether binary file has 'moov' atom before 'mdat' atom (FastStart).
  */
 function hasFastStartMoov(filePath) {
+  if (!fs.existsSync(filePath)) return false;
   const fd = fs.openSync(filePath, 'r');
   try {
     const fileSize = fs.fstatSync(fd).size;
@@ -55,12 +136,14 @@ function hasFastStartMoov(filePath) {
 }
 
 /**
- * Runs ffprobe to extract format and stream metadata as JSON.
+ * Runs ffprobe to extract format and stream metadata as JSON with timeout protection.
  */
-async function probeMedia(target, ffprobeCmd = 'ffprobe') {
+async function probeMedia(target, ffprobeCmd = null, timeoutMs = 30000) {
+  const cmd = ffprobeCmd || process.env.FFPROBE_PATH || 'ffprobe';
   return new Promise((resolve, reject) => {
-    execFile(
-      ffprobeCmd,
+    let timer = null;
+    const proc = execFile(
+      cmd,
       [
         '-v', 'error',
         '-show_format',
@@ -68,7 +151,9 @@ async function probeMedia(target, ffprobeCmd = 'ffprobe') {
         '-print_format', 'json',
         target,
       ],
+      { timeout: timeoutMs },
       (err, stdout, stderr) => {
+        if (timer) clearTimeout(timer);
         if (err) return reject(new Error(`ffprobe failed: ${err.message}. ${stderr || ''}`));
         try {
           resolve(JSON.parse(stdout));
@@ -77,7 +162,81 @@ async function probeMedia(target, ffprobeCmd = 'ffprobe') {
         }
       }
     );
+
+    if (timeoutMs > 0) {
+      timer = setTimeout(() => {
+        try { proc.kill('SIGKILL'); } catch (_) {}
+        reject(new Error(`ffprobe timed out after ${Math.round(timeoutMs / 1000)}s`));
+      }, timeoutMs);
+    }
   });
+}
+
+/**
+ * Runs FFmpeg with timeout handling, exit-code validation, and structured error reporting.
+ */
+function runFfmpeg(args, { timeoutMs = 1800000, ffmpegCmd = null } = {}) {
+  const cmd = ffmpegCmd || process.env.FFMPEG_PATH || 'ffmpeg';
+  return new Promise((resolve, reject) => {
+    console.info(`[VideoConversion] Spawning FFmpeg: ${cmd} ${args.slice(0, 10).join(' ')}...`);
+    const proc = spawn(cmd, args, { stdio: ['ignore', 'pipe', 'pipe'] });
+    let stderr = '';
+    let stdout = '';
+
+    proc.stdout.on('data', (d) => { stdout += d.toString(); });
+    proc.stderr.on('data', (d) => { stderr += d.toString(); });
+
+    let timer = null;
+    if (timeoutMs > 0) {
+      timer = setTimeout(() => {
+        try { proc.kill('SIGKILL'); } catch (_) {}
+        reject(new Error(`FFmpeg timed out after ${Math.round(timeoutMs / 1000)}s`));
+      }, timeoutMs);
+    }
+
+    proc.on('close', (code) => {
+      if (timer) clearTimeout(timer);
+      if (code === 0) {
+        resolve({ stdout, stderr });
+      } else {
+        const lastErr = stderr.trim().split('\n').slice(-5).join('; ');
+        reject(new Error(`FFmpeg exited with error code ${code}: ${lastErr}`));
+      }
+    });
+
+    proc.on('error', (err) => {
+      if (timer) clearTimeout(timer);
+      reject(new Error(`Failed to spawn FFmpeg: ${err.message}`));
+    });
+  });
+}
+
+/**
+ * Downloads an S3 object to a local file using stream piping with size verification.
+ */
+async function downloadS3Object(s3Key, destinationPath) {
+  console.info(`[VideoConversion] Downloading S3 object ${s3Key} to ${destinationPath}...`);
+  const head = await s3Client.send(new HeadObjectCommand({ Bucket: bucket, Key: s3Key }));
+  const expectedSize = head.ContentLength;
+
+  const res = await s3Client.send(new GetObjectCommand({ Bucket: bucket, Key: s3Key }));
+  const writeStream = fs.createWriteStream(destinationPath);
+
+  await new Promise((resolve, reject) => {
+    const stream = res.Body;
+    stream.pipe(writeStream);
+    stream.on('error', reject);
+    writeStream.on('error', reject);
+    writeStream.on('finish', resolve);
+  });
+
+  const stat = fs.statSync(destinationPath);
+  if (expectedSize !== undefined && expectedSize !== null && stat.size !== expectedSize) {
+    throw new Error(`Downloaded size mismatch for ${s3Key}: expected ${expectedSize} bytes, got ${stat.size} bytes`);
+  }
+
+  console.info(`[VideoConversion] Downloaded ${s3Key} successfully (${(stat.size / (1024 * 1024)).toFixed(2)} MB)`);
+  return stat.size;
 }
 
 /**
@@ -257,12 +416,29 @@ async function syncDatabaseRecords(originalKey, m4vKey, status, errorMessage = '
 }
 
 /**
- * Main worker function: converts an MP4 (or WebM/MOV) video in S3 into an iOS FastStart M4V.
+ * Main worker function: converts an MP4 (or WebM/MOV) video in S3 into an iOS FastStart MP4/M4V.
+ *
+ * Implements the full 10-step safe workflow:
+ * 1. Checks binaries and idempotency.
+ * 2. Downloads original S3 object to temporary working directory.
+ * 3. Probes input and runs FFmpeg FastStart remux (-map 0 -c copy -movflags +faststart).
+ * 4. Validates output with ffprobe and moov-before-mdat atom inspection.
+ * 5. Uploads optimized output to S3 via multipart chunked upload.
+ * 6. Verifies S3 head of uploaded object.
+ * 7. Updates database records.
+ * 8. Cleans up temporary files in finally block.
+ * 9. Never deletes or mutates original S3 object.
  */
 async function convertMp4ToM4v(originalS3Key, options = {}) {
   const cleanKey = String(originalS3Key || '').trim();
   if (!isConvertibleVideoKey(cleanKey)) {
     throw new Error(`Invalid video key for conversion: ${cleanKey}`);
+  }
+
+  // 1. Validate FFmpeg/FFprobe availability
+  const binStatus = checkBinaryAvailability();
+  if (!binStatus.available) {
+    throw new Error(`Cannot perform video conversion: ${binStatus.error}`);
   }
 
   const targetM4vKey = options.targetKey || getM4vKeyForOriginal(cleanKey);
@@ -319,80 +495,94 @@ async function convertMp4ToM4v(originalS3Key, options = {}) {
   );
   await syncDatabaseRecords(cleanKey, targetM4vKey, 'processing');
 
-  const workDir = path.join(__dirname, '../scratch');
+  const workDir = path.join(__dirname, '../scratch/temp-conversions');
   if (!fs.existsSync(workDir)) fs.mkdirSync(workDir, { recursive: true });
 
-  const baseFileName = path.basename(targetM4vKey);
-  const localOutput = path.join(workDir, `${Date.now()}-${baseFileName}`);
+  const jobId = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+  const ext = path.extname(cleanKey) || '.mp4';
+  const localInput = path.join(workDir, `${jobId}-input${ext}`);
+  const localOutput = path.join(workDir, `${jobId}-output.mp4`);
 
   try {
-    // 1. Generate presigned URL for download from S3
-    const downloadUrl = await getSignedUrl(
-      s3Client,
-      new GetObjectCommand({
-        Bucket: bucket,
-        Key: cleanKey,
-      }),
-      { expiresIn: 7200 }
-    );
+    // 2. Download original S3 MP4 to local working directory
+    await downloadS3Object(cleanKey, localInput);
 
-    const ffprobeCmd = options.ffprobePath || 'ffprobe';
-    const ffmpegCmd = options.ffmpegPath || 'ffmpeg';
+    // 3. Probe input video codecs, pixel formats, and frame rate
+    const ffprobeCmd = options.ffprobePath || process.env.FFPROBE_PATH || 'ffprobe';
+    const ffmpegCmd = options.ffmpegPath || process.env.FFMPEG_PATH || 'ffmpeg';
 
-    // 2. Probe input video codecs and pixel formats
     let inVideoCodec = 'unknown';
     let inAudioCodec = 'unknown';
     let inPixFmt = 'unknown';
+    let inFps = 30;
+
     try {
-      const probeData = await probeMedia(downloadUrl, ffprobeCmd);
+      const probeData = await probeMedia(localInput, ffprobeCmd);
       const vStream = probeData.streams?.find((s) => s.codec_type === 'video');
       const aStream = probeData.streams?.find((s) => s.codec_type === 'audio');
       if (vStream?.codec_name) inVideoCodec = vStream.codec_name;
       if (vStream?.pix_fmt) inPixFmt = vStream.pix_fmt;
+      if (vStream?.avg_frame_rate || vStream?.r_frame_rate) {
+        inFps = vStream.avg_frame_rate || vStream.r_frame_rate;
+      }
       if (aStream?.codec_name) inAudioCodec = aStream.codec_name;
     } catch (probeErr) {
-      console.warn(`[VideoConversion] Could not pre-probe ${cleanKey}, proceeding with fallback:`, probeErr.message);
+      console.warn(`[VideoConversion] Could not pre-probe ${cleanKey}, proceeding with standard remux:`, probeErr.message);
     }
 
-    console.info(`[VideoConversion] Input codecs: video=${inVideoCodec} (pix_fmt=${inPixFmt}), audio=${inAudioCodec}`);
+    console.info(`[VideoConversion] Input codecs: video=${inVideoCodec} (pix_fmt=${inPixFmt}, fps=${inFps}), audio=${inAudioCodec}`);
 
-    // If input video stream is already H.264 (yuv420p), copy video stream for lossless, zero-degradation remux
-    const canCopyVideo = inVideoCodec === 'h264' && (inPixFmt === 'yuv420p' || inPixFmt === 'unknown');
-    const videoArgs = canCopyVideo
-      ? ['-c:v', 'copy']
-      : ['-c:v', 'libx264', '-preset', options.preset || 'medium', '-crf', '22', '-pix_fmt', 'yuv420p'];
+    // If input is already H.264 video, copy video stream lossless (-c copy) for zero degradation.
+    // If input is non-H.264 (e.g. WebM/VP8/VP9) or explicit re-encode is requested, re-encode with dynamic 2-second GOP.
+    const isH264 = inVideoCodec === 'h264' || inVideoCodec === 'avc1';
+    const forceReencode = options.reencode === true;
+    const canCopy = isH264 && !forceReencode;
 
-    // If input audio stream is already AAC, copy audio stream; otherwise transcode to standard AAC-LC 128k stereo
-    const canCopyAudio = inAudioCodec === 'aac';
-    const audioArgs = canCopyAudio
-      ? ['-c:a', 'copy']
-      : ['-c:a', 'aac', '-b:a', '128k', '-ac', '2'];
+    let ffmpegArgs = [];
 
-    // Fast-start optimization: -movflags +faststart places 'moov' atom at the start of container
-    const ffmpegArgs = [
-      '-y',
-      '-i', downloadUrl,
-      '-map', '0:v:0',
-      '-map', '0:a:0?',
-      ...videoArgs,
-      ...audioArgs,
-      '-movflags', '+faststart',
-      '-f', 'mp4',
-      localOutput,
-    ];
+    if (canCopy) {
+      // Primary FastStart Remux: ffmpeg -i input.mp4 -map 0 -c copy -movflags +faststart output.mp4
+      console.info(`[VideoConversion] Running stream-copy FastStart remux for ${cleanKey}...`);
+      ffmpegArgs = [
+        '-y',
+        '-i', localInput,
+        '-map', '0',
+        '-c', 'copy',
+        '-movflags', '+faststart',
+        '-f', 'mp4',
+        localOutput,
+      ];
+    } else {
+      // Transcode fallback with dynamic ~2-second GOP calculation
+      console.info(`[VideoConversion] Running optimized H.264 transcode with dynamic GOP for ${cleanKey}...`);
+      const gopArgs = calculateGopOptions(inFps);
+      ffmpegArgs = [
+        '-y',
+        '-i', localInput,
+        '-map', '0:v:0',
+        '-map', '0:a:0?',
+        '-c:v', 'libx264',
+        '-preset', options.preset || 'medium',
+        '-crf', String(options.crf || 22),
+        '-pix_fmt', 'yuv420p',
+        ...gopArgs,
+        '-c:a', 'aac',
+        '-b:a', '128k',
+        '-ac', '2',
+        '-movflags', '+faststart',
+        '-f', 'mp4',
+        localOutput,
+      ];
+    }
 
-    console.info(`[VideoConversion] Spawning FFmpeg...`);
-    await new Promise((resolve, reject) => {
-      const proc = spawn(ffmpegCmd, ffmpegArgs, { stdio: 'inherit' });
-      proc.on('close', (code) => {
-        if (code === 0) resolve();
-        else reject(new Error(`FFmpeg exited with error code ${code}`));
-      });
-      proc.on('error', reject);
+    // 4. Run FFmpeg
+    await runFfmpeg(ffmpegArgs, {
+      timeoutMs: options.timeoutMs || 1800000,
+      ffmpegCmd,
     });
 
-    // 3. Validate generated output with ffprobe
-    console.info(`[VideoConversion] Validating output M4V with ffprobe...`);
+    // 5. Validate generated output with ffprobe
+    console.info(`[VideoConversion] Validating output with ffprobe...`);
     const outputProbe = await probeMedia(localOutput, ffprobeCmd);
     const duration = parseFloat(outputProbe.format?.duration || '0');
     if (duration <= 0 || isNaN(duration)) {
@@ -401,25 +591,35 @@ async function convertMp4ToM4v(originalS3Key, options = {}) {
 
     const outVStream = outputProbe.streams?.find((s) => s.codec_type === 'video');
     const outAStream = outputProbe.streams?.find((s) => s.codec_type === 'audio');
-    if (!outVStream || outVStream.codec_name !== 'h264') {
+    if (!outVStream || (outVStream.codec_name !== 'h264' && outVStream.codec_name !== 'avc1')) {
       throw new Error(`Validation failed: expected H.264 video, got ${outVStream?.codec_name || 'none'}`);
     }
     if (outAStream && outAStream.codec_name !== 'aac') {
       throw new Error(`Validation failed: expected AAC audio, got ${outAStream.codec_name}`);
     }
 
-    // 4. Verify FastStart moov placement
+    // 6. Verify FastStart moov placement (moov must appear before mdat)
     if (!hasFastStartMoov(localOutput)) {
       throw new Error('Validation failed: MP4/M4V moov atom is not positioned before media data (faststart missing).');
     }
 
     const stat = fs.statSync(localOutput);
-    console.info(`[VideoConversion] Output validated successfully: ${(stat.size / (1024 * 1024)).toFixed(2)} MB, duration: ${duration.toFixed(1)}s`);
+    if (stat.size <= 0) {
+      throw new Error('Validation failed: output file size is 0 bytes.');
+    }
 
-    // 5. Upload to S3
+    console.info(`[VideoConversion] Output validated successfully: ${(stat.size / (1024 * 1024)).toFixed(2)} MB, duration: ${duration.toFixed(1)}s, FastStart verified`);
+
+    // 7. Upload to S3
     await uploadM4vToS3Multipart(localOutput, targetM4vKey, 'video/mp4');
 
-    // 6. Update database models
+    // 8. Verify S3 head of uploaded object
+    const uploadedHead = await s3Client.send(new HeadObjectCommand({ Bucket: bucket, Key: targetM4vKey }));
+    if (!uploadedHead.ContentLength || uploadedHead.ContentLength <= 0) {
+      throw new Error(`S3 verification failed: uploaded object ${targetM4vKey} is missing or empty`);
+    }
+
+    // 9. Update database models
     await VideoConversion.findOneAndUpdate(
       { originalS3Key: cleanKey },
       {
@@ -435,6 +635,8 @@ async function convertMp4ToM4v(originalS3Key, options = {}) {
       { upsert: true, new: true }
     );
     await syncDatabaseRecords(cleanKey, targetM4vKey, 'completed');
+
+    console.info(`[VideoConversion] Successfully converted and persisted ${cleanKey} -> ${targetM4vKey}`);
 
     return {
       success: true,
@@ -458,15 +660,17 @@ async function convertMp4ToM4v(originalS3Key, options = {}) {
     await syncDatabaseRecords(cleanKey, targetM4vKey, 'failed', err.message);
     throw err;
   } finally {
+    // 10. Clean up temporary files
     try {
-      if (fs.existsSync(localOutput)) {
-        fs.unlinkSync(localOutput);
-      }
+      if (fs.existsSync(localInput)) fs.unlinkSync(localInput);
+    } catch (_) {}
+    try {
+      if (fs.existsSync(localOutput)) fs.unlinkSync(localOutput);
     } catch (_) {}
   }
 }
 
-// In-memory queue to prevent duplicate concurrent conversions of the same video key
+// In-memory set to prevent duplicate concurrent conversions of the same video key
 const inFlightConversions = new Set();
 
 /**
@@ -536,13 +740,20 @@ async function getConversionStatus(s3Key) {
 }
 
 module.exports = {
+  checkBinaryAvailability,
+  calculateGopOptions,
   hasFastStartMoov,
   probeMedia,
+  runFfmpeg,
+  downloadS3Object,
+  uploadM4vToS3Multipart,
   getM4vKeyForOriginal,
   isConvertibleVideoKey,
   convertMp4ToM4v,
   enqueueConversion,
   retryConversion,
   getConversionStatus,
+  inFlightConversions,
 };
+
 

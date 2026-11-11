@@ -6,12 +6,6 @@ const DEFAULT_CLOUDFRONT_DOMAIN = 'media.whitecoat.academy';
  * Resolves CloudFront Key Pair ID across supported environment variables and config fields.
  */
 function getKeyPairId() {
-  try {
-    const { mediaConvertConfig } = require('../config/mediaconvert');
-    if (mediaConvertConfig && mediaConvertConfig.cloudFrontKeyPairId) {
-      return mediaConvertConfig.cloudFrontKeyPairId.trim();
-    }
-  } catch (_) {}
   return (
     process.env.CLOUDFRONT_KEY_PAIR_ID ||
     process.env.CLOUDFRONT_PUBLIC_KEY_ID ||
@@ -21,7 +15,7 @@ function getKeyPairId() {
 }
 
 /**
- * Extracts and normalizes the RSA private key from environment variables or mediaConvertConfig.
+ * Extracts and normalizes the RSA private key from environment variables.
  * Supports standard PEM string (with \n) or base64-encoded PEM string.
  */
 function getPrivateKey() {
@@ -32,13 +26,7 @@ function getPrivateKey() {
       return '';
     }
   }
-  let rawKey = process.env.CLOUDFRONT_PRIVATE_KEY || '';
-  if (!rawKey) {
-    try {
-      const { mediaConvertConfig } = require('../config/mediaconvert');
-      rawKey = mediaConvertConfig?.cloudFrontPrivateKey || '';
-    } catch (_) {}
-  }
+  const rawKey = (process.env.CLOUDFRONT_PRIVATE_KEY || '').trim();
   return rawKey.replace(/\\n/g, '\n').trim();
 }
 
