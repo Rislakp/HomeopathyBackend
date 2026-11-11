@@ -767,6 +767,22 @@ const getMediaAccessUrl = async (req, res) => {
         { 'modules.lessons.attachments.url': { $regex: escapeRegex(key) } },
       ];
 
+      if (key.endsWith('_ios.m4v')) {
+        const origMp4 = key.replace(/_ios\.m4v$/, '.mp4');
+        const origWebm = key.replace(/_ios\.m4v$/, '.webm');
+        for (const origKey of [origMp4, origWebm]) {
+          searchConditions.push(
+            { 'modules.lessons.videoS3Key': origKey },
+            { 'modules.lessons.s3Key': origKey },
+            { 'modules.lessons.videoParts.s3Key': origKey },
+            { 'modules.lessons.videoUrl': { $regex: escapeRegex(origKey) } },
+            { 'modules.lessons.videoParts.url': { $regex: escapeRegex(origKey) } },
+            { 'modules.lessons.videoParts.secure_url': { $regex: escapeRegex(origKey) } },
+            { 'modules.lessons.videoParts.secureUrl': { $regex: escapeRegex(origKey) } }
+          );
+        }
+      }
+
       if (isLegacyUpload) {
         if (decodedKey !== key) {
           searchConditions.push({ 'modules.lessons.attachments.url': { $regex: escapeRegex(decodedKey) } });

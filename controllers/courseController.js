@@ -10,7 +10,8 @@ const memoryCache = require('../utils/cache');
 const { signS3Reference, stripS3ReferenceUrls, normalizeS3Reference, resolveMediaRecord } = require('../utils/s3MediaSigner');
 const { getS3KeyFromUrl } = require('../services/s3Service');
 const { calculateCourseTotalDurationMinutes } = require('../utils/courseDurationHelper');
-const { attachVerifiedMp4Fallback } = require('./studentCurriculumController');
+const VideoConversion = require('../models/VideoConversion');
+const { attachVerifiedMp4Fallback, attachVerifiedM4vRendition } = require('./studentCurriculumController');
 
 
 const ALLOWED_VIDEO_FORMATS = ['mp4', 'mov', 'avi', 'mkv', 'flv', 'wmv', 'm4v'];
@@ -298,6 +299,9 @@ const toResourceObj = (item) => {
       s3Key: isS3Resource ? s3Key : '',
       mp4S3Key,
       mp4StorageProvider: mp4S3Key ? 's3' : '',
+      m4vS3Key: String(item.m4vS3Key || '').trim(),
+      m4vStorageProvider: String(item.m4vStorageProvider || (item.m4vS3Key ? 's3' : '')).trim(),
+      m4vConversionStatus: String(item.m4vConversionStatus || 'none').trim(),
       resourceType: String(item.resourceType || resType || '').trim(),
       fileName: String(item.fileName || item.originalFileName || item.originalname || item.filename || title || '').trim(),
       originalFileName: String(item.originalFileName || item.originalname || item.fileName || item.filename || title || '').trim(),
@@ -622,7 +626,10 @@ const result = {
   ]);
 
   const verifiedVideoParts = canSignS3Media
-    ? await Promise.all((rawVideoParts || []).map((vp) => attachVerifiedMp4Fallback(vp)))
+    ? await Promise.all((rawVideoParts || []).map(async (vp) => {
+        const withMp4 = await attachVerifiedMp4Fallback(vp);
+        return attachVerifiedM4vRendition(withMp4);
+      }))
     : (rawVideoParts || []);
 
   const isolated = {
@@ -749,6 +756,11 @@ const result = {
     fallbackMp4Url: firstVideo?.fallbackVideoUrl || firstVideo?.mp4Url,
     mp4S3Key: firstVideo?.mp4S3Key || lessonObj.mp4S3Key || lesson.mp4S3Key || '',
     mp4StorageProvider: firstVideo?.mp4StorageProvider || lessonObj.mp4StorageProvider || lesson.mp4StorageProvider || '',
+    m4vS3Key: firstVideo?.m4vS3Key || lessonObj.m4vS3Key || lesson.m4vS3Key || '',
+    m4vStorageProvider: firstVideo?.m4vStorageProvider || lessonObj.m4vStorageProvider || lesson.m4vStorageProvider || '',
+    m4vConversionStatus: firstVideo?.m4vConversionStatus || lessonObj.m4vConversionStatus || lesson.m4vConversionStatus || 'none',
+    m4vUrl: firstVideo?.m4vUrl || lessonObj.m4vUrl || '',
+    iosM4vUrl: firstVideo?.iosM4vUrl || firstVideo?.m4vUrl || lessonObj.iosM4vUrl || lessonObj.m4vUrl || '',
     createdAt: lessonObj.createdAt || lesson.createdAt,
     updatedAt: lessonObj.updatedAt || lesson.updatedAt,
   };
@@ -1950,6 +1962,33 @@ exports.addLesson = async (req, res) => {
 
     const resolvedDurationOrPages = (durationOrPages || duration || pages || (resolvedVideoDuration ? `${Math.round(resolvedVideoDuration)} sec` : '') || '').trim();
 
+    const targetVideoKey = lessonS3Key || incomingS3Key || (finalVideoParts[0] && finalVideoParts[0].s3Key) || '';
+    let initialM4vKey = '';
+    let initialM4vStatus = 'none';
+    if (targetVideoKey) {
+      try {
+        const conversion = await VideoConversion.findOne({ originalS3Key: targetVideoKey }).lean();
+        if (conversion) {
+          initialM4vStatus = conversion.status;
+          if (conversion.status === 'completed' && conversion.m4vS3Key) {
+            initialM4vKey = conversion.m4vS3Key;
+          }
+        }
+      } catch (err) {
+        console.warn('[addLesson] VideoConversion lookup warning:', err.message);
+      }
+    }
+
+    if (initialM4vKey && Array.isArray(finalVideoParts)) {
+      finalVideoParts.forEach((vp) => {
+        if (vp.s3Key === targetVideoKey) {
+          vp.m4vS3Key = initialM4vKey;
+          vp.m4vStorageProvider = 's3';
+          vp.m4vConversionStatus = initialM4vStatus;
+        }
+      });
+    }
+
     const newLesson = {
       lessonTitle: actualLessonTitle,
       lessonType: actualLessonType,
@@ -1960,6 +1999,9 @@ exports.addLesson = async (req, res) => {
       videoS3Key: lessonS3Key,
       s3Key: lessonS3Key,
       storageProvider: lessonStorageProvider,
+      m4vS3Key: initialM4vKey,
+      m4vStorageProvider: initialM4vKey ? 's3' : '',
+      m4vConversionStatus: initialM4vStatus,
       videoPublicId: resolvedPublicId,
       videoResourceType: videoResourceType || 'video',
       videoDuration: resolvedVideoDuration,
@@ -1971,9 +2013,6 @@ exports.addLesson = async (req, res) => {
       pdfNotes: finalPdfNotes,
       assignments: finalAssignments,
       attachments: finalAttachments,
-      storageProvider: incomingStorage,
-      s3Key: incomingS3Key,
-      videoS3Key: incomingS3Key,
       status: (status || 'Published').trim(),
     };
 
@@ -2464,6 +2503,31 @@ exports.updateLesson = async (req, res) => {
     }
     if ((!targetLesson.durationOrPages || targetLesson.durationOrPages === '0 sec') && Number(targetLesson.videoDuration) > 0) {
       targetLesson.durationOrPages = `${Math.round(targetLesson.videoDuration)} sec`;
+    }
+
+    const targetVideoKey = targetLesson.videoS3Key || targetLesson.s3Key || (targetLesson.videoParts?.[0] && targetLesson.videoParts[0].s3Key) || '';
+    if (targetVideoKey) {
+      try {
+        const conversion = await VideoConversion.findOne({ originalS3Key: targetVideoKey }).lean();
+        if (conversion) {
+          targetLesson.m4vConversionStatus = conversion.status;
+          if (conversion.status === 'completed' && conversion.m4vS3Key) {
+            targetLesson.m4vS3Key = conversion.m4vS3Key;
+            targetLesson.m4vStorageProvider = 's3';
+            if (Array.isArray(targetLesson.videoParts)) {
+              targetLesson.videoParts.forEach((vp) => {
+                if (vp.s3Key === targetVideoKey) {
+                  vp.m4vS3Key = conversion.m4vS3Key;
+                  vp.m4vStorageProvider = 's3';
+                  vp.m4vConversionStatus = conversion.status;
+                }
+              });
+            }
+          }
+        }
+      } catch (err) {
+        console.warn('[updateLesson] VideoConversion lookup warning:', err.message);
+      }
     }
 
     await course.save();

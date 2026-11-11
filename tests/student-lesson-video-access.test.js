@@ -405,3 +405,21 @@ test('regression: invalid or unrelated S3 key returns 400 or 403', async () => {
   assert.equal(resUnrelated.status, 403);
   assert.match(resUnrelated.error, /not found in an authorized course lesson/i);
 });
+
+test('authorizes _ios.m4v rendition when lesson stores original .mp4 or .webm', async () => {
+  // Lesson has s3Key: 'videos/one.mp4', student requests 'videos/one_ios.m4v'
+  const resM4v = await resolveStudentLessonVideoAccess(request({
+    s3Key: 'videos/one_ios.m4v',
+  }));
+  assert.equal(resM4v.status, 200);
+  assert.equal(resM4v.key, 'videos/one_ios.m4v');
+  assert.equal(resM4v.lesson._id, 'lesson-1');
+
+  // Video part has s3Key: 'videos/part.mp4', student requests 'videos/part_ios.m4v'
+  const resPartM4v = await resolveStudentLessonVideoAccess(request({
+    s3Key: 'videos/part_ios.m4v',
+  }));
+  assert.equal(resPartM4v.status, 200);
+  assert.equal(resPartM4v.key, 'videos/part_ios.m4v');
+});
+

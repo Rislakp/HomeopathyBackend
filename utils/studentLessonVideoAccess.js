@@ -137,11 +137,24 @@ async function resolveStudentLessonVideoAccess({ user, courseId, s3Key, models =
 
   const requested = s3Key.trim();
   const directFields = ['videoS3Key', 's3Key', 'mp4S3Key', 'm4vS3Key'];
+
+  const isM4vDerivative = requested.endsWith('_ios.m4v');
+  const originalKeyCandidates = isM4vDerivative ? [
+    requested.replace(/_ios\.m4v$/, '.mp4'),
+    requested.replace(/_ios\.m4v$/, '.webm'),
+    requested.replace(/_ios\.m4v$/, '.mov'),
+  ] : [];
+
   const candidatesQuery = { $or: [
     { 'modules.lessons.videoS3Key': requested }, { 'modules.lessons.s3Key': requested },
     { 'modules.lessons.mp4S3Key': requested }, { 'modules.lessons.m4vS3Key': requested },
     { 'modules.lessons.videoParts.s3Key': requested }, { 'modules.lessons.videoParts.mp4S3Key': requested },
     { 'modules.lessons.videoParts.m4vS3Key': requested },
+    ...originalKeyCandidates.flatMap((orig) => [
+      { 'modules.lessons.videoS3Key': orig },
+      { 'modules.lessons.s3Key': orig },
+      { 'modules.lessons.videoParts.s3Key': orig },
+    ]),
   ] };
   let courses;
   if (requestedCourseId) {
@@ -196,7 +209,7 @@ async function resolveStudentLessonVideoAccess({ user, courseId, s3Key, models =
       for (const part of lesson.videoParts || []) {
         for (const field of ['s3Key', 'mp4S3Key', 'm4vS3Key']) if (part[field]) keys.push(String(part[field]));
       }
-      if (keys.includes(requested)) matches.push({ course, lesson });
+      if (keys.includes(requested) || (isM4vDerivative && originalKeyCandidates.some((orig) => keys.includes(orig)))) matches.push({ course, lesson });
     }
   }
   if (matches.length !== 1) {
@@ -208,10 +221,16 @@ async function resolveStudentLessonVideoAccess({ user, courseId, s3Key, models =
 function findLessonMatchingKey(course, requestedKey) {
   const requested = String(requestedKey || '').trim();
   if (!course || !Array.isArray(course.modules) || !requested) return null;
+  const isM4vDerivative = requested.endsWith('_ios.m4v');
+  const originalKeyCandidates = isM4vDerivative ? [
+    requested.replace(/_ios\.m4v$/, '.mp4'),
+    requested.replace(/_ios\.m4v$/, '.webm'),
+    requested.replace(/_ios\.m4v$/, '.mov'),
+  ] : [];
   for (const mod of course.modules) for (const lesson of mod.lessons || []) {
     const keys = ['videoS3Key', 's3Key', 'mp4S3Key', 'm4vS3Key'].map((field) => lesson[field]).filter(Boolean).map(String);
     for (const part of lesson.videoParts || []) for (const field of ['s3Key', 'mp4S3Key', 'm4vS3Key']) if (part[field]) keys.push(String(part[field]));
-    if (keys.includes(requested)) return { lesson, key: requested };
+    if (keys.includes(requested) || (isM4vDerivative && originalKeyCandidates.some((orig) => keys.includes(orig)))) return { lesson, key: requested };
   }
   return null;
 }
