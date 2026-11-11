@@ -20,7 +20,7 @@ const { resolveStudentLessonVideoAccess } = require('../utils/studentLessonVideo
 const { getS3Url, getS3KeyFromUrl } = require('../services/s3Service');
 const { verifyStudentCourseAccess } = require('../utils/courseAccessHelper');
 const { normalizeS3Reference, encodeSignedUrl, resolveMediaRecord, getVerifiedS3KeyForLegacyAsset } = require('../utils/s3MediaSigner');
-const { isCloudFrontConfigured, signCloudFrontPlaybackUrl } = require('../utils/cloudFrontMediaSigner');
+const { isCloudFrontConfigured, signCloudFrontPlaybackUrl, resolveCloudFrontPlaybackUrl } = require('../utils/cloudFrontMediaSigner');
 
 const PART_URL_TTL_SECONDS = 900;
 const MEDIA_URL_TTL_SECONDS = parseInt(process.env.S3_SIGNED_URL_EXPIRES_IN || process.env.S3_MEDIA_URL_TTL_SECONDS, 10) || 21600;
@@ -605,14 +605,15 @@ const getMediaAccessUrl = async (req, res) => {
         }
       }
       await s3Client.send(new HeadObjectCommand({ Bucket: bucket, Key: key }));
-      const signed = await getSignedUrl(s3Client, new GetObjectCommand({ Bucket: bucket, Key: key, ResponseContentType: 'video/mp4', ResponseContentDisposition: 'inline' }), { expiresIn: MEDIA_URL_TTL_SECONDS });
+      const playbackUrl = resolveCloudFrontPlaybackUrl(key, { expiresIn: MEDIA_URL_TTL_SECONDS });
       return res.json({
         success: true,
-        url: encodeSignedUrl(signed),
+        url: playbackUrl,
         s3Key: key,
         key,
         expiresIn: MEDIA_URL_TTL_SECONDS,
         playbackType: 'mp4',
+        deliveryProvider: 'cloudfront',
         hlsConversionStatus: hlsInfo?.hlsConversionStatus || lesson.hlsConversionStatus || 'PENDING',
       });
     } catch (_) { return fail(res, 503, 'Media playback is temporarily unavailable.'); }
@@ -957,11 +958,16 @@ const getMediaAccessUrl = async (req, res) => {
     // 4. Confirm the referenced private object still exists before issuing a URL.
     await s3Client.send(new HeadObjectCommand({ Bucket: bucket, Key: key }));
 
-    // 5. Generate signed URL (CloudFront if enabled, with fallback to S3 SigV4)
+    // 5. Generate playback URL (CloudFront for video assets; CloudFront/S3 SigV4 for other media)
     let url = null;
     let deliveryProvider = 's3';
 
-    if (isCloudFrontConfigured()) {
+    const isVideoAsset = prefix === 'videos/' || prefix === 'live_records/' || /\.(mp4|m4v|webm|mov|m3u8)$/i.test(key);
+
+    if (isVideoAsset) {
+      url = resolveCloudFrontPlaybackUrl(key, { expiresIn: MEDIA_URL_TTL_SECONDS });
+      deliveryProvider = 'cloudfront';
+    } else if (isCloudFrontConfigured()) {
       try {
         url = signCloudFrontPlaybackUrl(key, { expiresIn: MEDIA_URL_TTL_SECONDS });
         deliveryProvider = 'cloudfront';
@@ -972,12 +978,7 @@ const getMediaAccessUrl = async (req, res) => {
 
     if (!url) {
       let contentType = undefined;
-      if (prefix === 'videos/' || prefix === 'live_records/') {
-        const keyLower = key.toLowerCase();
-        contentType = keyLower.endsWith('.mp4') || keyLower.endsWith('.m4v')
-          ? 'video/mp4'
-          : (keyLower.endsWith('.mov') ? 'video/quicktime' : (keyLower.endsWith('.webm') ? 'video/webm' : 'video/mp4'));
-      } else if (prefix === 'pdfs/') {
+      if (prefix === 'pdfs/') {
         contentType = 'application/pdf';
       }
       const rawUrl = await getSignedUrl(s3Client, new GetObjectCommand({

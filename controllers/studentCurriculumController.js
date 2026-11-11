@@ -305,6 +305,23 @@ const addSignedS3MediaUrls = async (course) => {
         lesson.pdfUrl = firstPdf.url;
         lesson.fileUrl = lesson.documentUrl = lesson.path = lesson.url = firstPdf.url;
       }
+
+      // Ensure all student video playback URLs use CloudFront instead of direct S3
+      const { resolveCloudFrontPlaybackUrl } = require('../utils/cloudFrontMediaSigner');
+      for (const field of ['videoUrl', 'mp4Url', 'm4vUrl', 'iosM4vUrl', 'iosVideoUrl', 'fallbackVideoUrl', 'fallbackMp4Url']) {
+        if (typeof lesson[field] === 'string' && lesson[field].includes('amazonaws.com')) {
+          lesson[field] = resolveCloudFrontPlaybackUrl(lesson[field]);
+        }
+      }
+      if (Array.isArray(lesson.videoParts)) {
+        for (const vp of lesson.videoParts) {
+          for (const field of ['url', 'secure_url', 'secureUrl', 'fileUrl', 'videoUrl', 'mp4Url', 'm4vUrl', 'fallbackVideoUrl']) {
+            if (typeof vp[field] === 'string' && vp[field].includes('amazonaws.com')) {
+              vp[field] = resolveCloudFrontPlaybackUrl(vp[field]);
+            }
+          }
+        }
+      }
     }
   }
   return course;

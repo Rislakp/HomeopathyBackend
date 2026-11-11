@@ -7,48 +7,48 @@ const { GetObjectCommand } = require('@aws-sdk/client-s3');
 const { getSignedUrl } = require('@aws-sdk/s3-request-presigner');
 const { deleteCloudinaryByUrl } = require('../config/cloudinary');
 const { encodeSignedUrl, S3_MEDIA_URL_TTL_SECONDS } = require('../utils/s3MediaSigner');
-const { isCloudFrontConfigured, signCloudFrontPlaybackUrl } = require('../utils/cloudFrontMediaSigner');
+const { isCloudFrontConfigured, signCloudFrontPlaybackUrl, resolveCloudFrontPlaybackUrl } = require('../utils/cloudFrontMediaSigner');
 
-// Helper to sign S3 demo video for direct playback
+// Helper to sign S3 demo video for direct playback via CloudFront
 const signDemoVideo = async (doc) => {
   if (!doc) return doc;
   const obj = typeof doc.toObject === 'function' ? doc.toObject() : { ...doc };
   const key = obj.s3Key || s3Service.getS3KeyFromUrl(obj.videoUrl);
   if (key && (obj.storageProvider === 's3' || obj.videoUrl?.includes('amazonaws.com') || key.startsWith('videos/'))) {
     try {
-      let signed = null;
-      let deliveryProvider = 's3';
-
-      if (isCloudFrontConfigured()) {
-        try {
-          signed = signCloudFrontPlaybackUrl(key, { expiresIn: S3_MEDIA_URL_TTL_SECONDS });
-          deliveryProvider = 'cloudfront';
-        } catch (cfErr) {
-          console.warn('[DemoVideo] CloudFront signing failed, falling back to S3 presigned URL:', cfErr.message);
-        }
-      }
-
-      if (!signed) {
-        const keyLower = key.toLowerCase();
-        const contentType = keyLower.endsWith('.mp4') || keyLower.endsWith('.m4v')
-          ? 'video/mp4'
-          : (keyLower.endsWith('.mov') ? 'video/quicktime' : (keyLower.endsWith('.webm') ? 'video/webm' : 'video/mp4'));
-        const rawSigned = await getSignedUrl(s3Client, new GetObjectCommand({
-          Bucket: bucket,
-          Key: key,
-          ResponseContentType: contentType,
-          ResponseContentDisposition: 'inline',
-        }), { expiresIn: S3_MEDIA_URL_TTL_SECONDS });
-        signed = encodeSignedUrl(rawSigned);
-      }
-      obj.videoUrl = signed;
-      obj.signedVideoUrl = signed;
+      const playbackUrl = resolveCloudFrontPlaybackUrl(key, { expiresIn: S3_MEDIA_URL_TTL_SECONDS });
+      obj.videoUrl = playbackUrl;
+      obj.signedVideoUrl = playbackUrl;
       obj.storageProvider = 's3';
       obj.s3Key = key;
-      obj.deliveryProvider = deliveryProvider;
+      obj.deliveryProvider = 'cloudfront';
+
+      // Check if HLS conversion is available for this demo video
+      try {
+        const { getVerifiedHlsConversionForS3Key } = require('../services/mediaConvertService');
+        const hlsInfo = await getVerifiedHlsConversionForS3Key(key);
+        if (hlsInfo && hlsInfo.hlsConversionStatus === 'COMPLETED' && hlsInfo.hlsMasterUrl) {
+          const { getValidatedHlsMasterUrl } = require('../utils/cloudFrontSecurity');
+          const masterUrl = getValidatedHlsMasterUrl(hlsInfo.hlsMasterUrl, hlsInfo.videoId);
+          obj.hlsMasterUrl = masterUrl;
+          obj.hlsPlaybackUrl = masterUrl;
+          obj.hlsOutputPrefix = hlsInfo.hlsOutputPrefix || '';
+          obj.hlsConversionStatus = 'COMPLETED';
+          obj.playbackType = 'hls';
+        } else {
+          obj.hlsConversionStatus = hlsInfo?.hlsConversionStatus || 'NONE';
+          obj.playbackType = 'mp4';
+        }
+      } catch (hlsErr) {
+        console.warn('[DemoVideo] HLS conversion lookup warning for demo video:', { key, error: hlsErr.message });
+        obj.playbackType = 'mp4';
+      }
     } catch (e) {
-      console.error('[DemoVideo] Presigning error:', e.message);
+      console.error('[DemoVideo] Playback URL resolution error:', e.message);
     }
+  } else if (obj.videoUrl && obj.videoUrl.includes('cloudinary.com')) {
+    obj.playbackType = 'mp4';
+    obj.deliveryProvider = 'cloudinary';
   }
   return obj;
 };

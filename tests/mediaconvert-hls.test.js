@@ -447,7 +447,8 @@ test('7. Playback API (getMediaAccessUrl) returns HLS master URL on COMPLETED, a
     assert.equal(resComp.responseBody.playbackType, 'hls');
     assert.equal(resComp.responseBody.hlsConversionStatus, 'COMPLETED');
     assert.equal(resComp.responseBody.hlsMasterUrl, 'https://media.whitecoat.academy/hls/playback-test/playback-test.m3u8');
-    assert.match(resComp.responseBody.url, /X-Amz-Signature=/); // Original MP4 presigned fallback preserved!
+    assert.ok(resComp.responseBody.url.startsWith('https://media.whitecoat.academy/videos/playback-test.mp4'), 'CloudFront MP4 fallback preserved');
+    assert.ok(!resComp.responseBody.url.includes('.amazonaws.com'), 'Does not return direct S3 URL');
 
     // 7.2 Video is PROCESSING in VideoConversion
     VideoConversion.findOne = () => {
@@ -472,7 +473,8 @@ test('7. Playback API (getMediaAccessUrl) returns HLS master URL on COMPLETED, a
     assert.equal(resProc.responseBody.hlsConversionStatus, 'PROCESSING');
     assert.equal(resProc.responseBody.playbackType, 'mp4');
     assert.equal(resProc.responseBody.hlsMasterUrl, '');
-    assert.match(resProc.responseBody.url, /X-Amz-Signature=/); // MP4 playable during transcoding
+    assert.ok(resProc.responseBody.url.startsWith('https://media.whitecoat.academy/videos/playback-test.mp4'), 'MP4 fallback uses CloudFront');
+    assert.ok(!resProc.responseBody.url.includes('.amazonaws.com'), 'Does not return direct S3 URL');
 
     // 7.3 Video is FAILED in VideoConversion
     VideoConversion.findOne = () => {
@@ -497,7 +499,8 @@ test('7. Playback API (getMediaAccessUrl) returns HLS master URL on COMPLETED, a
     assert.equal(resFail.statusCode, 200);
     assert.equal(resFail.responseBody.hlsConversionStatus, 'FAILED');
     assert.equal(resFail.responseBody.hlsConversionError, 'Transcoding timeout');
-    assert.match(resFail.responseBody.url, /X-Amz-Signature=/); // MP4 fallback preserved
+    assert.ok(resFail.responseBody.url.startsWith('https://media.whitecoat.academy/videos/playback-test.mp4'), 'MP4 fallback uses CloudFront');
+    assert.ok(!resFail.responseBody.url.includes('.amazonaws.com'), 'Does not return direct S3 URL');
   } finally {
     restoreSigner();
     Course.findOne = originalFindOneCourse;
@@ -771,9 +774,10 @@ test('10. Lesson-level curriculum response receives hlsMasterUrl and hlsConversi
       'https://media.whitecoat.academy/hls/curriculum-hls/curriculum-hls.m3u8'
     );
 
-    // Assert MP4 and M4V fields are preserved
-    assert.ok(lesson.videoUrl && lesson.videoUrl.includes('X-Amz-Signature='), 'Preserves videoUrl MP4 fallback');
-    assert.ok(lesson.iosM4vUrl && lesson.iosM4vUrl.includes('X-Amz-Signature='), 'Preserves iosM4vUrl');
+    // Assert MP4 and M4V fields use CloudFront and do not expose direct S3
+    assert.ok(lesson.videoUrl && lesson.videoUrl.startsWith('https://media.whitecoat.academy/'), 'Preserves videoUrl MP4 fallback on CloudFront');
+    assert.ok(lesson.iosM4vUrl && lesson.iosM4vUrl.startsWith('https://media.whitecoat.academy/'), 'Preserves iosM4vUrl on CloudFront');
+    assert.ok(!lesson.videoUrl.includes('.amazonaws.com'), 'videoUrl does not expose direct S3 URL');
     assert.equal(lesson.m4vConversionStatus, 'completed');
 
     // Standalone lesson without videoParts also maps HLS
@@ -804,9 +808,10 @@ test('10. Lesson-level curriculum response receives hlsMasterUrl and hlsConversi
       'https://media.whitecoat.academy/hls/curriculum-hls/curriculum-hls.m3u8'
     );
     assert.ok(
-      standaloneLesson.videoUrl && standaloneLesson.videoUrl.includes('X-Amz-Signature='),
-      'legacy key-only lesson retains its protected S3 fallback while curriculum cookies are unavailable'
+      standaloneLesson.videoUrl && standaloneLesson.videoUrl.startsWith('https://media.whitecoat.academy/'),
+      'legacy key-only lesson routes videoUrl through CloudFront'
     );
+    assert.ok(!standaloneLesson.videoUrl.includes('.amazonaws.com'), 'Does not expose direct S3 URL');
     assert.equal(standaloneLesson.videoParts[0].storageProvider, 's3');
     assert.equal(standaloneLesson.videoParts[0].s3Key, 'videos/curriculum-hls.mp4');
   } finally {
@@ -900,7 +905,8 @@ test('12. Fallback behavior: COMPLETED returns HLS, PROCESSING and FAILED return
       sComp.responseBody.hlsMasterUrl,
       'https://media.whitecoat.academy/hls/fallback-matrix/fallback-matrix.m3u8'
     );
-    assert.match(sComp.responseBody.url, /X-Amz-Signature=/, 'MP4 fallback preserved');
+    assert.ok(sComp.responseBody.url.startsWith('https://media.whitecoat.academy/videos/fallback-matrix.mp4'), 'MP4 fallback uses CloudFront');
+    assert.ok(!sComp.responseBody.url.includes('.amazonaws.com'), 'Does not return direct S3 URL');
 
     // 12.2 PROCESSING: returns empty HLS URL and safe MP4 fallback
     VideoConversion.findOne = () => ({
@@ -919,7 +925,8 @@ test('12. Fallback behavior: COMPLETED returns HLS, PROCESSING and FAILED return
     assert.equal(sProc.responseBody.playbackType, 'mp4');
     assert.equal(sProc.responseBody.hlsConversionStatus, 'PROCESSING');
     assert.equal(sProc.responseBody.hlsMasterUrl, '');
-    assert.match(sProc.responseBody.url, /X-Amz-Signature=/);
+    assert.ok(sProc.responseBody.url.startsWith('https://media.whitecoat.academy/videos/fallback-matrix.mp4'), 'MP4 fallback uses CloudFront');
+    assert.ok(!sProc.responseBody.url.includes('.amazonaws.com'), 'Does not return direct S3 URL');
 
     // 12.3 FAILED: returns empty HLS URL, error detail, and safe MP4 fallback
     VideoConversion.findOne = () => ({
@@ -940,7 +947,8 @@ test('12. Fallback behavior: COMPLETED returns HLS, PROCESSING and FAILED return
     assert.equal(sFail.responseBody.hlsConversionStatus, 'FAILED');
     assert.equal(sFail.responseBody.hlsConversionError, 'Transcode failed: corrupt header');
     assert.equal(sFail.responseBody.hlsMasterUrl, '');
-    assert.match(sFail.responseBody.url, /X-Amz-Signature=/);
+    assert.ok(sFail.responseBody.url.startsWith('https://media.whitecoat.academy/videos/fallback-matrix.mp4'), 'MP4 fallback uses CloudFront');
+    assert.ok(!sFail.responseBody.url.includes('.amazonaws.com'), 'Does not return direct S3 URL');
   } finally {
     restoreSigner();
     Course.findOne = origFindOneCourse;
@@ -1217,7 +1225,8 @@ test('18. getMediaAccessUrl attaches CloudFront signed cookies when signing is c
     assert.equal(res.cookies['CloudFront-Policy'].options.secure, true);
     assert.equal(res.cookies['CloudFront-Policy'].options.sameSite, 'None');
     assert.equal(res.cookies['CloudFront-Policy'].options.path, '/');
-    assert.match(res.responseBody.url, /X-Amz-Signature=/, 'Preserves MP4 fallback URL');
+    assert.ok(res.responseBody.url.startsWith('https://media.whitecoat.academy/videos/signed-cookies-stream.mp4'), 'Preserves CloudFront MP4 fallback URL');
+    assert.ok(!res.responseBody.url.includes('.amazonaws.com'), 'Does not return direct S3 URL');
   } finally {
     process.env.CLOUDFRONT_KEY_PAIR_ID = origKeyPairId;
     process.env.CLOUDFRONT_PRIVATE_KEY = origPrivateKey;
@@ -1303,7 +1312,8 @@ test('19. Student s3Key-only access resolves course enrollment and serves HLS pl
       await s3Controller.getMediaAccessUrl(cookieFailureFallback.req, cookieFailureFallback.res);
       assert.equal(cookieFailureFallback.res.statusCode, 200);
       assert.equal(cookieFailureFallback.res.responseBody.playbackType, 'mp4');
-      assert.match(cookieFailureFallback.res.responseBody.url, /X-Amz-Signature=/);
+      assert.ok(cookieFailureFallback.res.responseBody.url.startsWith('https://media.whitecoat.academy/videos/student-s3only.mp4'), 'MP4 fallback uses CloudFront');
+      assert.ok(!cookieFailureFallback.res.responseBody.url.includes('.amazonaws.com'), 'Does not return direct S3 URL');
       assert.deepEqual(cookieFailureFallback.res.cookies, {});
     } finally {
       process.env.CLOUDFRONT_PRIVATE_KEY = configuredPrivateKey;
@@ -1437,7 +1447,8 @@ test('21. HLS readiness validator safely falls back to MP4 when S3 manifest or s
     assert.equal(res.statusCode, 200);
     // When S3 objects are missing, fallback to MP4 is served seamlessly
     assert.equal(res.responseBody.playbackType, 'mp4');
-    assert.match(res.responseBody.url, /X-Amz-Signature=/, 'Serves presigned MP4 fallback URL');
+    assert.ok(res.responseBody.url.startsWith('https://media.whitecoat.academy/videos/missing-hls-s3.mp4'), 'Serves CloudFront MP4 fallback URL');
+    assert.ok(!res.responseBody.url.includes('.amazonaws.com'), 'Does not return direct S3 URL');
   } finally {
     clearReadinessCache();
     restoreSigner();

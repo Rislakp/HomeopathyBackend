@@ -1,7 +1,7 @@
 const { GetObjectCommand } = require('@aws-sdk/client-s3');
 const { getSignedUrl } = require('@aws-sdk/s3-request-presigner');
 const { s3Client, bucket, region, publicBaseUrl } = require('../config/s3');
-const { isCloudFrontConfigured, signCloudFrontPlaybackUrl, getCloudFrontDomain } = require('./cloudFrontMediaSigner');
+const { isCloudFrontConfigured, signCloudFrontPlaybackUrl, resolveCloudFrontPlaybackUrl, getCloudFrontDomain } = require('./cloudFrontMediaSigner');
 
 // Time-to-live for signed URLs (in seconds) - default 2 hours (7200s) to support long classes
 const S3_MEDIA_URL_TTL_SECONDS = parseInt(process.env.S3_SIGNED_URL_EXPIRES_IN || process.env.S3_MEDIA_URL_TTL_SECONDS, 10) || 21600;
@@ -137,7 +137,34 @@ const signS3Reference = async (reference, responseContentType) => {
     }
   }
 
-  // If CloudFront playback is enabled, attempt CloudFront signed URL first
+  const isVideo = key.startsWith('videos/') ||
+    key.startsWith('live_records/') ||
+    lowerKey.endsWith('.mp4') ||
+    lowerKey.endsWith('.m4v') ||
+    lowerKey.endsWith('.webm') ||
+    lowerKey.endsWith('.mov') ||
+    lowerKey.endsWith('.m3u8');
+
+  // Video playback requests must ALWAYS route through CloudFront (media.whitecoat.academy)
+  if (isVideo) {
+    const cloudFrontUrl = resolveCloudFrontPlaybackUrl(key, { expiresIn: S3_MEDIA_URL_TTL_SECONDS });
+    return {
+      ...normalized,
+      fileName: normalized.fileName || normalized.originalFileName || '',
+      url: cloudFrontUrl,
+      secure_url: cloudFrontUrl,
+      secureUrl: cloudFrontUrl,
+      fileUrl: cloudFrontUrl,
+      documentUrl: cloudFrontUrl,
+      path: cloudFrontUrl,
+      videoUrl: cloudFrontUrl,
+      mediaUrl: cloudFrontUrl,
+      accessUrlExpiresIn: S3_MEDIA_URL_TTL_SECONDS,
+      deliveryProvider: 'cloudfront',
+    };
+  }
+
+  // If CloudFront playback is enabled, attempt CloudFront signed URL first for non-video assets
   if (isCloudFrontConfigured()) {
     try {
       const cloudFrontUrl = signCloudFrontPlaybackUrl(key, { expiresIn: S3_MEDIA_URL_TTL_SECONDS });
