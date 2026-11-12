@@ -25,10 +25,9 @@ require('dotenv').config({ path: path.join(__dirname, '../.env') });
 const mongoose = require('mongoose');
 
 const connectDB = require('../config/db');
-const Course = require('../models/Course');
-const Recording = require('../models/Recording');
 const VideoConversion = require('../models/VideoConversion');
-const { isConvertibleVideoKey, getM4vKeyForOriginal } = require('../services/videoConversionService');
+const { getM4vKeyForOriginal } = require('../services/videoConversionService');
+const { discoverCourseVideos } = require('../services/iosMp4Sweeper');
 const { submitIosMp4Job, checkIosMp4Job } = require('../services/iosMp4MediaConvertService');
 
 const args = process.argv.slice(2);
@@ -45,45 +44,9 @@ const POLL_MS = (parseInt(getArg('poll-seconds'), 10) || 30) * 1000;
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
-// Turns a stored key or S3/CloudFront URL into an S3 key.
-function toS3Key(raw) {
-  if (!raw || typeof raw !== 'string') return '';
-  let value = raw.trim();
-  if (/^https?:\/\//i.test(value)) {
-    try {
-      value = decodeURIComponent(new URL(value).pathname.replace(/^\/+/, ''));
-    } catch (_) {
-      return '';
-    }
-  }
-  return isConvertibleVideoKey(value) ? value : '';
-}
-
 async function discoverVideos() {
-  const found = new Map();
-  const add = (raw, source) => {
-    const key = toS3Key(raw);
-    if (key && !found.has(key)) found.set(key, source);
-  };
-
-  const courses = await Course.find({}).lean();
-  for (const course of courses) {
-    const courseId = String(course.courseId || course._id);
-    for (const mod of course.modules || []) {
-      for (const lesson of mod.lessons || []) {
-        const source = `Course ${courseId} / ${lesson.lessonTitle || lesson._id}`;
-        for (const k of [lesson.s3Key, lesson.videoS3Key, lesson.videoUrl]) add(k, source);
-        for (const vp of lesson.videoParts || []) for (const k of [vp.s3Key, vp.url, vp.secure_url]) add(k, source);
-      }
-    }
-  }
-  const recordings = await Recording.find({}).lean();
-  for (const rec of recordings) {
-    for (const k of [rec.s3Key, rec.recordedVideoUrl, rec.recordingFileUrl]) add(k, `Recording ${rec._id}`);
-  }
-
-  return Array.from(found, ([s3Key, source]) => ({ s3Key, source }))
-    .filter((v) => !KEY_FILTER || v.s3Key.toLowerCase().includes(KEY_FILTER));
+  const videos = await discoverCourseVideos();
+  return videos.filter((v) => !KEY_FILTER || v.s3Key.toLowerCase().includes(KEY_FILTER));
 }
 
 async function main() {

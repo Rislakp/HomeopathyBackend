@@ -424,6 +424,9 @@ const startServer = async () => {
     // res.setTimeout() middleware is the sole timeout mechanism.
     // Render's reverse proxy enforces its own outer deadline (26 min),
     // so we do not need a redundant socket cut that races with large uploads.
+    // Safety net: finish/retry iOS MP4 conversions even if the MediaConvert webhook is not set up.
+    require('./services/iosMp4Sweeper').startIosMp4Sweeper();
+
     server.timeout = 0;
     server.keepAliveTimeout = 65000;
     server.headersTimeout = 66000;
