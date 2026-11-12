@@ -71,16 +71,15 @@ const normalizeS3Reference = (reference) => {
     const expectedHosts = new Set([
       `${bucket}.s3.${region}.amazonaws.com`.toLowerCase(),
       `${bucket}.s3.amazonaws.com`.toLowerCase(),
+      `${bucket}.s3-${region}.amazonaws.com`.toLowerCase(),
       `s3.${region}.amazonaws.com`.toLowerCase(),
       's3.amazonaws.com',
     ]);
     if (publicBaseUrl) {
       try { expectedHosts.add(new URL(publicBaseUrl).hostname.toLowerCase()); } catch (_) { /* ignore invalid base URL */ }
     }
-    if (parsed.hostname.includes('amazonaws.com') && !expectedHosts.has(parsed.hostname)) {
-      expectedHosts.add(parsed.hostname);
-    }
-    if (!expectedHosts.has(parsed.hostname)) return null;
+    const hostname = parsed.hostname.toLowerCase();
+    if (!expectedHosts.has(hostname)) return null;
 
     let pathParts = decodeURIComponent(parsed.pathname.replace(/^\/+/, ''));
     if (hostname === `s3.${region}.amazonaws.com`.toLowerCase() || hostname === 's3.amazonaws.com') {
