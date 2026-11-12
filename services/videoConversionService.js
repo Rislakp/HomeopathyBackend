@@ -684,6 +684,28 @@ async function convertMp4ToM4v(originalS3Key, options = {}) {
 // In-memory set to prevent duplicate concurrent conversions of the same video key
 const inFlightConversions = new Set();
 
+// Re-encoding is CPU heavy, so run a limited number at a time (default 1).
+// Without this, batch-convert would start an ffmpeg process for every video at once.
+const MAX_CONCURRENT_CONVERSIONS = Math.max(1, parseInt(process.env.VIDEO_CONVERSION_CONCURRENCY, 10) || 1);
+const conversionQueue = [];
+let runningConversions = 0;
+
+function runNextConversion() {
+  while (runningConversions < MAX_CONCURRENT_CONVERSIONS && conversionQueue.length > 0) {
+    const { key, options } = conversionQueue.shift();
+    runningConversions += 1;
+    convertMp4ToM4v(key, options)
+      .catch((err) => {
+        console.error(`[VideoConversion] Background conversion failed for ${key}:`, err.message);
+      })
+      .finally(() => {
+        runningConversions -= 1;
+        inFlightConversions.delete(key);
+        setImmediate(runNextConversion);
+      });
+  }
+}
+
 /**
  * Enqueues a video for background conversion without blocking the caller.
  */
@@ -694,22 +716,14 @@ function enqueueConversion(s3Key, options = {}) {
   }
 
   if (inFlightConversions.has(cleanKey)) {
-    console.info(`[VideoConversion] Conversion already in flight for ${cleanKey}, skipping duplicate.`);
+    console.info(`[VideoConversion] Conversion already queued or running for ${cleanKey}, skipping duplicate.`);
     return true;
   }
 
   inFlightConversions.add(cleanKey);
-
-  // Fire asynchronously
-  setImmediate(async () => {
-    try {
-      await convertMp4ToM4v(cleanKey, options);
-    } catch (err) {
-      console.error(`[VideoConversion] Background conversion failed for ${cleanKey}:`, err.message);
-    } finally {
-      inFlightConversions.delete(cleanKey);
-    }
-  });
+  conversionQueue.push({ key: cleanKey, options });
+  console.info(`[VideoConversion] Queued ${cleanKey} (queue length: ${conversionQueue.length}, running: ${runningConversions})`);
+  setImmediate(runNextConversion);
 
   return true;
 }
@@ -719,7 +733,7 @@ function enqueueConversion(s3Key, options = {}) {
  */
 async function retryConversion(s3Key) {
   const cleanKey = String(s3Key || '').trim();
-  inFlightConversions.delete(cleanKey);
+  // Do not clear an in-flight entry: that would start a second ffmpeg for the same video.
   return enqueueConversion(cleanKey, { force: true });
 }
 
