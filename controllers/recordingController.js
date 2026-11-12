@@ -742,6 +742,17 @@ exports.uploadRecordingVideo = async (req, res) => {
 
     await recording.save();
 
+    // A file uploaded through this endpoint did not go through multipart upload,
+    // so start its seek-safe iOS MP4 here (multipart uploads already do this).
+    if (uploadedFile && activeStorageProvider === 's3' && resolvedKey) {
+      try {
+        const { startIosRendition } = require('../services/iosMp4MediaConvertService');
+        startIosRendition(resolvedKey);
+      } catch (convErr) {
+        console.warn('[Recording] Could not start iOS MP4 conversion:', convErr.message);
+      }
+    }
+
     // If attached to a Course lesson, sync the recorded URL into the lesson videoUrl/videoParts
     if (recording.courseId && recording.moduleId && recording.lessonId) {
       try {
