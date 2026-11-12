@@ -79,6 +79,12 @@ const attachVerifiedM4vRendition = async (resource) => {
     output.iosM4vUrl = signed.url;
     output.iosVideoUrl = signed.url;
     output.m4vConversionStatus = 'completed';
+    // Play the seek-safe rendition wherever the player reads this video's URL from.
+    // The original stays available as originalVideoUrl.
+    if (resource.url) output.originalVideoUrl = resource.url;
+    for (const field of ['url', 'secure_url', 'secureUrl', 'fileUrl', 'videoUrl', 'mediaUrl']) {
+      output[field] = signed.url;
+    }
   } catch (_) {
     return output;
   }
@@ -256,6 +262,7 @@ const addSignedS3MediaUrls = async (course) => {
               m4vConversionStatus: lesson.m4vConversionStatus,
             });
             if (withM4v?.m4vUrl) {
+              lesson.videoUrl = withM4v.m4vUrl; // seek-safe rendition for every player
               lesson.m4vUrl = withM4v.m4vUrl;
               lesson.iosM4vUrl = withM4v.m4vUrl;
               lesson.iosVideoUrl = withM4v.m4vUrl;

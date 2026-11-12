@@ -106,7 +106,7 @@ test('3. Key derivation and validation for M4V renditions', () => {
   assert.equal(hasSafeM4vKey('other/file.m4v'), false);
 });
 
-test('4. attachVerifiedM4vRendition signs M4V when present in S3 and preserves original MP4', async (t) => {
+test('4. attachVerifiedM4vRendition signs M4V when present in S3 and serves it as the playback URL', async (t) => {
   const originalSend = s3.s3Client.send;
   s3.s3Client.send = async (command) => {
     if (command.constructor.name === 'HeadObjectCommand') {
@@ -130,8 +130,10 @@ test('4. attachVerifiedM4vRendition signs M4V when present in S3 and preserves o
 
   const result = await attachVerifiedM4vRendition(resource);
 
-  // Original MP4 remains completely unchanged
-  assert.equal(result.url, 'https://media.example/videos/pharm.mp4?sig=mp4');
+  // Players get the seek-safe rendition; the original MP4 link is kept separately
+  assert.equal(result.url, result.m4vUrl);
+  assert.equal(result.videoUrl, result.m4vUrl);
+  assert.equal(result.originalVideoUrl, 'https://media.example/videos/pharm.mp4?sig=mp4');
   assert.equal(result.s3Key, 'videos/pharm.mp4');
 
   // Converted M4V is signed and attached
