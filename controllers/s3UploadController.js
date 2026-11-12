@@ -1,3 +1,4 @@
+const { isIosRenditionKey, getOriginalKeyCandidates } = require('../utils/iosRendition');
 const {
   AbortMultipartUploadCommand,
   CompleteMultipartUploadCommand,
@@ -312,8 +313,8 @@ const completeMultipartUpload = async (req, res) => {
     // Also trigger background iOS M4V conversion for uploaded videos
     if (key.toLowerCase().endsWith('.mp4') || key.toLowerCase().endsWith('.webm') || key.toLowerCase().endsWith('.mov')) {
       try {
-        const { enqueueConversion } = require('../services/videoConversionService');
-        enqueueConversion(key);
+        const { startIosRendition } = require('../services/iosMp4MediaConvertService');
+        startIosRendition(key);
       } catch (convErr) {
         console.warn('[S3 multipart] Could not enqueue background M4V conversion:', convErr.message);
       }
@@ -545,11 +546,8 @@ const courseContainsMediaKey = (course, key) => {
       }
     }
   }
-  if (targetKey.endsWith('_ios.m4v')) {
-    const origMp4 = targetKey.replace(/_ios\.m4v$/, '.mp4');
-    if (courseContainsMediaKey(course, origMp4)) return true;
-    const origWebm = targetKey.replace(/_ios\.m4v$/, '.webm');
-    if (courseContainsMediaKey(course, origWebm)) return true;
+  for (const origKey of getOriginalKeyCandidates(targetKey)) {
+    if (courseContainsMediaKey(course, origKey)) return true;
   }
   return false;
 };
@@ -767,10 +765,8 @@ const getMediaAccessUrl = async (req, res) => {
         { 'modules.lessons.attachments.url': { $regex: escapeRegex(key) } },
       ];
 
-      if (key.endsWith('_ios.m4v')) {
-        const origMp4 = key.replace(/_ios\.m4v$/, '.mp4');
-        const origWebm = key.replace(/_ios\.m4v$/, '.webm');
-        for (const origKey of [origMp4, origWebm]) {
+      if (isIosRenditionKey(key)) {
+        for (const origKey of getOriginalKeyCandidates(key)) {
           searchConditions.push(
             { 'modules.lessons.videoS3Key': origKey },
             { 'modules.lessons.s3Key': origKey },
@@ -1094,8 +1090,8 @@ const retryVideoConversion = async (req, res) => {
   const s3Key = req.body?.s3Key || req.body?.key || req.query?.s3Key;
   if (!s3Key) return fail(res, 400, 's3Key is required.');
   try {
-    const { retryConversion } = require('../services/videoConversionService');
-    const enqueued = await retryConversion(s3Key);
+    const { startIosRendition } = require('../services/iosMp4MediaConvertService');
+    const enqueued = startIosRendition(s3Key, { force: true });
     return res.json({ success: true, enqueued, s3Key });
   } catch (err) {
     return fail(res, 500, err.message);
@@ -1104,7 +1100,7 @@ const retryVideoConversion = async (req, res) => {
 
 const batchConvertCourseVideos = async (req, res) => {
   try {
-    const { enqueueConversion } = require('../services/videoConversionService');
+    const { startIosRendition } = require('../services/iosMp4MediaConvertService');
     const courses = await Course.find({}).lean();
     const queued = [];
     const seen = new Set();
@@ -1122,7 +1118,7 @@ const batchConvertCourseVideos = async (req, res) => {
             const trimmed = String(k).trim();
             if (trimmed && (trimmed.endsWith('.mp4') || trimmed.endsWith('.webm') || trimmed.endsWith('.mov')) && !seen.has(trimmed)) {
               seen.add(trimmed);
-              enqueueConversion(trimmed, { force: req.body?.force === true });
+              startIosRendition(trimmed, { force: req.body?.force === true });
               queued.push(trimmed);
             }
           }

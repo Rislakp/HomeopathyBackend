@@ -33,7 +33,7 @@ function isEligibleVideoKey(key) {
   return (
     (lower.startsWith('videos/') || lower.startsWith('live_records/')) &&
     (lower.endsWith('.mp4') || lower.endsWith('.mov') || lower.endsWith('.webm') || lower.endsWith('.m4v')) &&
-    !lower.endsWith('_ios.m4v') &&
+    !/_ios\.(m4v|mp4)$/.test(lower) &&
     !lower.includes('.m3u8') &&
     !lower.includes('.ts')
   );
@@ -788,6 +788,14 @@ async function handleJobStateChange(eventPayload) {
   const jobId = detail.jobId || detail.Id;
   const status = String(detail.status || '').toUpperCase();
   const userMetadata = detail.userMetadata || {};
+
+  // 720p iOS MP4 jobs are not HLS jobs: hand them to their own handler so they
+  // never overwrite a video's HLS status.
+  if (userMetadata.jobType === 'ios-mp4') {
+    const { handleIosMp4JobState } = require('./iosMp4MediaConvertService');
+    return handleIosMp4JobState({ jobId, status, errorMessage: detail.errorMessage, userMetadata });
+  }
+
   const s3Key = userMetadata.s3Key || '';
   const videoId = userMetadata.videoId || (s3Key ? deriveVideoIdFromKey(s3Key) : '');
 

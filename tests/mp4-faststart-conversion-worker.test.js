@@ -134,7 +134,7 @@ test('5. Key derivation and convertible video detection', () => {
   assert.equal(isConvertibleVideoKey('pdfs/doc.pdf'), false);
   assert.equal(isConvertibleVideoKey('images/logo.png'), false);
 
-  assert.equal(getM4vKeyForOriginal('videos/lecture-1.mp4'), 'videos/lecture-1_ios.m4v');
+  assert.equal(getM4vKeyForOriginal('videos/lecture-1.mp4'), 'videos/lecture-1_ios.mp4');
   assert.equal(getM4vKeyForOriginal('videos/already_ios.m4v'), 'videos/already_ios.m4v');
 });
 

@@ -19,6 +19,19 @@ const videoConversionSchema = new mongoose.Schema(
       trim: true,
       default: '',
     },
+    // Which encode settings produced the iOS rendition (see IOS_ENCODE_PROFILE / IOS_MP4_MEDIACONVERT_PROFILE)
+    encodeProfile: {
+      type: String,
+      trim: true,
+      default: '',
+    },
+    // MediaConvert job that is building the 720p iOS MP4 (separate from the HLS job id)
+    iosMp4JobId: {
+      type: String,
+      trim: true,
+      default: '',
+      index: true,
+    },
     videoId: {
       type: String,
       trim: true,

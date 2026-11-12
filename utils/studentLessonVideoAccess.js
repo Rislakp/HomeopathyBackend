@@ -1,3 +1,4 @@
+const { isIosRenditionKey, getOriginalKeyCandidates } = require('../utils/iosRendition');
 const mongoose = require('mongoose');
 const Student = require('../models/Student');
 const User = require('../models/User');
@@ -138,12 +139,8 @@ async function resolveStudentLessonVideoAccess({ user, courseId, s3Key, models =
   const requested = s3Key.trim();
   const directFields = ['videoS3Key', 's3Key', 'mp4S3Key', 'm4vS3Key'];
 
-  const isM4vDerivative = requested.endsWith('_ios.m4v');
-  const originalKeyCandidates = isM4vDerivative ? [
-    requested.replace(/_ios\.m4v$/, '.mp4'),
-    requested.replace(/_ios\.m4v$/, '.webm'),
-    requested.replace(/_ios\.m4v$/, '.mov'),
-  ] : [];
+  const isM4vDerivative = isIosRenditionKey(requested);
+  const originalKeyCandidates = getOriginalKeyCandidates(requested);
 
   const candidatesQuery = { $or: [
     { 'modules.lessons.videoS3Key': requested }, { 'modules.lessons.s3Key': requested },
@@ -221,12 +218,8 @@ async function resolveStudentLessonVideoAccess({ user, courseId, s3Key, models =
 function findLessonMatchingKey(course, requestedKey) {
   const requested = String(requestedKey || '').trim();
   if (!course || !Array.isArray(course.modules) || !requested) return null;
-  const isM4vDerivative = requested.endsWith('_ios.m4v');
-  const originalKeyCandidates = isM4vDerivative ? [
-    requested.replace(/_ios\.m4v$/, '.mp4'),
-    requested.replace(/_ios\.m4v$/, '.webm'),
-    requested.replace(/_ios\.m4v$/, '.mov'),
-  ] : [];
+  const isM4vDerivative = isIosRenditionKey(requested);
+  const originalKeyCandidates = getOriginalKeyCandidates(requested);
   for (const mod of course.modules) for (const lesson of mod.lessons || []) {
     const keys = ['videoS3Key', 's3Key', 'mp4S3Key', 'm4vS3Key'].map((field) => lesson[field]).filter(Boolean).map(String);
     for (const part of lesson.videoParts || []) for (const field of ['s3Key', 'mp4S3Key', 'm4vS3Key']) if (part[field]) keys.push(String(part[field]));
