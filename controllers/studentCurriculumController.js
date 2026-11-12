@@ -232,7 +232,8 @@ const addSignedS3MediaUrls = async (course) => {
           !lesson.videoUrl.includes('X-Amz-Signature') &&
           lesson.videoUrl.includes('cloudinary.com');
         if (!isLessonUrlLiveVideo) {
-          const compatibleUrl = firstVideo.mp4Url || firstVideo.m4vUrl || firstVideo.url;
+          // Prefer the re-encoded rendition: it has regular keyframes, so seeking works on iOS Safari.
+          const compatibleUrl = firstVideo.m4vUrl || firstVideo.mp4Url || firstVideo.url;
           lesson.videoUrl = compatibleUrl;
         }
       } else if (!firstVideo && (lesson.videoS3Key || lesson.s3Key || lesson.storageProvider === 's3' || (lesson.videoUrl && (lesson.videoUrl.includes('.amazonaws.com/') || lesson.videoUrl.startsWith('videos/'))))) {

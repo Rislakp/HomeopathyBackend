@@ -67,7 +67,7 @@ function checkBinaryAvailability() {
  * @param {number|string} fps - Input/target frame rate (e.g. 24, 29.97, 30, '30000/1001')
  * @returns {string[]} Array of FFmpeg CLI arguments
  */
-function calculateGopOptions(fps) {
+function parseFps(fps) {
   let numFps = 30;
   if (typeof fps === 'number' && Number.isFinite(fps) && fps > 0) {
     numFps = fps;
@@ -85,13 +85,58 @@ function calculateGopOptions(fps) {
     }
   }
 
-  const validFps = Math.min(Math.max(numFps, 1), 120);
+  return numFps;
+}
+
+function calculateGopOptions(fps) {
+  const validFps = Math.min(Math.max(parseFps(fps), 1), 120);
   const gopSize = Math.max(12, Math.round(validFps * 2.0));
 
   return [
     '-g', String(gopSize),
     '-keyint_min', String(gopSize),
     '-sc_threshold', '0',
+  ];
+}
+
+// Bump this when the iOS encode settings change, so older renditions get rebuilt.
+const IOS_ENCODE_PROFILE = 'ios-seek-v2';
+
+/**
+ * Builds the FFmpeg args for the iOS rendition.
+ *
+ * iOS Safari freezes on seek when a video has long keyframe gaps or a variable
+ * frame rate (common in screen recordings). A plain '-c copy' remux keeps those
+ * problems, so we always re-encode to: constant frame rate (max 30), closed GOP
+ * with a keyframe every 2 seconds, H.264 Main 4.0, max 1920px wide, AAC 48 kHz,
+ * and faststart.
+ */
+function buildIosEncodeArgs(inputPath, outputPath, fps, options = {}) {
+  const sourceFps = parseFps(fps);
+  const targetFps = Math.min(Math.max(Math.round(sourceFps), 1), 30);
+  return [
+    '-y',
+    '-i', inputPath,
+    '-map', '0:v:0',
+    '-map', '0:a:0?',
+    '-vf', "scale='min(1920,iw)':-2",
+    '-c:v', 'libx264',
+    '-preset', options.preset || 'medium',
+    '-crf', String(options.crf || 22),
+    '-profile:v', 'main',
+    '-level:v', '4.0',
+    '-pix_fmt', 'yuv420p',
+    '-r', String(targetFps),
+    ...calculateGopOptions(targetFps),
+    '-flags', '+cgop',
+    '-c:a', 'aac',
+    '-b:a', '128k',
+    '-ar', '48000',
+    '-ac', '2',
+    '-af', 'aresample=async=1',
+    '-movflags', '+faststart',
+    '-f', 'mp4',
+    outputPath,
   ];
 }
 
@@ -256,6 +301,7 @@ async function uploadM4vToS3Multipart(filePath, targetKey, contentType = 'video/
       Key: targetKey,
       ContentType: contentType,
       CacheControl: 'private, max-age=31536000',
+      Metadata: { 'encode-profile': IOS_ENCODE_PROFILE },
     })
   );
   const uploadId = createRes.UploadId;
@@ -421,7 +467,7 @@ async function syncDatabaseRecords(originalKey, m4vKey, status, errorMessage = '
  * Implements the full 10-step safe workflow:
  * 1. Checks binaries and idempotency.
  * 2. Downloads original S3 object to temporary working directory.
- * 3. Probes input and runs FFmpeg FastStart remux (-map 0 -c copy -movflags +faststart).
+ * 3. Probes input and re-encodes to the iOS seek-safe profile (see buildIosEncodeArgs).
  * 4. Validates output with ffprobe and moov-before-mdat atom inspection.
  * 5. Uploads optimized output to S3 via multipart chunked upload.
  * 6. Verifies S3 head of uploaded object.
@@ -452,7 +498,11 @@ async function convertMp4ToM4v(originalS3Key, options = {}) {
   if (!options.force) {
     try {
       const head = await s3Client.send(new HeadObjectCommand({ Bucket: bucket, Key: targetM4vKey }));
-      if (head.ContentLength && head.ContentLength > 0) {
+      const madeWithCurrentProfile = head.Metadata?.['encode-profile'] === IOS_ENCODE_PROFILE;
+      if (head.ContentLength && head.ContentLength > 0 && !madeWithCurrentProfile) {
+        console.info(`[VideoConversion] Existing M4V for ${cleanKey} was made with an older profile; re-encoding.`);
+      }
+      if (head.ContentLength && head.ContentLength > 0 && madeWithCurrentProfile) {
         console.info(`[VideoConversion] Target M4V already exists in S3 (${head.ContentLength} bytes). Marking completed.`);
         await VideoConversion.findOneAndUpdate(
           { originalS3Key: cleanKey },
@@ -532,52 +582,13 @@ async function convertMp4ToM4v(originalS3Key, options = {}) {
 
     console.info(`[VideoConversion] Input codecs: video=${inVideoCodec} (pix_fmt=${inPixFmt}, fps=${inFps}), audio=${inAudioCodec}`);
 
-    // If input is already H.264 video, copy video stream lossless (-c copy) for zero degradation.
-    // If input is non-H.264 (e.g. WebM/VP8/VP9) or explicit re-encode is requested, re-encode with dynamic 2-second GOP.
-    const isH264 = inVideoCodec === 'h264' || inVideoCodec === 'avc1';
-    const forceReencode = options.reencode === true;
-    const canCopy = isH264 && !forceReencode;
-
-    let ffmpegArgs = [];
-
-    if (canCopy) {
-      // Primary FastStart Remux: ffmpeg -i input.mp4 -map 0 -c copy -movflags +faststart output.mp4
-      console.info(`[VideoConversion] Running stream-copy FastStart remux for ${cleanKey}...`);
-      ffmpegArgs = [
-        '-y',
-        '-i', localInput,
-        '-map', '0',
-        '-c', 'copy',
-        '-movflags', '+faststart',
-        '-f', 'mp4',
-        localOutput,
-      ];
-    } else {
-      // Transcode fallback with dynamic ~2-second GOP calculation
-      console.info(`[VideoConversion] Running optimized H.264 transcode with dynamic GOP for ${cleanKey}...`);
-      const gopArgs = calculateGopOptions(inFps);
-      ffmpegArgs = [
-        '-y',
-        '-i', localInput,
-        '-map', '0:v:0',
-        '-map', '0:a:0?',
-        '-c:v', 'libx264',
-        '-preset', options.preset || 'medium',
-        '-crf', String(options.crf || 22),
-        '-pix_fmt', 'yuv420p',
-        ...gopArgs,
-        '-c:a', 'aac',
-        '-b:a', '128k',
-        '-ac', '2',
-        '-movflags', '+faststart',
-        '-f', 'mp4',
-        localOutput,
-      ];
-    }
+    // Always re-encode: a stream copy keeps the long keyframe gaps that freeze iOS seeking.
+    console.info(`[VideoConversion] Running iOS seek-safe H.264 encode (${IOS_ENCODE_PROFILE}) for ${cleanKey}...`);
+    const ffmpegArgs = buildIosEncodeArgs(localInput, localOutput, inFps, options);
 
     // 4. Run FFmpeg
     await runFfmpeg(ffmpegArgs, {
-      timeoutMs: options.timeoutMs || 1800000,
+      timeoutMs: options.timeoutMs || 3 * 60 * 60 * 1000,
       ffmpegCmd,
     });
 
@@ -742,6 +753,8 @@ async function getConversionStatus(s3Key) {
 module.exports = {
   checkBinaryAvailability,
   calculateGopOptions,
+  buildIosEncodeArgs,
+  IOS_ENCODE_PROFILE,
   hasFastStartMoov,
   probeMedia,
   runFfmpeg,
