@@ -1,4 +1,5 @@
 const path = require('path');
+
 const mongoose = require('mongoose');
 require('dotenv').config({ path: path.join(__dirname, '..', '.env') });
 const Course = require('../models/Course');
@@ -6,7 +7,7 @@ const { formatCourseForStudent, addSignedS3MediaUrls } = require('../controllers
 
 async function simulateStudentLearn() {
   await mongoose.connect(process.env.MONGODB_URI);
-  
+
   const courses = await Course.find({}).lean();
   console.log(`Inspecting ${courses.length} courses via formatCourseForStudent + addSignedS3MediaUrls...`);
 
