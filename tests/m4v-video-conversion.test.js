@@ -89,8 +89,8 @@ test('2. VideoConversion model tracks conversion pipeline and attempts', () => {
 });
 
 test('3. Key derivation and validation for M4V renditions', () => {
-  assert.equal(getM4vKeyForOriginal('videos/lecture.mp4'), 'videos/lecture_ios.m4v');
-  assert.equal(getM4vKeyForOriginal('videos/rec.webm'), 'videos/rec_ios.m4v');
+  assert.equal(getM4vKeyForOriginal('videos/lecture.mp4'), 'videos/lecture_ios.mp4');
+  assert.equal(getM4vKeyForOriginal('videos/rec.webm'), 'videos/rec_ios.mp4');
   assert.equal(getM4vKeyForOriginal('videos/test_ios.m4v'), 'videos/test_ios.m4v');
 
   assert.equal(isConvertibleVideoKey('videos/123-lecture.mp4'), true);
@@ -100,6 +100,8 @@ test('3. Key derivation and validation for M4V renditions', () => {
   assert.equal(isConvertibleVideoKey('images/thumb.jpg'), false);
 
   assert.equal(hasSafeM4vKey('videos/123-lecture_ios.m4v'), true);
+  assert.equal(hasSafeM4vKey('videos/123-lecture_ios.mp4'), true);
+  assert.equal(hasSafeM4vKey('videos/123-lecture.mp4'), false);
   assert.equal(hasSafeM4vKey('videos/../escape.m4v'), false);
   assert.equal(hasSafeM4vKey('other/file.m4v'), false);
 });

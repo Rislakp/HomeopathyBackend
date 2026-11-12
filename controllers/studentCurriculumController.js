@@ -32,7 +32,7 @@ const hasSafeMp4Key = (key) => typeof key === 'string' &&
   !key.includes('..') && !key.includes('//') && !/[\\\r\n]/.test(key);
 
 const hasSafeM4vKey = (key) => typeof key === 'string' &&
-  /^videos\/[a-zA-Z0-9][a-zA-Z0-9._\/-]*\.m4v$/i.test(key) &&
+  /^videos\/[a-zA-Z0-9][a-zA-Z0-9._\/-]*(\.m4v|_ios\.mp4)$/i.test(key) &&
   !key.includes('..') && !key.includes('//') && !/[\\\r\n]/.test(key);
 
 

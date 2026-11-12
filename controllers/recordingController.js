@@ -1,3 +1,4 @@
+const { resolveCloudFrontPlaybackUrl } = require('../utils/cloudFrontMediaSigner');
 const Recording = require('../models/Recording');
 const Course = require('../models/Course');
 const mongoose = require('mongoose');
@@ -211,7 +212,9 @@ const formatRecordingDocument = async (rec) => {
   const signedResult = s3VideoReference
     ? await signS3Reference(s3VideoReference, s3VideoReference.contentType || inferredMime)
     : null;
-  const recordedVideoUrl = signedResult?.url || storedVideoUrl;
+  // Never hand out a direct S3 link for playback; route it through CloudFront instead.
+  const recordedVideoUrl = signedResult?.url ||
+    (/amazonaws\.com\//i.test(storedVideoUrl) ? resolveCloudFrontPlaybackUrl(storedVideoUrl) : storedVideoUrl);
 
   // Calculate resolution and quality metrics
   const metrics = calculateResolutionMetrics(

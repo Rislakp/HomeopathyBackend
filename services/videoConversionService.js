@@ -13,6 +13,7 @@ const {
 const { getSignedUrl } = require('@aws-sdk/s3-request-presigner');
 const { s3Client, bucket } = require('../config/s3');
 const VideoConversion = require('../models/VideoConversion');
+const { IOS_RENDITION_SUFFIX, isIosRenditionKey } = require('../utils/iosRendition');
 const Course = require('../models/Course');
 const Recording = require('../models/Recording');
 
@@ -101,6 +102,9 @@ function calculateGopOptions(fps) {
 
 // Bump this when the iOS encode settings change, so older renditions get rebuilt.
 const IOS_ENCODE_PROFILE = 'ios-seek-v2';
+// Same seek-safe rules, encoded by AWS MediaConvert at 720p (services/iosMp4MediaConvertService.js).
+const IOS_MP4_MEDIACONVERT_PROFILE = 'mediaconvert-720p-v1';
+const SEEK_SAFE_PROFILES = [IOS_ENCODE_PROFILE, IOS_MP4_MEDIACONVERT_PROFILE];
 
 /**
  * Builds the FFmpeg args for the iOS rendition.
@@ -374,17 +378,16 @@ async function uploadM4vToS3Multipart(filePath, targetKey, contentType = 'video/
 }
 
 /**
- * Derives the destination iOS M4V object key from the original S3 key.
+ * Derives the iOS rendition key from the original S3 key: `videos/a.mp4` -> `videos/a_ios.mp4`.
+ * (The function keeps its old name; older renditions used `_ios.m4v`.)
  */
 function getM4vKeyForOriginal(originalKey) {
   if (typeof originalKey !== 'string') return '';
   const clean = originalKey.trim().replace(/\\/g, '/');
+  if (isIosRenditionKey(clean)) return clean; // already a rendition
   const ext = path.extname(clean);
   const baseWithoutExt = ext ? clean.slice(0, -ext.length) : clean;
-  if (baseWithoutExt.endsWith('_ios')) {
-    return `${baseWithoutExt}.m4v`;
-  }
-  return `${baseWithoutExt}_ios.m4v`;
+  return `${baseWithoutExt}${IOS_RENDITION_SUFFIX}`;
 }
 
 /**
@@ -393,6 +396,7 @@ function getM4vKeyForOriginal(originalKey) {
 function isConvertibleVideoKey(key) {
   if (typeof key !== 'string') return false;
   const lower = key.toLowerCase().trim();
+  if (isIosRenditionKey(lower)) return false;
   return (
     lower.startsWith('videos/') ||
     lower.startsWith('live_records/')
@@ -498,7 +502,9 @@ async function convertMp4ToM4v(originalS3Key, options = {}) {
   if (!options.force) {
     try {
       const head = await s3Client.send(new HeadObjectCommand({ Bucket: bucket, Key: targetM4vKey }));
-      const madeWithCurrentProfile = head.Metadata?.['encode-profile'] === IOS_ENCODE_PROFILE;
+      const existingRecord = await VideoConversion.findOne({ originalS3Key: cleanKey }).lean().catch(() => null);
+      const madeWithCurrentProfile = head.Metadata?.['encode-profile'] === IOS_ENCODE_PROFILE ||
+        SEEK_SAFE_PROFILES.includes(existingRecord?.encodeProfile) && existingRecord?.m4vS3Key === targetM4vKey;
       if (head.ContentLength && head.ContentLength > 0 && !madeWithCurrentProfile) {
         console.info(`[VideoConversion] Existing M4V for ${cleanKey} was made with an older profile; re-encoding.`);
       }
@@ -636,6 +642,7 @@ async function convertMp4ToM4v(originalS3Key, options = {}) {
       {
         $set: {
           m4vS3Key: targetM4vKey,
+          encodeProfile: IOS_ENCODE_PROFILE,
           status: 'completed',
           duration,
           fileSize: stat.size,
@@ -769,6 +776,8 @@ module.exports = {
   calculateGopOptions,
   buildIosEncodeArgs,
   IOS_ENCODE_PROFILE,
+  IOS_MP4_MEDIACONVERT_PROFILE,
+  syncDatabaseRecords,
   hasFastStartMoov,
   probeMedia,
   runFfmpeg,
