@@ -13,7 +13,7 @@
     "diagnose:pdf": "node scripts/diagnose_pdf_assets.js",
     "video:remux": "node scripts/remux_faststart_video.js",
     "test:cloudfront": "node tests/cloudfront-playback.test.js",
-    "test": "node --test tests/cloudfront-playback.test.js tests/ios-safari-video-seeking.test.js tests/m4v-video-conversion.test.js tests/s3MediaSigner.plusEncoding.test.js tests/ios-encode-profile.test.js tests/ios-mp4-mediaconvert.test.js tests/ios-mp4-sweeper.test.js tests/prefer-ios-mp4.test.js"
+    "test": "node --test tests/cloudfront-playback.test.js tests/ios-safari-video-seeking.test.js tests/m4v-video-conversion.test.js tests/s3MediaSigner.plusEncoding.test.js tests/ios-encode-profile.test.js tests/ios-mp4-mediaconvert.test.js tests/ios-mp4-sweeper.test.js tests/prefer-ios-mp4.test.js tests/ios-playback-state.test.js"
   },
   "keywords": [
     "express",

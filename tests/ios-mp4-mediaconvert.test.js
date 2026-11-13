@@ -74,6 +74,7 @@ test('webhook sends ios-mp4 jobs to their own handler, not the HLS one', async (
 test('job applies rotation metadata and can drop audio for silent videos', () => {
   const normal = buildIosMp4JobSettings({ s3Key: KEY, targetKey: getM4vKeyForOriginal(KEY), bucketName: 'bucket' });
   assert.equal(normal.Settings.Inputs[0].VideoSelector.Rotate, 'AUTO');
+  assert.equal(normal.AccelerationSettings.Mode, 'PREFERRED');
   assert.ok(normal.Settings.Inputs[0].AudioSelectors);
   assert.equal(normal.Settings.OutputGroups[0].Outputs[0].AudioDescriptions.length, 1);
   assert.equal(normal.UserMetadata.videoOnly, 'false');
