@@ -568,6 +568,37 @@ const getMediaAccessUrl = async (req, res) => {
       const access = await resolveStudentLessonVideoAccess({ user: req.user, courseId, s3Key: cleanStudentKey });
       if (access.status !== 200) return fail(res, access.status, access.error);
       const { key, lesson } = access;
+
+      // Prefer the seek-safe _ios.mp4; while it is being made, report that instead
+      // of handing out the original (which can freeze on seek or time out).
+      const { getIosPlaybackState, PROCESSING_MESSAGE, RETRY_AFTER_SECONDS } = require('../utils/iosPlaybackState');
+      const iosState = await getIosPlaybackState(key);
+      if (iosState.state === 'ready') {
+        return res.json({
+          success: true,
+          url: resolveCloudFrontPlaybackUrl(iosState.renditionKey, { expiresIn: MEDIA_URL_TTL_SECONDS }),
+          s3Key: key,
+          key,
+          renditionKey: iosState.renditionKey,
+          expiresIn: MEDIA_URL_TTL_SECONDS,
+          playbackType: 'mp4',
+          deliveryProvider: 'cloudfront',
+        });
+      }
+      if (iosState.state === 'processing') {
+        return res.json({
+          success: true,
+          url: '',
+          s3Key: key,
+          key,
+          playbackType: 'processing',
+          videoProcessing: true,
+          videoStatus: 'processing',
+          processingMessage: PROCESSING_MESSAGE,
+          retryAfterSeconds: RETRY_AFTER_SECONDS,
+        });
+      }
+
       const { getVerifiedHlsConversionForS3Key } = require('../services/mediaConvertService');
       let hlsInfo;
       try { hlsInfo = await getVerifiedHlsConversionForS3Key(key); } catch (_) { hlsInfo = null; }

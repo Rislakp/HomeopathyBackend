@@ -163,6 +163,27 @@ const attachHlsStreamSafely = async (resource) => {
   }
 };
 
+const { getIosPlaybackState, markProcessing } = require('../utils/iosPlaybackState');
+
+// While a video's seek-safe _ios.mp4 is still being made, send a "being prepared"
+// state instead of the original file (which can freeze on seek or time out).
+const applyProcessingState = async (resource) => {
+  if (!resource || typeof resource !== 'object' || resource.m4vUrl) return resource;
+  if (resource.storageProvider !== 's3' || !resource.s3Key) return resource;
+  const { state } = await getIosPlaybackState(resource.s3Key);
+  return state === 'processing' ? markProcessing({ ...resource }) : resource;
+};
+
+const LESSON_PROCESSING_FIELDS = ['videoProcessing', 'videoStatus', 'processingMessage', 'retryAfterSeconds'];
+const applyLessonProcessingState = (lesson) => {
+  if (!lesson || typeof lesson !== 'object' || lesson.m4vUrl) return lesson;
+  const firstVideo = (lesson.videoParts || []).find((part) => part && part.storageProvider === 's3' && part.s3Key);
+  if (!firstVideo?.videoProcessing) return lesson;
+  markProcessing(lesson);
+  for (const field of LESSON_PROCESSING_FIELDS) lesson[field] = firstVideo[field];
+  return lesson;
+};
+
 const HLS_FIELDS = ['hlsMasterUrl', 'hlsPlaybackUrl'];
 const clearHls = (item) => {
   for (const field of HLS_FIELDS) if (item[field]) item[field] = '';
@@ -209,7 +230,7 @@ const addSignedS3MediaUrls = async (course) => {
             if (field === 'videoParts') {
               const withMp4 = await attachVerifiedMp4Fallback(resolved);
               const withM4v = await attachVerifiedM4vRendition(withMp4);
-              return attachHlsStreamSafely(withM4v);
+              return applyProcessingState(await attachHlsStreamSafely(withM4v));
             }
             return resolved;
           }));
@@ -303,7 +324,7 @@ const addSignedS3MediaUrls = async (course) => {
               lesson.fallbackMp4Url = fallbackRef.mp4Url;
             }
           }
-          const withHls = await attachHlsStreamSafely(withM4v);
+          const withHls = await applyProcessingState(await attachHlsStreamSafely(withM4v));
           if (withHls?.hlsMasterUrl) {
             lesson.hlsMasterUrl = withHls.hlsMasterUrl;
             lesson.hlsPlaybackUrl = withHls.hlsPlaybackUrl || withHls.hlsMasterUrl;
@@ -331,6 +352,7 @@ const addSignedS3MediaUrls = async (course) => {
       }
       // Once the seek-safe 720p MP4 exists, always play it instead of HLS.
       preferIosMp4OverHls(lesson);
+      applyLessonProcessingState(lesson);
       const firstPdf = (lesson.pdfNotes || []).find((resource) => resource.storageProvider === 's3' && resource.s3Key);
       if (firstPdf && !lesson.pdfUrl) {
         lesson.pdfUrl = firstPdf.url;
@@ -1658,4 +1680,6 @@ module.exports = {
   collectCurriculumHlsVideoIds,
   addSignedS3MediaUrls,
   preferIosMp4OverHls,
+  applyProcessingState,
+  applyLessonProcessingState,
 };
