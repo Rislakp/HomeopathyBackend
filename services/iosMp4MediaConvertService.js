@@ -23,7 +23,10 @@ const {
 
 const JOB_TYPE = 'ios-mp4';
 
-function buildIosMp4JobSettings({ s3Key, targetKey, bucketName = mediaConvertConfig.bucket }) {
+// MediaConvert error messages that mean the input has no usable audio track.
+const NO_AUDIO_ERROR_RE = /audio/i;
+
+function buildIosMp4JobSettings({ s3Key, targetKey, bucketName = mediaConvertConfig.bucket, videoOnly = false }) {
   // MediaConvert names the output <input name><NameModifier>.<Extension>,
   // so writing to the original's folder gives exactly `<original>_ios.mp4`.
   const folder = path.posix.dirname(s3Key);
@@ -33,13 +36,15 @@ function buildIosMp4JobSettings({ s3Key, targetKey, bucketName = mediaConvertCon
       jobType: JOB_TYPE,
       s3Key,
       targetKey,
+      videoOnly: videoOnly ? 'true' : 'false',
     },
     Settings: {
       TimecodeConfig: { Source: 'ZEROBASED' },
       Inputs: [
         {
-          AudioSelectors: { 'Audio Selector 1': { DefaultSelection: 'DEFAULT' } },
-          VideoSelector: {},
+          ...(videoOnly ? {} : { AudioSelectors: { 'Audio Selector 1': { DefaultSelection: 'DEFAULT' } } }),
+          // Apply the phone's rotation metadata so portrait videos are not sideways.
+          VideoSelector: { Rotate: 'AUTO' },
           TimecodeSource: 'ZEROBASED',
           FileInput: `s3://${bucketName}/${s3Key}`,
         },
@@ -92,20 +97,22 @@ function buildIosMp4JobSettings({ s3Key, targetKey, bucketName = mediaConvertCon
                   },
                 },
               },
-              AudioDescriptions: [
-                {
-                  AudioSourceName: 'Audio Selector 1',
-                  CodecSettings: {
-                    Codec: 'AAC',
-                    AacSettings: {
-                      Bitrate: 128000,
-                      CodingMode: 'CODING_MODE_2_0',
-                      SampleRate: 48000,
-                      CodecProfile: 'LC',
+              ...(videoOnly ? {} : {
+                AudioDescriptions: [
+                  {
+                    AudioSourceName: 'Audio Selector 1',
+                    CodecSettings: {
+                      Codec: 'AAC',
+                      AacSettings: {
+                        Bitrate: 128000,
+                        CodingMode: 'CODING_MODE_2_0',
+                        SampleRate: 48000,
+                        CodecProfile: 'LC',
+                      },
                     },
                   },
-                },
-              ],
+                ],
+              }),
             },
           ],
         },
@@ -119,7 +126,7 @@ function buildIosMp4JobSettings({ s3Key, targetKey, bucketName = mediaConvertCon
  * Skips videos that already have a 720p seek-safe MP4, or a job still running.
  * Returns { s3Key, targetKey, jobId, state } where state is 'submitted', 'running' or 'done'.
  */
-async function submitIosMp4Job(s3Key, { force = false } = {}) {
+async function submitIosMp4Job(s3Key, { force = false, videoOnly = false } = {}) {
   const cleanKey = String(s3Key || '').trim();
   if (!isConvertibleVideoKey(cleanKey)) {
     throw new Error(`Not a convertible original video key: ${cleanKey}`);
@@ -137,7 +144,7 @@ async function submitIosMp4Job(s3Key, { force = false } = {}) {
   }
 
   const client = await getMediaConvertClient();
-  const res = await client.send(new CreateJobCommand(buildIosMp4JobSettings({ s3Key: cleanKey, targetKey })));
+  const res = await client.send(new CreateJobCommand(buildIosMp4JobSettings({ s3Key: cleanKey, targetKey, videoOnly })));
   const jobId = res?.Job?.Id;
   if (!jobId) throw new Error('MediaConvert did not return a job id');
 
@@ -185,6 +192,13 @@ async function handleIosMp4JobState({ jobId, status, errorMessage, userMetadata 
     );
     await syncDatabaseRecords(s3Key, targetKey, 'completed');
     return { success: true, status: 'completed', s3Key, targetKey };
+  }
+
+  // A video with no audio track fails the normal job: convert it again without audio.
+  if (upper === 'ERROR' && userMetadata.videoOnly !== 'true' && NO_AUDIO_ERROR_RE.test(String(errorMessage || ''))) {
+    console.warn(`[iOS MP4] ${s3Key} has no usable audio (${errorMessage}); retrying as video-only.`);
+    const r = await submitIosMp4Job(s3Key, { force: true, videoOnly: true });
+    return { success: true, status: 'processing', s3Key, retriedVideoOnly: true, jobId: r.jobId };
   }
 
   if (upper === 'ERROR' || upper === 'CANCELED') {
