@@ -32,6 +32,9 @@ function buildIosMp4JobSettings({ s3Key, targetKey, bucketName = mediaConvertCon
   const folder = path.posix.dirname(s3Key);
   return {
     Role: mediaConvertConfig.roleArn,
+    // Faster transcoding for long videos; MediaConvert falls back to normal speed
+    // when a job can't be accelerated, so this never makes a job fail.
+    AccelerationSettings: { Mode: 'PREFERRED' },
     UserMetadata: {
       jobType: JOB_TYPE,
       s3Key,

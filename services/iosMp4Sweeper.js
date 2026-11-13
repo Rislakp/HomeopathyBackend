@@ -19,8 +19,12 @@ const { submitIosMp4Job, checkIosMp4Job } = require('./iosMp4MediaConvertService
 const SEEK_SAFE_PROFILES = [IOS_ENCODE_PROFILE, IOS_MP4_MEDIACONVERT_PROFILE];
 const MAX_ATTEMPTS = 3;
 const MAX_NEW_JOBS_PER_RUN = 10;
-const INTERVAL_MS = 10 * 60 * 1000;
-const FIRST_RUN_DELAY_MS = 2 * 60 * 1000;
+// Running jobs are checked every minute (one cheap AWS call each), so a finished
+// conversion reaches students within about a minute. The full scan for videos
+// with no conversion runs every 10 minutes.
+const INTERVAL_MS = 60 * 1000;
+const FULL_SCAN_EVERY = 10;
+const FIRST_RUN_DELAY_MS = 30 * 1000;
 
 // Turns a stored key or S3/CloudFront URL into an S3 key.
 function toS3Key(raw) {
@@ -66,7 +70,7 @@ function isSeekSafeDone(record) {
   return record?.status === 'completed' && SEEK_SAFE_PROFILES.includes(record.encodeProfile);
 }
 
-async function runIosMp4Sweep({ maxNewJobs = MAX_NEW_JOBS_PER_RUN } = {}) {
+async function runIosMp4Sweep({ maxNewJobs = MAX_NEW_JOBS_PER_RUN, fullScan = true } = {}) {
   const summary = { checked: 0, completed: 0, failed: 0, submitted: 0, errors: 0 };
 
   // 1. Finish jobs that are still marked as running.
@@ -81,6 +85,11 @@ async function runIosMp4Sweep({ maxNewJobs = MAX_NEW_JOBS_PER_RUN } = {}) {
       summary.errors += 1;
       console.warn(`[iOS MP4 sweep] Could not check job ${rec.iosMp4JobId} (${rec.originalS3Key}): ${err.message}`);
     }
+  }
+
+  if (!fullScan) {
+    if (summary.checked || summary.errors) console.info('[iOS MP4 sweep]', summary);
+    return summary;
   }
 
   // 2 + 3. Start missing conversions and retry failed ones.
@@ -110,6 +119,7 @@ async function runIosMp4Sweep({ maxNewJobs = MAX_NEW_JOBS_PER_RUN } = {}) {
 
 let timer = null;
 let sweeping = false;
+let tickCount = 0;
 
 function startIosMp4Sweeper() {
   if (timer || process.env.IOS_SWEEPER_DISABLED === 'true' || process.env.NODE_ENV === 'test') return false;
@@ -117,7 +127,8 @@ function startIosMp4Sweeper() {
     if (sweeping) return;
     sweeping = true;
     try {
-      await runIosMp4Sweep();
+      tickCount += 1;
+      await runIosMp4Sweep({ fullScan: tickCount % FULL_SCAN_EVERY === 1 });
     } catch (err) {
       console.error('[iOS MP4 sweep] Run failed:', err.message);
     } finally {
@@ -127,7 +138,7 @@ function startIosMp4Sweeper() {
   setTimeout(tick, FIRST_RUN_DELAY_MS).unref();
   timer = setInterval(tick, INTERVAL_MS);
   timer.unref();
-  console.info('[iOS MP4 sweep] Started (every 10 minutes).');
+  console.info('[iOS MP4 sweep] Started (running jobs every minute, full scan every 10 minutes).');
   return true;
 }
 
