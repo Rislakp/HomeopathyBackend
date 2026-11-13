@@ -70,3 +70,51 @@ test('webhook sends ios-mp4 jobs to their own handler, not the HLS one', async (
   assert.equal(set.status, 'completed');
   assert.equal('hlsConversionStatus' in set, false);
 });
+
+test('job applies rotation metadata and can drop audio for silent videos', () => {
+  const normal = buildIosMp4JobSettings({ s3Key: KEY, targetKey: getM4vKeyForOriginal(KEY), bucketName: 'bucket' });
+  assert.equal(normal.Settings.Inputs[0].VideoSelector.Rotate, 'AUTO');
+  assert.ok(normal.Settings.Inputs[0].AudioSelectors);
+  assert.equal(normal.Settings.OutputGroups[0].Outputs[0].AudioDescriptions.length, 1);
+  assert.equal(normal.UserMetadata.videoOnly, 'false');
+
+  const silent = buildIosMp4JobSettings({ s3Key: KEY, targetKey: getM4vKeyForOriginal(KEY), bucketName: 'bucket', videoOnly: true });
+  assert.equal(silent.Settings.Inputs[0].AudioSelectors, undefined);
+  assert.equal(silent.Settings.OutputGroups[0].Outputs[0].AudioDescriptions, undefined);
+  assert.equal(silent.UserMetadata.videoOnly, 'true');
+});
+
+test('an audio error is retried once as a video-only job', async (t) => {
+  const mcConfig = require('../config/mediaconvert');
+  const sent = [];
+  t.mock.method(mcConfig, 'getMediaConvertClient', async () => ({
+    send: async (cmd) => { sent.push(cmd.input); return { Job: { Id: `job-${sent.length}` } }; },
+  }));
+  t.mock.method(VideoConversion, 'findOne', () => ({ lean: async () => null }));
+  t.mock.method(VideoConversion, 'findOneAndUpdate', async () => ({}));
+  t.mock.method(Course, 'find', async () => []);
+  t.mock.method(Recording, 'find', async () => []);
+  delete require.cache[require.resolve('../services/iosMp4MediaConvertService')];
+  const { handleIosMp4JobState } = require('../services/iosMp4MediaConvertService');
+
+  const first = await handleIosMp4JobState({
+    jobId: 'job-0',
+    status: 'ERROR',
+    errorMessage: 'No audio track found in input',
+    userMetadata: { s3Key: KEY, videoOnly: 'false' },
+  });
+  assert.equal(first.status, 'processing');
+  assert.equal(sent.length, 1);
+  assert.equal(sent[0].UserMetadata.videoOnly, 'true');
+  assert.equal(sent[0].Settings.OutputGroups[0].Outputs[0].AudioDescriptions, undefined);
+
+  // A video-only job that fails again is recorded as failed, not retried forever.
+  const second = await handleIosMp4JobState({
+    jobId: 'job-1',
+    status: 'ERROR',
+    errorMessage: 'No audio track found in input',
+    userMetadata: { s3Key: KEY, videoOnly: 'true' },
+  });
+  assert.equal(second.status, 'failed');
+  assert.equal(sent.length, 1);
+});
