@@ -294,9 +294,11 @@ const completeMultipartUpload = async (req, res) => {
 
     const durationVal = req.body?.duration !== undefined ? req.body.duration : req.body?.videoDuration;
 
-    // Automatically trigger AWS Elemental MediaConvert HLS conversion
+    // HLS conversion is off by default: students get the seek-safe 720p _ios.mp4 instead.
+    // Set HLS_AUTO_CONVERT=true to also build HLS for new uploads.
+    const hlsAutoConvert = process.env.HLS_AUTO_CONVERT === 'true';
     let hlsData = null;
-    if (key.toLowerCase().endsWith('.mp4') || key.toLowerCase().endsWith('.webm') || key.toLowerCase().endsWith('.mov')) {
+    if (hlsAutoConvert && (key.toLowerCase().endsWith('.mp4') || key.toLowerCase().endsWith('.webm') || key.toLowerCase().endsWith('.mov'))) {
       try {
         const { enqueueHlsConversion } = require('../services/mediaConvertService');
         hlsData = enqueueHlsConversion(key, {
@@ -320,7 +322,7 @@ const completeMultipartUpload = async (req, res) => {
       }
     }
 
-    const hlsStatus = hlsData?.status || 'PENDING';
+    const hlsStatus = hlsData?.status || (hlsAutoConvert ? 'PENDING' : 'NONE');
     const hlsOutputPrefix = hlsData?.hlsOutputPrefix || '';
     const hlsMasterUrl = hlsData?.hlsMasterUrl || '';
 

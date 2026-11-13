@@ -663,8 +663,15 @@ test('curriculum replaces direct S3 lesson URLs with each verified primary and p
   assert.equal(legacyDirectLesson.videoUrl, legacyDirectLesson.videoParts[0].url);
 });
 
-test('9. Multipart complete upload returns HLS status PENDING and non-blocking job metadata', async () => {
+test('9. Multipart complete upload returns HLS status PENDING and non-blocking job metadata', async (t) => {
   const originalSend = s3.s3Client.send;
+  // HLS on upload is opt-in (HLS_AUTO_CONVERT=true); this test covers the enabled path.
+  const savedHlsFlag = process.env.HLS_AUTO_CONVERT;
+  process.env.HLS_AUTO_CONVERT = 'true';
+  t.after(() => {
+    if (savedHlsFlag === undefined) delete process.env.HLS_AUTO_CONVERT;
+    else process.env.HLS_AUTO_CONVERT = savedHlsFlag;
+  });
 
   s3.s3Client.send = async (cmd) => {
     if (cmd.constructor?.name === 'CompleteMultipartUploadCommand') {
@@ -756,23 +763,18 @@ test('10. Lesson-level curriculum response receives hlsMasterUrl and hlsConversi
     const formatted = await addSignedS3MediaUrls(rawCourse);
     const lesson = formatted.modules[0].lessons[0];
 
-    // Assert lesson-level receives HLS fields from first eligible videoPart
+    // HLS status is still reported, but because the seek-safe iOS MP4 exists,
+    // students are sent the MP4 and the HLS links are cleared.
     assert.equal(lesson.hlsConversionStatus, 'COMPLETED');
-    assert.equal(lesson.playbackType, 'hls');
-    assert.equal(
-      lesson.hlsMasterUrl,
-      'https://media.whitecoat.academy/hls/curriculum-hls/curriculum-hls.m3u8'
-    );
+    assert.equal(lesson.playbackType, 'mp4');
+    assert.equal(lesson.hlsMasterUrl, '');
     assert.equal(lesson.hlsOutputPrefix, 'hls/curriculum-hls/');
     assert.equal(lesson.mediaConvertJobId, 'job-curriculum-1');
 
-    // Assert existing video parts have matching HLS fields
     const part = lesson.videoParts[0];
     assert.equal(part.hlsConversionStatus, 'COMPLETED');
-    assert.equal(
-      part.hlsMasterUrl,
-      'https://media.whitecoat.academy/hls/curriculum-hls/curriculum-hls.m3u8'
-    );
+    assert.equal(part.hlsMasterUrl, '');
+    assert.equal(part.playbackType, 'mp4');
 
     // Assert MP4 and M4V fields use CloudFront and do not expose direct S3
     assert.ok(lesson.videoUrl && lesson.videoUrl.startsWith('https://media.whitecoat.academy/'), 'Preserves videoUrl MP4 fallback on CloudFront');
