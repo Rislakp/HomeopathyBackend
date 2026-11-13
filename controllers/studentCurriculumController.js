@@ -163,6 +163,27 @@ const attachHlsStreamSafely = async (resource) => {
   }
 };
 
+const HLS_FIELDS = ['hlsMasterUrl', 'hlsPlaybackUrl'];
+const clearHls = (item) => {
+  for (const field of HLS_FIELDS) if (item[field]) item[field] = '';
+  item.playbackType = 'mp4';
+};
+
+// Students get the _ios.mp4 (regular keyframes, works everywhere) rather than HLS
+// whenever it is ready. Lessons/parts without it keep their HLS settings.
+const preferIosMp4OverHls = (lesson) => {
+  if (!lesson || typeof lesson !== 'object') return lesson;
+  let lessonHasMp4 = Boolean(lesson.m4vUrl);
+  for (const part of lesson.videoParts || []) {
+    if (part && part.m4vUrl) {
+      clearHls(part);
+      lessonHasMp4 = true;
+    }
+  }
+  if (lessonHasMp4) clearHls(lesson);
+  return lesson;
+};
+
 const addSignedS3MediaUrls = async (course) => {
   if (!course || typeof course !== 'object') return course;
   if (course.thumbnailMedia?.storageProvider === 's3') {
@@ -308,6 +329,8 @@ const addSignedS3MediaUrls = async (course) => {
           }
         }
       }
+      // Once the seek-safe 720p MP4 exists, always play it instead of HLS.
+      preferIosMp4OverHls(lesson);
       const firstPdf = (lesson.pdfNotes || []).find((resource) => resource.storageProvider === 's3' && resource.s3Key);
       if (firstPdf && !lesson.pdfUrl) {
         lesson.pdfUrl = firstPdf.url;
@@ -1634,4 +1657,5 @@ module.exports = {
   attachCurriculumHlsCookies,
   collectCurriculumHlsVideoIds,
   addSignedS3MediaUrls,
+  preferIosMp4OverHls,
 };
