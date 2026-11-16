@@ -78,6 +78,21 @@ const normalizeS3Reference = (reference) => {
     if (publicBaseUrl) {
       try { expectedHosts.add(new URL(publicBaseUrl).hostname.toLowerCase()); } catch (_) { /* ignore invalid base URL */ }
     }
+    // Older exam question images were saved with a wrong, hard-coded bucket name
+    // (white-coat-academy-media). The files are in our bucket, so read the key back.
+    const legacyBuckets = (process.env.S3_LEGACY_BUCKET_ALIASES || 'white-coat-academy-media')
+      .split(',').map((b) => b.trim().toLowerCase()).filter(Boolean);
+    for (const legacy of legacyBuckets) {
+      expectedHosts.add(`${legacy}.s3.${region}.amazonaws.com`.toLowerCase());
+      expectedHosts.add(`${legacy}.s3.amazonaws.com`);
+      expectedHosts.add(`${legacy}.s3.ap-south-1.amazonaws.com`);
+    }
+    // Our CloudFront domain (e.g. a signed link saved from an upload preview): read the
+    // key back so it is signed fresh instead of returning a link that has expired.
+    try {
+      const cdnHost = String(getCloudFrontDomain() || '').toLowerCase();
+      if (cdnHost) expectedHosts.add(cdnHost);
+    } catch (_) { /* CloudFront not configured */ }
     const hostname = parsed.hostname.toLowerCase();
     if (!expectedHosts.has(hostname)) return null;
 

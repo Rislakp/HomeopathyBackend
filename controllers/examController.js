@@ -326,7 +326,9 @@ function validateAndSanitizeQuestion(q, index = 0) {
     const trimmed = rawImageUrl.trim();
     const s3Ref = typeof normalizeS3Reference === 'function' ? normalizeS3Reference(trimmed) : null;
     if (s3Ref && s3Ref.s3Key) {
-      sanitizedQuestion.imageUrl = `https://${process.env.AWS_S3_BUCKET_NAME || 'white-coat-academy-media'}.s3.${process.env.AWS_REGION || 'ap-south-1'}.amazonaws.com/${s3Ref.s3Key}`;
+      // Use the bucket the app actually uploads to (config/s3), not a hard-coded fallback name.
+      const { bucket: mediaBucket, region: mediaRegion } = require('../config/s3');
+      sanitizedQuestion.imageUrl = `https://${mediaBucket}.s3.${mediaRegion}.amazonaws.com/${s3Ref.s3Key}`;
     } else {
       sanitizedQuestion.imageUrl = trimmed;
     }
