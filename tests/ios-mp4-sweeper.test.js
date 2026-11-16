@@ -58,3 +58,18 @@ test('sweep limits how many new jobs it starts per run', async (t) => {
   await runIosMp4Sweep({ maxNewJobs: 4 });
   assert.equal(count, 4);
 });
+
+test('a quick tick only checks running jobs and does not scan courses', async (t) => {
+  let scanned = false;
+  t.mock.method(Course, 'find', () => { scanned = true; return lean([]); });
+  t.mock.method(Recording, 'find', () => { scanned = true; return lean([]); });
+  t.mock.method(VideoConversion, 'find', () => lean([{ originalS3Key: 'videos/a.mp4', status: 'processing', iosMp4JobId: 'job-a' }]));
+  const checked = [];
+  t.mock.method(iosMp4, 'checkIosMp4Job', async (id) => { checked.push(id); return { status: 'processing' }; });
+  t.mock.method(iosMp4, 'submitIosMp4Job', async () => { throw new Error('must not submit on a quick tick'); });
+
+  const { runIosMp4Sweep } = loadSweeper();
+  await runIosMp4Sweep({ fullScan: false });
+  assert.deepEqual(checked, ['job-a']);
+  assert.equal(scanned, false);
+});
