@@ -247,6 +247,8 @@ app.use('/uploads', express.static(uploadsDir, {
     }
   },
 }));
+// Signed question-image links for the admin panel (see utils/mediaImageProxy.js).
+app.get('/api/media/image', require('./utils/mediaImageProxy').imageProxyHandler);
 // No local file: /uploads/<s3 image key> redirects to a signed CloudFront link.
 app.use('/uploads', require('./middleware/uploadsS3ImageRedirect').uploadsS3ImageRedirect);
 app.use(express.static(uploadsDir));

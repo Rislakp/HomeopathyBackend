@@ -1,6 +1,7 @@
 const mongoose = require('mongoose');
 const { resolveProfileImageUrl, normalizeS3Reference } = require('../utils/s3MediaSigner');
 const { signQuestion, signExamQuestions } = require('../utils/signQuestionImages');
+const { signImageForViewer } = require('../utils/mediaImageProxy');
 const pdfParse = require('pdf-parse');
 const Tesseract = require('tesseract.js');
 const xlsx = require('xlsx');
@@ -799,7 +800,7 @@ async function createGrandMockExam(req, res) {
     return res.status(201).json({
       success: true,
       message: 'Exam created successfully.',
-      exam: await signExamQuestions(newExam)
+      exam: await signExamQuestions(newExam, req.user)
     });
   } catch (error) {
     console.error('Error creating Exam:', error);
@@ -1244,7 +1245,7 @@ async function getAllGrandMocks(req, res) {
           };
           const rawImg = formattedQuestion.imageUrl || formattedQuestion.image || formattedQuestion.questionImage || formattedQuestion.imgUrl;
           if (typeof rawImg === 'string' && rawImg.trim()) {
-            const signed = await resolveProfileImageUrl(rawImg.trim());
+            const signed = await signImageForViewer(rawImg.trim(), req.user);
             formattedQuestion.imageUrl = signed;
             formattedQuestion.image = signed;
             formattedQuestion.questionImage = signed;
@@ -1493,7 +1494,7 @@ async function getAllGrandMocks(req, res) {
       return res.status(200).json({
         success: true,
         message: 'Grand Mock Exam updated successfully.',
-        exam: await signExamQuestions(updatedExam)
+        exam: await signExamQuestions(updatedExam, req.user)
       });
     } catch (error) {
       console.error('Error updating Grand Mock Exam:', error);
@@ -1585,7 +1586,7 @@ async function deleteGrandMockExam(req, res) {
         return res.status(201).json({
           success: true,
           message: 'Question added successfully.',
-          question: await signQuestion(addedQuestion),
+          question: await signQuestion(addedQuestion, req.user),
           totalQuestions: exam.totalQuestions
         });
       } catch (error) {
@@ -1638,7 +1639,7 @@ async function deleteGrandMockExam(req, res) {
         return res.status(200).json({
           success: true,
           message: 'Question updated successfully.',
-          question: await signQuestion(qSubDoc)
+          question: await signQuestion(qSubDoc, req.user)
         });
       } catch (error) {
         console.error('Error updating question in exam:', error);
