@@ -66,7 +66,15 @@ jobs:
           npm ci --omit=dev --legacy-peer-deps
 
           echo "Restarting backend..."
-          pm2 restart ptblync-backend --update-env
+          # Cluster mode + reload restarts one copy at a time: no downtime.
+          # The first deploy switches the old single process over (short restart once).
+          if pm2 describe ptblync-backend 2>/dev/null | grep -q "cluster_mode"; then
+            pm2 reload ecosystem.config.js --update-env
+          else
+            pm2 delete ptblync-backend || true
+            pm2 start ecosystem.config.js
+          fi
+          pm2 save || true
 
           echo "Checking backend health..."
           for attempt in $(seq 1 15); do

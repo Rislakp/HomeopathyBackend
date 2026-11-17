@@ -123,6 +123,9 @@ let tickCount = 0;
 
 function startIosMp4Sweeper() {
   if (timer || process.env.IOS_SWEEPER_DISABLED === 'true' || process.env.NODE_ENV === 'test') return false;
+  // In PM2 cluster mode only the first copy runs the checker, so jobs are not doubled.
+  const pm2Instance = process.env.NODE_APP_INSTANCE;
+  if (pm2Instance !== undefined && pm2Instance !== '0') return false;
   const tick = async () => {
     if (sweeping) return;
     sweeping = true;
