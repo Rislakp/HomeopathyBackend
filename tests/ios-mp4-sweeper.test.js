@@ -73,3 +73,19 @@ test('a quick tick only checks running jobs and does not scan courses', async (t
   assert.deepEqual(checked, ['job-a']);
   assert.equal(scanned, false);
 });
+
+test('in PM2 cluster mode only the first copy starts the checker', (t) => {
+  const savedEnv = { NODE_ENV: process.env.NODE_ENV, NODE_APP_INSTANCE: process.env.NODE_APP_INSTANCE };
+  t.after(() => {
+    for (const [k, v] of Object.entries(savedEnv)) { if (v === undefined) delete process.env[k]; else process.env[k] = v; }
+  });
+  process.env.NODE_ENV = 'production';
+
+  process.env.NODE_APP_INSTANCE = '1';
+  assert.equal(loadSweeper().startIosMp4Sweeper(), false);
+
+  process.env.NODE_APP_INSTANCE = '0';
+  const sweeper = loadSweeper();
+  t.mock.timers.enable({ apis: ['setTimeout', 'setInterval'] });
+  assert.equal(sweeper.startIosMp4Sweeper(), true);
+});
