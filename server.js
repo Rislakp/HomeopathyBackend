@@ -331,6 +331,13 @@ app.get('/plans', subscriptionPlanController.getActiveSubscriptionPlans);
 app.use('/api', require('./routes/recordingRoutes'));
 app.use('/api/v1', require('./routes/recordingRoutes'));
 
+// Sign stored image links (question images, rank photos) in every Unani API response.
+app.use([
+  '/api/unani-exams', '/api/v1/unani-exams',
+  '/api/unani', '/api/v1/unani',
+  '/api/admin/unani', '/api/v1/admin/unani',
+  '/api/student/unani', '/api/v1/student/unani',
+], require('./utils/signResponseImages').signResponseImages);
 const unaniSubscriptionRoutes = require('./src/unani/subscriptions/routes/unaniSubscription.routes');
 app.use(unaniSubscriptionRoutes);
 
