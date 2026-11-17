@@ -63,6 +63,33 @@ const normalizeS3Reference = (reference) => {
     return { ...source, storageProvider: 's3', s3Key: trimmedUrl, url: '', secure_url: '', secureUrl: '', fileUrl: '', documentUrl: '', path: '', videoUrl: '', mediaUrl: '' };
   }
 
+  // "<api host>/uploads/<s3 key>" (or just "/uploads/<s3 key>"): a link built from an S3 key
+  // as if it were a local upload. The file is in S3, so read the key back.
+  const keyFromUploadsPath = (pathname) => {
+    const m = /^\/uploads\/(.+)$/.exec(pathname);
+    if (!m) return '';
+    let candidate = m[1];
+    try { candidate = decodeURIComponent(candidate); } catch (_) { return ''; }
+    return SAFE_S3_KEY.test(candidate) && !candidate.includes('..') && !candidate.includes('//') && !/[\r\n]/.test(candidate)
+      ? candidate : '';
+  };
+  const asKeyRef = (key) => ({ ...source, storageProvider: 's3', s3Key: key, url: '', secure_url: '', secureUrl: '', fileUrl: '', documentUrl: '', path: '', videoUrl: '', mediaUrl: '' });
+  if (trimmedUrl.startsWith('/uploads/')) {
+    const key = keyFromUploadsPath(trimmedUrl.split(/[?#]/)[0]);
+    return key ? asKeyRef(key) : null;
+  }
+  if (/^https:\/\//i.test(trimmedUrl)) {
+    try {
+      const parsed = new URL(trimmedUrl);
+      const apiHosts = (process.env.API_PUBLIC_HOSTS || 'api.whitecoat.academy')
+        .split(',').map((h) => h.trim().toLowerCase()).filter(Boolean);
+      if (apiHosts.includes(parsed.hostname.toLowerCase())) {
+        const key = keyFromUploadsPath(parsed.pathname);
+        if (key) return asKeyRef(key);
+      }
+    } catch (_) { /* fall through */ }
+  }
+
   // Must be a full HTTPS URL pointing to our bucket (or a custom public base URL)
   if (!/^https:\/\//i.test(trimmedUrl)) return null;
   try {

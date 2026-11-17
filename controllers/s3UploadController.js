@@ -20,7 +20,7 @@ const Student = require('../models/Student');
 const { resolveStudentLessonVideoAccess } = require('../utils/studentLessonVideoAccess');
 const { getS3Url, getS3KeyFromUrl } = require('../services/s3Service');
 const { verifyStudentCourseAccess } = require('../utils/courseAccessHelper');
-const { normalizeS3Reference, encodeSignedUrl, resolveMediaRecord, getVerifiedS3KeyForLegacyAsset } = require('../utils/s3MediaSigner');
+const { normalizeS3Reference, encodeSignedUrl, resolveMediaRecord, getVerifiedS3KeyForLegacyAsset, signS3Reference } = require('../utils/s3MediaSigner');
 const { isCloudFrontConfigured, signCloudFrontPlaybackUrl, resolveCloudFrontPlaybackUrl } = require('../utils/cloudFrontMediaSigner');
 
 const PART_URL_TTL_SECONDS = 900;
@@ -454,7 +454,14 @@ const completeObjectUpload = async (req, res) => {
     }
     const media = makeReference({ key, fileName: safeName, contentType: contentType.toLowerCase(), fileSize, uploadStatus: 'uploaded' });
     console.info('[S3 media] upload verified', { mediaType, key, fileSize, userId: req.user?.id });
-    return res.json({ success: true, key, media });
+    // A short-lived signed link so the admin screen can show the file right away.
+    // The stored reference (media) keeps url '' and the key; never save previewUrl.
+    let previewUrl = '';
+    try {
+      const signed = await signS3Reference(media, contentType.toLowerCase());
+      previewUrl = signed?.url || '';
+    } catch (_) { previewUrl = ''; }
+    return res.json({ success: true, key, media, previewUrl });
   } catch (error) {
     return handleS3Error(res, error, 'object-complete');
   }
