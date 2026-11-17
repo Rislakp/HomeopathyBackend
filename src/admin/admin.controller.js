@@ -10,6 +10,7 @@ const {
 } = require('../../utils/examAttemptHelper');
 const { resolveProfileImageUrl } = require('../../utils/s3MediaSigner');
 const { signQuestion, signExamQuestions } = require('../../utils/signQuestionImages');
+const { signImageForViewer } = require('../../utils/mediaImageProxy');
 try { require('../../models/Course'); } catch (e) {}
 
 /**
@@ -398,7 +399,7 @@ async function createGrandMockExam(req, res) {
     return res.status(201).json({
       success: true,
       message: 'Exam created successfully.',
-      exam: await signExamQuestions(newExam)
+      exam: await signExamQuestions(newExam, req.user)
     });
   } catch (error) {
     console.error('Error creating Exam:', error);
@@ -657,7 +658,7 @@ async function getGrandMockById(req, res) {
       (exam.questions || []).map(async (q) => {
         const rawImg = q.imageUrl || q.image || q.questionImage || q.imgUrl;
         if (typeof rawImg === 'string' && rawImg.trim()) {
-          const signed = await resolveProfileImageUrl(rawImg.trim());
+          const signed = await signImageForViewer(rawImg.trim(), req.user);
           return {
             ...q,
             imageUrl: signed,
@@ -828,7 +829,7 @@ async function updateGrandMockExam(req, res) {
     return res.status(200).json({
       success: true,
       message: 'Grand Mock Exam updated successfully.',
-      exam: await signExamQuestions(updatedExam)
+      exam: await signExamQuestions(updatedExam, req.user)
     });
   } catch (error) {
     console.error('Error updating Grand Mock Exam:', error);
@@ -920,7 +921,7 @@ async function addQuestionToExam(req, res) {
     return res.status(201).json({
       success: true,
       message: 'Question added successfully.',
-      question: await signQuestion(addedQuestion),
+      question: await signQuestion(addedQuestion, req.user),
       totalQuestions: exam.totalQuestions
     });
   } catch (error) {
@@ -972,7 +973,7 @@ async function updateQuestionInExam(req, res) {
     return res.status(200).json({
       success: true,
       message: 'Question updated successfully.',
-      question: await signQuestion(qSubDoc)
+      question: await signQuestion(qSubDoc, req.user)
     });
   } catch (error) {
     console.error('Error updating question in exam:', error);

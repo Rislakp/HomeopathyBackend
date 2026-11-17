@@ -9,15 +9,15 @@ const TestResult = require('../common/models/testResult.model');
 const examAttemptHelper = require('../../utils/examAttemptHelper');
 const { verifyStudentCourseAccessAny } = require('../../utils/courseAccessHelper');
 const { getExamAssignedCourseIds } = require('../../utils/examCourseAssignment');
-const { resolveProfileImageUrl } = require('../../utils/s3MediaSigner');
+const { signImageForViewer } = require('../../utils/mediaImageProxy');
 
 // Stored question images are S3 keys/links; the browser needs a signed link.
-async function signQuestionImages(formattedData) {
+async function signQuestionImages(formattedData, viewer) {
   const questions = formattedData && Array.isArray(formattedData.questions) ? formattedData.questions : [];
   await Promise.all(questions.map(async (q) => {
     if (typeof q.imageUrl === 'string' && q.imageUrl.trim()) {
       try {
-        q.imageUrl = await resolveProfileImageUrl(q.imageUrl.trim());
+        q.imageUrl = await signImageForViewer(q.imageUrl.trim(), viewer);
       } catch (_) { /* keep the stored value */ }
     }
   }));
@@ -692,7 +692,7 @@ async function getAnswerKey(req, res) {
       }
     }
 
-    const formattedData = await signQuestionImages(formatNormalAnswerKey(exam, normalResult));
+    const formattedData = await signQuestionImages(formatNormalAnswerKey(exam, normalResult), req.user);
     return res.status(200).json({
       success: true,
       data: formattedData,
