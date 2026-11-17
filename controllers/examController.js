@@ -1,5 +1,6 @@
 const mongoose = require('mongoose');
 const { resolveProfileImageUrl, normalizeS3Reference } = require('../utils/s3MediaSigner');
+const { signQuestion, signExamQuestions } = require('../utils/signQuestionImages');
 const pdfParse = require('pdf-parse');
 const Tesseract = require('tesseract.js');
 const xlsx = require('xlsx');
@@ -798,7 +799,7 @@ async function createGrandMockExam(req, res) {
     return res.status(201).json({
       success: true,
       message: 'Exam created successfully.',
-      exam: newExam
+      exam: await signExamQuestions(newExam)
     });
   } catch (error) {
     console.error('Error creating Exam:', error);
@@ -1492,7 +1493,7 @@ async function getAllGrandMocks(req, res) {
       return res.status(200).json({
         success: true,
         message: 'Grand Mock Exam updated successfully.',
-        exam: updatedExam
+        exam: await signExamQuestions(updatedExam)
       });
     } catch (error) {
       console.error('Error updating Grand Mock Exam:', error);
@@ -1584,7 +1585,7 @@ async function deleteGrandMockExam(req, res) {
         return res.status(201).json({
           success: true,
           message: 'Question added successfully.',
-          question: addedQuestion,
+          question: await signQuestion(addedQuestion),
           totalQuestions: exam.totalQuestions
         });
       } catch (error) {
@@ -1637,7 +1638,7 @@ async function deleteGrandMockExam(req, res) {
         return res.status(200).json({
           success: true,
           message: 'Question updated successfully.',
-          question: qSubDoc
+          question: await signQuestion(qSubDoc)
         });
       } catch (error) {
         console.error('Error updating question in exam:', error);
