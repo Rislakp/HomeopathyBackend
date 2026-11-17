@@ -9,6 +9,20 @@ const TestResult = require('../common/models/testResult.model');
 const examAttemptHelper = require('../../utils/examAttemptHelper');
 const { verifyStudentCourseAccessAny } = require('../../utils/courseAccessHelper');
 const { getExamAssignedCourseIds } = require('../../utils/examCourseAssignment');
+const { resolveProfileImageUrl } = require('../../utils/s3MediaSigner');
+
+// Stored question images are S3 keys/links; the browser needs a signed link.
+async function signQuestionImages(formattedData) {
+  const questions = formattedData && Array.isArray(formattedData.questions) ? formattedData.questions : [];
+  await Promise.all(questions.map(async (q) => {
+    if (typeof q.imageUrl === 'string' && q.imageUrl.trim()) {
+      try {
+        q.imageUrl = await resolveProfileImageUrl(q.imageUrl.trim());
+      } catch (_) { /* keep the stored value */ }
+    }
+  }));
+  return formattedData;
+}
 
 /**
  * Resolves the filesystem path to the brand logo image asset.
@@ -678,7 +692,7 @@ async function getAnswerKey(req, res) {
       }
     }
 
-    const formattedData = formatNormalAnswerKey(exam, normalResult);
+    const formattedData = await signQuestionImages(formatNormalAnswerKey(exam, normalResult));
     return res.status(200).json({
       success: true,
       data: formattedData,
@@ -963,6 +977,7 @@ async function downloadAnswerKey(req, res) {
 }
 
 module.exports = {
+  signQuestionImages,
   getAnswerKey,
   downloadAnswerKey,
   formatNormalAnswerKey,
