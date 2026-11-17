@@ -247,6 +247,8 @@ app.use('/uploads', express.static(uploadsDir, {
     }
   },
 }));
+// No local file: /uploads/<s3 image key> redirects to a signed CloudFront link.
+app.use('/uploads', require('./middleware/uploadsS3ImageRedirect').uploadsS3ImageRedirect);
 app.use(express.static(uploadsDir));
 app.use(express.static(path.join(__dirname, 'public')));
 
