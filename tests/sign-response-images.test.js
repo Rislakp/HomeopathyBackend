@@ -1,0 +1,65 @@
+const test = require('node:test');
+const assert = require('node:assert/strict');
+const http = require('node:http');
+const express = require('express');
+
+process.env.MEDIA_PROXY_SECRET = 'test-secret';
+const { signResponseImages } = require('../utils/signResponseImages');
+
+const KEY = 'grand_mock_questions/1794894335478-a5e9faf2-Burgundy-and-Gold-Crown-Monogram.png';
+
+function appFor(role, status = 200) {
+  const app = express();
+  app.use((req, res, next) => { if (role) req.user = { role }; next(); });
+  app.use('/api/unani-exams', signResponseImages);
+  app.get('/api/unani-exams/x', (req, res) => res.status(status).json({
+    success: status < 400,
+    data: {
+      title: 'Grand mock',
+      questions: [
+        { questionText: 'Q1', imageUrl: `https://api.whitecoat.academy/uploads/${KEY}`, options: { A: 'a' } },
+        { questionText: 'Q2', imageUrl: null },
+        { questionText: 'Q3', imageUrl: 'https://example.com/not-ours.png' },
+      ],
+      student: { profileImage: KEY },
+    },
+  }));
+  return app;
+}
+
+function get(app, path) {
+  return new Promise((resolve, reject) => {
+    const server = app.listen(0, () => {
+      http.get({ port: server.address().port, path }, (res) => {
+        let body = '';
+        res.on('data', (c) => { body += c; });
+        res.on('end', () => { server.close(); resolve({ status: res.statusCode, json: JSON.parse(body) }); });
+      }).on('error', (e) => { server.close(); reject(e); });
+    });
+  });
+}
+
+test('students get signed links for stored question and profile images', async () => {
+  const { status, json } = await get(appFor('student'), '/api/unani-exams/x');
+  assert.equal(status, 200);
+  const [q1, q2, q3] = json.data.questions;
+  assert.ok(q1.imageUrl.includes(KEY.split('/')[1]) && /Signature|X-Amz-Signature/.test(q1.imageUrl), q1.imageUrl);
+  assert.ok(!q1.imageUrl.includes('/api/media/image'), 'students do not get the admin proxy');
+  assert.equal(q2.imageUrl, null);
+  assert.equal(q3.imageUrl, 'https://example.com/not-ours.png', 'links that are not ours are unchanged');
+  assert.ok(/Signature|X-Amz-Signature/.test(json.data.student.profileImage));
+  assert.equal(json.data.questions[0].options.A, 'a');
+});
+
+test('the admin panel gets API proxy links', async () => {
+  const { json } = await get(appFor('admin'), '/api/unani-exams/x');
+  const url = new URL(json.data.questions[0].imageUrl);
+  assert.equal(url.pathname, '/api/media/image');
+  assert.equal(url.searchParams.get('key'), KEY);
+});
+
+test('error responses are passed through untouched', async () => {
+  const { status, json } = await get(appFor('student', 404), '/api/unani-exams/x');
+  assert.equal(status, 404);
+  assert.equal(json.data.questions[0].imageUrl, `https://api.whitecoat.academy/uploads/${KEY}`);
+});
