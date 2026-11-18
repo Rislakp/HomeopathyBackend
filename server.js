@@ -294,6 +294,10 @@ const authRoutes = require('./routes/authRoutes');
 const adminAuthRoutes = require('./routes/adminAuthRoutes');
 
 // â”€â”€ Public Authentication Endpoints (Strictly public, NO auth middleware) â”€â”€â”€
+// Sign stored image links in every API response (any screen, any upload folder),
+// so private-bucket images always reach the admin panel and the student sites.
+app.use(require('./utils/signResponseImages').signResponseImages);
+
 app.use('/api/admin/auth', adminAuthRoutes);
 app.use('/api/v1/admin/auth', adminAuthRoutes);
 app.use('/admin/auth', adminAuthRoutes);
@@ -331,13 +335,6 @@ app.get('/plans', subscriptionPlanController.getActiveSubscriptionPlans);
 app.use('/api', require('./routes/recordingRoutes'));
 app.use('/api/v1', require('./routes/recordingRoutes'));
 
-// Sign stored image links (question images, rank photos) in every Unani API response.
-app.use([
-  '/api/unani-exams', '/api/v1/unani-exams',
-  '/api/unani', '/api/v1/unani',
-  '/api/admin/unani', '/api/v1/admin/unani',
-  '/api/student/unani', '/api/v1/student/unani',
-], require('./utils/signResponseImages').signResponseImages);
 const unaniSubscriptionRoutes = require('./src/unani/subscriptions/routes/unaniSubscription.routes');
 app.use(unaniSubscriptionRoutes);
 

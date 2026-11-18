@@ -63,3 +63,26 @@ test('error responses are passed through untouched', async () => {
   assert.equal(status, 404);
   assert.equal(json.data.questions[0].imageUrl, `https://api.whitecoat.academy/uploads/${KEY}`);
 });
+
+test('images in any folder and any field are signed; videos, other text and signed links are not', async () => {
+  const { signImagesDeep } = require('../utils/signResponseImages');
+  const bucket = 'https://whitecoat-media-prod.s3.us-east-1.amazonaws.com';
+  const body = {
+    // A folder no list knows about, in a field no list knows about.
+    someNewScreen: { pictureLink: `${bucket}/brand_new_folder/1794977301789-aea2b631-pic.webp` },
+    gallery: [`${bucket}/unani_exam_questions/1794977301789-aea2b631-unani_q_1.png`],
+    imageUrl: 'student_profiles/1794977301789-aea2b631-me.jpg', // bare key in an image field
+    note: 'folder/file.png', // bare key outside an image field: just text
+    video: `${bucket}/videos/1794977301789-aea2b631-lesson.mp4`,
+    signed: `${bucket}/images/a.png?X-Amz-Signature=abc`,
+  };
+  for (const viewer of [{ role: 'student' }, { role: 'admin' }, undefined]) {
+    const out = await signImagesDeep(body, viewer);
+    for (const url of [out.someNewScreen.pictureLink, out.gallery[0], out.imageUrl]) {
+      assert.ok(url.startsWith('https://api.whitecoat.academy/api/media/image?key='), `${viewer?.role || 'public'}: ${url}`);
+    }
+    assert.equal(out.note, body.note);
+    assert.equal(out.video, body.video);
+    assert.equal(out.signed, body.signed);
+  }
+});
