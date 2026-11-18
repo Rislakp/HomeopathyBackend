@@ -4,11 +4,13 @@
  * used to return 404 (admin preview and student view).
  *
  * This runs after the local /uploads static files: when no local file matched and
- * the path is an S3 image key, redirect to a fresh signed CloudFront link.
+ * the path is an S3 image key, serve the image from S3.
  * Only image files are redirected (no videos or documents), from any folder.
  * Keys contain a random UUID, so a link only works for someone who already has it.
  */
-const { signS3Reference, isSafeImageKey } = require('../utils/s3MediaSigner');
+const { GetObjectCommand } = require('@aws-sdk/client-s3');
+const { s3Client, bucket } = require('../config/s3');
+const { isSafeImageKey } = require('../utils/s3MediaSigner');
 
 const IMAGE_TYPES = {
   '.png': 'image/png',
@@ -35,14 +37,22 @@ async function uploadsS3ImageRedirect(req, res, next) {
   if (req.method !== 'GET' && req.method !== 'HEAD') return next();
   const match = imageKeyFromPath(req.path);
   if (!match) return next();
+  // Served directly instead of redirecting to CloudFront: browsers load these
+  // images with XHR (Flutter web), and after a cross-site redirect the request
+  // has Origin "null", which CloudFront refuses (CORS error). This response gets
+  // the API's own CORS headers.
   try {
-    const signed = await signS3Reference({ storageProvider: 's3', s3Key: match.key }, match.contentType);
-    if (!signed?.url) return next();
-    // Signed links expire, so never cache the redirect itself.
-    res.setHeader('Cache-Control', 'no-store');
-    return res.redirect(302, signed.url);
-  } catch (_) {
-    return next();
+    const object = await s3Client.send(new GetObjectCommand({ Bucket: bucket, Key: match.key }));
+    res.setHeader('Content-Type', object.ContentType || match.contentType);
+    if (object.ContentLength) res.setHeader('Content-Length', String(object.ContentLength));
+    // Keys contain a timestamp and a random UUID, so the content never changes.
+    res.setHeader('Cache-Control', 'public, max-age=86400');
+    if (req.method === 'HEAD') return res.end();
+    if (typeof object.Body?.pipe === 'function') return object.Body.pipe(res);
+    return res.end(Buffer.from(await object.Body.transformToByteArray()));
+  } catch (err) {
+    if (err?.name === 'NoSuchKey' || err?.$metadata?.httpStatusCode === 404) return next();
+    return res.status(502).json({ success: false, message: 'Image not available.' });
   }
 }
 
