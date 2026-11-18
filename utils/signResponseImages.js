@@ -14,31 +14,25 @@
  * no update when a screen uploads images into a new folder.
  */
 const { signImageForViewer } = require('./mediaImageProxy');
-const { normalizeS3Reference, isSafeImageKey } = require('./s3MediaSigner');
+const { normalizeS3Reference, isSafeImageKey, canonicalS3Url } = require('./s3MediaSigner');
 
 const IMAGE_FIELDS = new Set([
   'imageUrl', 'image', 'questionImage', 'imgUrl', 'profileImage', 'avatar',
   'optionImage', 'explanationImage', 'thumbnail', 'thumbnailUrl', 'bannerImage', 'photo', 'photoUrl',
 ]);
 const MAX_DEPTH = 14;
-const IMAGE_EXT_RE = /\.(png|jpe?g|webp|gif)(?:[?#]|$)/i;
-// Signed links (CloudFront/S3). Students can use them as they are; the admin
-// panel can't (no CORS on CloudFront for it), so for admins they are re-signed
-// to the API proxy. Our own proxy links are never touched.
-const ALREADY_SIGNED_RE = /[?&](X-Amz-Signature|Signature|sig)=/;
-const PROXY_LINK_RE = /\/api\/media\/image\?/;
-const isStudentOrPublic = (viewer) => !viewer || String(viewer.role || '').toLowerCase().trim() === 'student';
+const IMAGE_EXT_RE = /\.(png|jpe?g|webp|gif)(?:[?#&]|$)/i;
+// Signed links (proxy, CloudFront, S3) are signed again too: a signed link that
+// was saved into the database expires, and the admin panel needs the proxy.
 
 /** Returns the S3 key if `value` is a stored link to one of our image files. */
-function storedImageKey(value, isImageField, viewer) {
+function storedImageKey(value, isImageField) {
   if (typeof value !== 'string') return '';
   const raw = value.trim();
   if (!raw || raw.length > 2048 || !IMAGE_EXT_RE.test(raw)) return '';
   const isLink = /^https:\/\//i.test(raw) || raw.startsWith('/uploads/');
   // A bare key ("folder/file.png") only counts in an image field.
   if (!isLink && !isImageField) return '';
-  if (isLink && PROXY_LINK_RE.test(raw)) return '';
-  if (isLink && ALREADY_SIGNED_RE.test(raw) && isStudentOrPublic(viewer)) return '';
   const key = normalizeS3Reference(raw)?.s3Key || '';
   return isSafeImageKey(key) ? key : '';
 }
@@ -61,7 +55,7 @@ async function signImagesDeep(value, viewer, depth = 0) {
 }
 
 async function signString(value, viewer, isImageField) {
-  if (!storedImageKey(value, isImageField, viewer)) return value;
+  if (!storedImageKey(value, isImageField)) return value;
   try {
     return await signImageForViewer(value.trim(), viewer);
   } catch (_) {
@@ -87,4 +81,38 @@ function signResponseImages(req, res, next) {
   next();
 }
 
-module.exports = { signResponseImages, signImagesDeep, storedImageKey, IMAGE_FIELDS };
+/**
+ * Request middleware: the admin panel shows the signed links it received and
+ * sends them back when a form is saved. Signed links expire (the proxy after
+ * 12 hours), so before anything is stored, every link to one of our images in
+ * the request body is replaced by its permanent link. Bare keys and links that
+ * aren't ours are left as they are.
+ */
+function normalizeImageLinksDeep(value, depth = 0) {
+  if (typeof value === 'string') {
+    const raw = value.trim();
+    if (!/^https:\/\//i.test(raw)) return value;
+    const key = storedImageKey(raw, false);
+    return key ? canonicalS3Url(key) : value;
+  }
+  if (!value || typeof value !== 'object' || depth > MAX_DEPTH) return value;
+  if (Array.isArray(value)) return value.map((item) => normalizeImageLinksDeep(item, depth + 1));
+  for (const key of Object.keys(value)) value[key] = normalizeImageLinksDeep(value[key], depth + 1);
+  return value;
+}
+
+function normalizeRequestImageLinks(req, res, next) {
+  if (['POST', 'PUT', 'PATCH'].includes(req.method) && req.body && typeof req.body === 'object') {
+    try { normalizeImageLinksDeep(req.body); } catch (_) { /* leave the body as sent */ }
+  }
+  next();
+}
+
+module.exports = {
+  signResponseImages,
+  signImagesDeep,
+  storedImageKey,
+  normalizeRequestImageLinks,
+  normalizeImageLinksDeep,
+  IMAGE_FIELDS,
+};

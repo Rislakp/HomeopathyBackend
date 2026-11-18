@@ -45,6 +45,15 @@ test('Homeopathy answer key PDF draws question images too', async (t) => {
   assert.ok(imageCount(pdf) > before, 'one more image than without a question image');
 });
 
+test('answer key PDF draws images saved as (expired) proxy links', async (t) => {
+  const asked = await withFakeS3(t);
+  const service = require('../src/unani/exams/services/unaniExam.service');
+  const saved = 'https://api.whitecoat.academy/api/media/image?key=unani_exam_questions%2F1794977301789-aea2b631-unani_q_1.png&exp=1&sig=old';
+  const pdf = await service.generateUnaniAnswerKeyPDF(exam(saved), { name: 'Student' });
+  assert.deepEqual(asked, ['unani_exam_questions/1794977301789-aea2b631-unani_q_1.png']);
+  assert.ok(imageCount(pdf) >= 1);
+});
+
 test('a missing image does not break the PDF', async (t) => {
   await withFakeS3(t);
   const service = require('../src/unani/exams/services/unaniExam.service');
