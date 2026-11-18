@@ -83,6 +83,25 @@ test('images in any folder and any field are signed; videos, other text and sign
     }
     assert.equal(out.note, body.note);
     assert.equal(out.video, body.video);
-    assert.equal(out.signed, body.signed);
+    if (viewer?.role === 'admin') {
+      // The admin panel can't load CloudFront/S3 signed links (CORS): re-signed to the proxy.
+      assert.ok(out.signed.startsWith('https://api.whitecoat.academy/api/media/image?key=images%2Fa.png'), out.signed);
+    } else {
+      assert.equal(out.signed, body.signed);
+    }
   }
+});
+
+test('admin gets the proxy for rank photos a service already signed with CloudFront', async () => {
+  process.env.CLOUDFRONT_DOMAIN = 'media.whitecoat.academy';
+  const { signImagesDeep } = require('../utils/signResponseImages');
+  const cdn = 'https://media.whitecoat.academy/unani_ranks/1790913540090-620604d8-unani_rank_1.jpg?Expires=1&Signature=abc&Key-Pair-Id=K1';
+  const body = { data: [{ name: 'Dr. Amina', profileImage: cdn }] };
+  const admin = await signImagesDeep(body, { role: 'superadmin' });
+  assert.ok(admin.data[0].profileImage.startsWith('https://api.whitecoat.academy/api/media/image?key=unani_ranks%2F'), admin.data[0].profileImage);
+  const student = await signImagesDeep(body, { role: 'student' });
+  assert.equal(student.data[0].profileImage, cdn);
+  // Our proxy links pass through unchanged.
+  const again = await signImagesDeep(admin, { role: 'admin' });
+  assert.equal(again.data[0].profileImage, admin.data[0].profileImage);
 });

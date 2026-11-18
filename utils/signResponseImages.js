@@ -22,18 +22,23 @@ const IMAGE_FIELDS = new Set([
 ]);
 const MAX_DEPTH = 14;
 const IMAGE_EXT_RE = /\.(png|jpe?g|webp|gif)(?:[?#]|$)/i;
-// Links we produce ourselves; signing them again would only add work.
+// Signed links (CloudFront/S3). Students can use them as they are; the admin
+// panel can't (no CORS on CloudFront for it), so for admins they are re-signed
+// to the API proxy. Our own proxy links are never touched.
 const ALREADY_SIGNED_RE = /[?&](X-Amz-Signature|Signature|sig)=/;
+const PROXY_LINK_RE = /\/api\/media\/image\?/;
+const isStudentOrPublic = (viewer) => !viewer || String(viewer.role || '').toLowerCase().trim() === 'student';
 
 /** Returns the S3 key if `value` is a stored link to one of our image files. */
-function storedImageKey(value, isImageField) {
+function storedImageKey(value, isImageField, viewer) {
   if (typeof value !== 'string') return '';
   const raw = value.trim();
   if (!raw || raw.length > 2048 || !IMAGE_EXT_RE.test(raw)) return '';
   const isLink = /^https:\/\//i.test(raw) || raw.startsWith('/uploads/');
   // A bare key ("folder/file.png") only counts in an image field.
   if (!isLink && !isImageField) return '';
-  if (isLink && ALREADY_SIGNED_RE.test(raw)) return '';
+  if (isLink && PROXY_LINK_RE.test(raw)) return '';
+  if (isLink && ALREADY_SIGNED_RE.test(raw) && isStudentOrPublic(viewer)) return '';
   const key = normalizeS3Reference(raw)?.s3Key || '';
   return isSafeImageKey(key) ? key : '';
 }
@@ -56,7 +61,7 @@ async function signImagesDeep(value, viewer, depth = 0) {
 }
 
 async function signString(value, viewer, isImageField) {
-  if (!storedImageKey(value, isImageField)) return value;
+  if (!storedImageKey(value, isImageField, viewer)) return value;
   try {
     return await signImageForViewer(value.trim(), viewer);
   } catch (_) {
