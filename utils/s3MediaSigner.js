@@ -28,6 +28,9 @@ const isSafeImageKey = (key) => typeof key === 'string' && SAFE_IMAGE_KEY.test(k
 // A key we may sign: a known media folder, or an image in any folder.
 const isSignableKey = (key) => typeof key === 'string' && (SAFE_S3_KEY.test(key) || isSafeImageKey(key));
 
+/** The permanent link stored for an S3 object (never expires; signed when served). */
+const canonicalS3Url = (key) => `https://${bucket}.s3.${region}.amazonaws.com/${key}`;
+
 /**
  * Remove all URL fields from a reference object, effectively stripping signed data.
  */
@@ -105,6 +108,12 @@ const normalizeS3Reference = (reference) => {
       if (apiHosts.includes(parsed.hostname.toLowerCase())) {
         const key = keyFromUploadsPath(parsed.pathname);
         if (key) return asKeyRef(key);
+        // Our image proxy link (/api/media/image?key=...): it expires, but the key
+        // inside it is the image. Lets saved proxy links be signed fresh.
+        if (parsed.pathname === '/api/media/image') {
+          const proxyKey = parsed.searchParams.get('key') || '';
+          if (isSafeImageKey(proxyKey)) return asKeyRef(proxyKey);
+        }
       }
     } catch (_) { /* fall through */ }
   }
@@ -467,6 +476,7 @@ module.exports = {
   encodeSignedUrl,
   SAFE_S3_KEY,
   isSafeImageKey,
+  canonicalS3Url,
   isSignableKey,
   IMAGE_FOLDERS,
   CLOUDFRONT_IMAGE_FOLDERS,

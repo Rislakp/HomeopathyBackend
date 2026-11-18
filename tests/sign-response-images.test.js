@@ -83,11 +83,13 @@ test('images in any folder and any field are signed; videos, other text and sign
     }
     assert.equal(out.note, body.note);
     assert.equal(out.video, body.video);
+    // A signed link may have been saved and expired: it is always signed again.
+    assert.notEqual(out.signed, body.signed);
     if (viewer?.role === 'admin') {
-      // The admin panel can't load CloudFront/S3 signed links (CORS): re-signed to the proxy.
+      // The admin panel can't load CloudFront/S3 signed links (CORS): the proxy.
       assert.ok(out.signed.startsWith('https://api.whitecoat.academy/api/media/image?key=images%2Fa.png'), out.signed);
     } else {
-      assert.equal(out.signed, body.signed);
+      assert.ok(out.signed.includes('/images/a.png'), out.signed);
     }
   }
 });
@@ -100,8 +102,40 @@ test('admin gets the proxy for rank photos a service already signed with CloudFr
   const admin = await signImagesDeep(body, { role: 'superadmin' });
   assert.ok(admin.data[0].profileImage.startsWith('https://api.whitecoat.academy/api/media/image?key=unani_ranks%2F'), admin.data[0].profileImage);
   const student = await signImagesDeep(body, { role: 'student' });
-  assert.equal(student.data[0].profileImage, cdn);
-  // Our proxy links pass through unchanged.
-  const again = await signImagesDeep(admin, { role: 'admin' });
-  assert.equal(again.data[0].profileImage, admin.data[0].profileImage);
+  assert.ok(student.data[0].profileImage.includes('unani_ranks/1790913540090-620604d8-unani_rank_1.jpg'));
+  assert.ok(!student.data[0].profileImage.includes('/api/media/image'), 'students do not need the proxy for this folder');
+});
+
+test('an expired proxy link saved in the database is signed fresh for every viewer', async () => {
+  const { signImagesDeep } = require('../utils/signResponseImages');
+  const { verifyImageProxy } = require('../utils/mediaImageProxy');
+  const saved = 'https://api.whitecoat.academy/api/media/image?key=unani_exam_questions%2F1794977301789-aea2b631-unani_q_1.png&exp=1&sig=old';
+  for (const viewer of [{ role: 'student' }, { role: 'admin' }, undefined]) {
+    const out = await signImagesDeep({ questions: [{ imageUrl: saved }] }, viewer);
+    const params = Object.fromEntries(new URL(out.questions[0].imageUrl).searchParams);
+    assert.equal(params.key, 'unani_exam_questions/1794977301789-aea2b631-unani_q_1.png');
+    assert.equal(verifyImageProxy(params.key, params.exp, params.sig), true, 'fresh, valid link');
+  }
+});
+
+test('signed image links sent back by the admin panel are stored as permanent links', () => {
+  const { normalizeImageLinksDeep } = require('../utils/signResponseImages');
+  const permanent = 'https://whitecoat-media-prod.s3.us-east-1.amazonaws.com/unani_exam_questions/1794977301789-aea2b631-unani_q_1.png';
+  const body = {
+    title: 'Q1',
+    imageUrl: 'https://api.whitecoat.academy/api/media/image?key=unani_exam_questions%2F1794977301789-aea2b631-unani_q_1.png&exp=1795020886&sig=abc',
+    options: [{ image: `${permanent}?X-Amz-Signature=abc&X-Amz-Expires=900` }],
+    raw: permanent,
+    bareKey: 'unani_exam_questions/1794977301789-aea2b631-unani_q_1.png',
+    other: 'https://example.com/pic.png',
+    video: 'https://whitecoat-media-prod.s3.us-east-1.amazonaws.com/videos/1794977301789-aea2b631-a.mp4?X-Amz-Signature=x',
+  };
+  const out = normalizeImageLinksDeep(JSON.parse(JSON.stringify(body)));
+  assert.equal(out.imageUrl, permanent);
+  assert.equal(out.options[0].image, permanent);
+  assert.equal(out.raw, permanent);
+  assert.equal(out.bareKey, body.bareKey);
+  assert.equal(out.other, body.other);
+  assert.equal(out.video, body.video);
+  assert.equal(out.title, 'Q1');
 });
