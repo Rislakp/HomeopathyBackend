@@ -5,12 +5,11 @@
  *
  * This runs after the local /uploads static files: when no local file matched and
  * the path is an S3 image key, redirect to a fresh signed CloudFront link.
- * Only image keys in image folders are redirected (no videos or documents).
+ * Only image files are redirected (no videos or documents), from any folder.
  * Keys contain a random UUID, so a link only works for someone who already has it.
  */
-const { signS3Reference, SAFE_S3_KEY, IMAGE_FOLDERS } = require('../utils/s3MediaSigner');
+const { signS3Reference, isSafeImageKey } = require('../utils/s3MediaSigner');
 
-const IMAGE_PREFIX_RE = new RegExp(`^(${IMAGE_FOLDERS.join('|')})/`);
 const IMAGE_TYPES = {
   '.png': 'image/png',
   '.jpg': 'image/jpeg',
@@ -26,8 +25,8 @@ function imageKeyFromPath(reqPath) {
   } catch (_) {
     return null;
   }
-  if (!IMAGE_PREFIX_RE.test(key) || !SAFE_S3_KEY.test(key)) return null;
-  if (key.includes('..') || key.includes('//')) return null;
+  // Any image in the bucket, whatever its folder; never videos or documents.
+  if (!isSafeImageKey(key)) return null;
   const ext = key.slice(key.lastIndexOf('.')).toLowerCase();
   return IMAGE_TYPES[ext] ? { key, contentType: IMAGE_TYPES[ext] } : null;
 }
