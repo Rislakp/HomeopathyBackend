@@ -3,6 +3,7 @@ const PDFDocument = require('pdfkit');
 const { buildPdfWatermark } = require('../../../student/answerKey.controller');
 const UnaniExam = require('../models/unaniExam.model');
 const UnaniExamResult = require('../models/unaniExamResult.model');
+const { loadPdfImages, drawPdfImage } = require('../../../../utils/pdfImages');
 let Exam;
 try {
   Exam = require('../../../../models/Exam');
@@ -1608,7 +1609,13 @@ async function updateExamAnswerKey(examId, keyData) {
 /**
  * Generate Watermarked Answer Key PDF for Unani Exam
  */
-function generateUnaniAnswerKeyPDF(exam, user = {}, result = null) {
+async function generateUnaniAnswerKeyPDF(exam, user = {}, result = null) {
+  // Question images are read from S3 first so they can be drawn into the PDF.
+  const images = await loadPdfImages((exam?.questions || []).map((q) => q && q.imageUrl));
+  return renderGenerateUnaniAnswerKeyPDF(exam, user, result, images);
+}
+
+function renderGenerateUnaniAnswerKeyPDF(exam, user = {}, result = null, images = new Map()) {
   return new Promise((resolve, reject) => {
     try {
       const doc = new PDFDocument({
@@ -1757,11 +1764,12 @@ function generateUnaniAnswerKeyPDF(exam, user = {}, result = null) {
 
           // Optional Image URL
           if (q.imageUrl) {
-            doc.fillColor('#4A5568')
-               .fontSize(8.5)
-               .font('Helvetica')
-               .text(`[Image: ${q.imageUrl}]`, MARGIN + 10, doc.y, { width: CONTENT_WIDTH - 10 });
-            doc.moveDown(0.2);
+            drawPdfImage(doc, images, q.imageUrl, {
+              x: MARGIN + 10,
+              maxWidth: CONTENT_WIDTH - 10,
+              bottom: PAGE_HEIGHT - 60,
+              topOfPage: MARGIN + 25,
+            });
           }
 
           // Optional Table Data
