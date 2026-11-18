@@ -26,19 +26,30 @@ function get(app, path) {
   });
 }
 
-test('GET /uploads/<s3 image key> redirects to a signed link for that key', async () => {
+test('GET /uploads/<s3 image key> serves the image itself, with CORS, no redirect', async (t) => {
+  const s3 = require('../config/s3');
+  const asked = [];
+  const original = s3.s3Client.send;
+  s3.s3Client.send = async (cmd) => {
+    asked.push(cmd.input.Key);
+    if (cmd.input.Key.includes('missing')) throw Object.assign(new Error('NoSuchKey'), { name: 'NoSuchKey' });
+    return { ContentType: 'image/png', ContentLength: 3, Body: { transformToByteArray: async () => new Uint8Array([1, 2, 3]) } };
+  };
+  t.after(() => { s3.s3Client.send = original; });
+
+  const cors = require('cors');
   const app = express();
+  app.use(cors({ origin: 'https://whitecoat.academy' }));
   app.use('/uploads', uploadsS3ImageRedirect);
   app.use((req, res) => res.status(404).end());
 
   const ok = await get(app, `/uploads/${KEY}`);
-  assert.equal(ok.statusCode, 302);
-  // CloudFront in production; a presigned S3 link where CloudFront keys are not set (tests).
-  const loc = new URL(ok.headers.location);
-  assert.ok(decodeURIComponent(loc.pathname).endsWith(`/${KEY}`), ok.headers.location);
-  assert.ok(/Signature|X-Amz-Signature/.test(loc.search), 'link is signed');
-  assert.equal(ok.headers['cache-control'], 'no-store');
+  assert.equal(ok.statusCode, 200);
+  assert.equal(ok.headers.location, undefined, 'no redirect (a cross-site redirect breaks CORS)');
+  assert.equal(ok.headers['content-type'], 'image/png');
+  assert.equal(ok.headers['access-control-allow-origin'], 'https://whitecoat.academy');
+  assert.deepEqual(asked, [KEY]);
 
-  const video = await get(app, '/uploads/videos/1794-a.mp4');
-  assert.equal(video.statusCode, 404);
+  assert.equal((await get(app, '/uploads/images/1794-missing.png')).statusCode, 404);
+  assert.equal((await get(app, '/uploads/videos/1794-a.mp4')).statusCode, 404);
 });
