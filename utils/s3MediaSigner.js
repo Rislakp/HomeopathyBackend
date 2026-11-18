@@ -7,7 +7,29 @@ const { isCloudFrontConfigured, signCloudFrontPlaybackUrl, resolveCloudFrontPlay
 const S3_MEDIA_URL_TTL_SECONDS = parseInt(process.env.S3_SIGNED_URL_EXPIRES_IN || process.env.S3_MEDIA_URL_TTL_SECONDS, 10) || 21600;
 
 // Allowed S3 key patterns (folders and safe characters)
-const SAFE_S3_KEY = /^(videos|images|pdfs|documents|attachments|reviews|unani_ranks|grand_mock_questions|live_records)\/[a-zA-Z0-9][a-zA-Z0-9._\/\-]*$/;
+// Folders the admin panel uploads images into (it chooses the folder per screen).
+// Add a folder here when a new screen uploads images somewhere else.
+const IMAGE_FOLDERS = [
+  'images', 'grand_mock_questions', 'reviews', 'unani_ranks',
+  'unani_exam_questions', 'student_profiles', 'ranks', 'homeopathy', 'media',
+];
+// Image folders that have their own CloudFront behavior. Images in the other
+// folders are served through the API image proxy (utils/mediaImageProxy.js).
+const CLOUDFRONT_IMAGE_FOLDERS = ['images', 'grand_mock_questions', 'reviews', 'unani_ranks'];
+const SAFE_S3_KEY = new RegExp(
+  `^(videos|pdfs|documents|attachments|live_records|${IMAGE_FOLDERS.join('|')})\\/[a-zA-Z0-9][a-zA-Z0-9._\\/\\-]*$`
+);
+
+// Any image file in the bucket, whatever folder it was uploaded to. The admin
+// panel picks the folder per screen, so images must not depend on a folder list.
+const SAFE_IMAGE_KEY = /^[a-zA-Z0-9][a-zA-Z0-9._-]*(\/[a-zA-Z0-9][a-zA-Z0-9._-]*)+\.(png|jpe?g|webp|gif)$/i;
+const isSafeImageKey = (key) => typeof key === 'string' && SAFE_IMAGE_KEY.test(key) &&
+  !key.includes('..') && !key.includes('//') && !/[\r\n]/.test(key);
+// A key we may sign: a known media folder, or an image in any folder.
+const isSignableKey = (key) => typeof key === 'string' && (SAFE_S3_KEY.test(key) || isSafeImageKey(key));
+
+/** The permanent link stored for an S3 object (never expires; signed when served). */
+const canonicalS3Url = (key) => `https://${bucket}.s3.${region}.amazonaws.com/${key}`;
 
 /**
  * Remove all URL fields from a reference object, effectively stripping signed data.
@@ -35,7 +57,7 @@ const normalizeS3Reference = (reference) => {
   // 1. Direct s3Key property present
   if (typeof source.s3Key === 'string' && source.s3Key) {
     const cleanKey = source.s3Key.trim();
-    if (SAFE_S3_KEY.test(cleanKey) && !cleanKey.includes('..') && !cleanKey.includes('//') && !/[\r\n]/.test(cleanKey)) {
+    if (isSignableKey(cleanKey) && !cleanKey.includes('..') && !cleanKey.includes('//') && !/[\r\n]/.test(cleanKey)) {
       return {
         ...source,
         storageProvider: 's3',
@@ -59,7 +81,7 @@ const normalizeS3Reference = (reference) => {
   const trimmedUrl = rawUrl.trim();
 
   // Direct S3 key style reference (already safe)
-  if (SAFE_S3_KEY.test(trimmedUrl) && !trimmedUrl.includes('..') && !trimmedUrl.includes('//') && !/[\r\n]/.test(trimmedUrl)) {
+  if (isSignableKey(trimmedUrl) && !trimmedUrl.includes('..') && !trimmedUrl.includes('//') && !/[\r\n]/.test(trimmedUrl)) {
     return { ...source, storageProvider: 's3', s3Key: trimmedUrl, url: '', secure_url: '', secureUrl: '', fileUrl: '', documentUrl: '', path: '', videoUrl: '', mediaUrl: '' };
   }
 
@@ -70,7 +92,7 @@ const normalizeS3Reference = (reference) => {
     if (!m) return '';
     let candidate = m[1];
     try { candidate = decodeURIComponent(candidate); } catch (_) { return ''; }
-    return SAFE_S3_KEY.test(candidate) && !candidate.includes('..') && !candidate.includes('//') && !/[\r\n]/.test(candidate)
+    return isSignableKey(candidate) && !candidate.includes('..') && !candidate.includes('//') && !/[\r\n]/.test(candidate)
       ? candidate : '';
   };
   const asKeyRef = (key) => ({ ...source, storageProvider: 's3', s3Key: key, url: '', secure_url: '', secureUrl: '', fileUrl: '', documentUrl: '', path: '', videoUrl: '', mediaUrl: '' });
@@ -86,6 +108,12 @@ const normalizeS3Reference = (reference) => {
       if (apiHosts.includes(parsed.hostname.toLowerCase())) {
         const key = keyFromUploadsPath(parsed.pathname);
         if (key) return asKeyRef(key);
+        // Our image proxy link (/api/media/image?key=...): it expires, but the key
+        // inside it is the image. Lets saved proxy links be signed fresh.
+        if (parsed.pathname === '/api/media/image') {
+          const proxyKey = parsed.searchParams.get('key') || '';
+          if (isSafeImageKey(proxyKey)) return asKeyRef(proxyKey);
+        }
       }
     } catch (_) { /* fall through */ }
   }
@@ -133,7 +161,7 @@ const normalizeS3Reference = (reference) => {
       }
     }
     keyPath = pathParts;
-    if (!SAFE_S3_KEY.test(keyPath) || keyPath.includes('..') || keyPath.includes('//') || /[\r\n]/.test(keyPath)) return null;
+    if (!isSignableKey(keyPath) || keyPath.includes('..') || keyPath.includes('//') || /[\r\n]/.test(keyPath)) return null;
     return { ...source, storageProvider: 's3', s3Key: keyPath, url: '', secure_url: '', secureUrl: '', fileUrl: '', documentUrl: '', path: '', videoUrl: '', mediaUrl: '' };
   } catch (_) {
     return null;
@@ -149,7 +177,7 @@ const signS3Reference = async (reference, responseContentType) => {
   if (!normalized || normalized.storageProvider !== 's3') return reference;
 
   const key = typeof normalized.s3Key === 'string' ? normalized.s3Key : '';
-  const validKey = SAFE_S3_KEY.test(key) && !key.includes('..') && !key.includes('//') && !/[\r\n]/.test(key);
+  const validKey = isSignableKey(key) && !key.includes('..') && !key.includes('//') && !/[\r\n]/.test(key);
   if (!validKey) {
     return stripS3ReferenceUrls(normalized);
   }
@@ -447,6 +475,11 @@ module.exports = {
   S3_MEDIA_URL_TTL_SECONDS,
   encodeSignedUrl,
   SAFE_S3_KEY,
+  isSafeImageKey,
+  canonicalS3Url,
+  isSignableKey,
+  IMAGE_FOLDERS,
+  CLOUDFRONT_IMAGE_FOLDERS,
   VERIFIED_LEGACY_ASSETS,
   getVerifiedS3KeyForLegacyAsset,
 };

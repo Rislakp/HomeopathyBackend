@@ -294,6 +294,12 @@ const authRoutes = require('./routes/authRoutes');
 const adminAuthRoutes = require('./routes/adminAuthRoutes');
 
 // â”€â”€ Public Authentication Endpoints (Strictly public, NO auth middleware) â”€â”€â”€
+// Sign stored image links in every API response (any screen, any upload folder),
+// so private-bucket images always reach the admin panel and the student sites.
+app.use(require('./utils/signResponseImages').signResponseImages);
+// Store permanent image links: signed links sent back by the admin panel expire.
+app.use(require('./utils/signResponseImages').normalizeRequestImageLinks);
+
 app.use('/api/admin/auth', adminAuthRoutes);
 app.use('/api/v1/admin/auth', adminAuthRoutes);
 app.use('/admin/auth', adminAuthRoutes);
