@@ -10,6 +10,7 @@ const examAttemptHelper = require('../../utils/examAttemptHelper');
 const { verifyStudentCourseAccessAny } = require('../../utils/courseAccessHelper');
 const { getExamAssignedCourseIds } = require('../../utils/examCourseAssignment');
 const { signImageForViewer } = require('../../utils/mediaImageProxy');
+const { loadPdfImages, drawPdfImage } = require('../../utils/pdfImages');
 
 // Stored question images are S3 keys/links; the browser needs a signed link.
 async function signQuestionImages(formattedData, viewer) {
@@ -231,7 +232,13 @@ function formatNormalAnswerKey(exam, result = null) {
  * @param {Object|null} [result=null] - The student attempt result (TestResult), if available.
  * @returns {Promise<Buffer>} - Resolves to the PDF binary buffer.
  */
-function generateWatermarkedAnswerKeyPDF(exam, user = {}, result = null) {
+async function generateWatermarkedAnswerKeyPDF(exam, user = {}, result = null) {
+  // Question images are read from S3 first so they can be drawn into the PDF.
+  const images = await loadPdfImages((exam?.questions || []).map((q) => q && q.imageUrl));
+  return renderGenerateWatermarkedAnswerKeyPDF(exam, user, result, images);
+}
+
+function renderGenerateWatermarkedAnswerKeyPDF(exam, user = {}, result = null, images = new Map()) {
   return new Promise((resolve, reject) => {
     try {
       const doc = new PDFDocument({
@@ -387,11 +394,12 @@ function generateWatermarkedAnswerKeyPDF(exam, user = {}, result = null) {
 
           // Optional Image URL
           if (q.imageUrl) {
-            doc.fillColor('#4A5568')
-               .fontSize(8.5)
-               .font('Helvetica')
-               .text(`[Image: ${q.imageUrl}]`, MARGIN + 10, doc.y, { width: CONTENT_WIDTH - 10 });
-            doc.moveDown(0.2);
+            drawPdfImage(doc, images, q.imageUrl, {
+              x: MARGIN + 10,
+              maxWidth: CONTENT_WIDTH - 10,
+              bottom: PAGE_HEIGHT - 60,
+              topOfPage: MARGIN + 25,
+            });
           }
 
           // Optional Table Data
