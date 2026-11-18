@@ -139,3 +139,32 @@ test('signed image links sent back by the admin panel are stored as permanent li
   assert.equal(out.video, body.video);
   assert.equal(out.title, 'Q1');
 });
+
+test('presigned upload links are never turned into image links', async (t) => {
+  const http = require('node:http');
+  const express = require('express');
+  const { signResponseImages, signImagesDeep } = require('../utils/signResponseImages');
+  const put = 'https://whitecoat-media-prod.s3.us-east-1.amazonaws.com/images/1794998029382-47f3f4e7-banner.png?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Signature=abc&x-id=PutObject';
+  const app = express();
+  app.use((req, res, next) => { req.user = { role: 'admin' }; next(); });
+  app.use(signResponseImages);
+  for (const path of ['/api/s3/presign', '/api/v1/s3/presign', '/api/s3-upload/presign'])
+    app.post(path, (req, res) => res.json({ success: true, data: { uploadUrl: put, url: put, s3Key: 'images/1794998029382-47f3f4e7-banner.png' } }));
+  const server = app.listen(0);
+  t.after(() => server.close());
+  const { port } = server.address();
+  for (const path of ['/api/s3/presign', '/api/v1/s3/presign', '/api/s3-upload/presign']) {
+    const body = await new Promise((resolve, reject) => {
+      const req = http.request({ port, path, method: 'POST' }, (res) => {
+        let d = ''; res.on('data', (c) => { d += c; }); res.on('end', () => resolve(JSON.parse(d)));
+      });
+      req.on('error', reject); req.end();
+    });
+    assert.equal(body.data.uploadUrl, put, path);
+    assert.equal(body.data.url, put, path);
+  }
+  // On any other route: upload fields and PutObject links stay as they are.
+  const out = await signImagesDeep({ uploadUrl: put, other: put }, { role: 'admin' });
+  assert.equal(out.uploadUrl, put);
+  assert.equal(out.other, put);
+});
