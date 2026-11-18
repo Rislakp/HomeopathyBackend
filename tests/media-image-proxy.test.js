@@ -61,3 +61,14 @@ test('GET /api/media/image streams the image for a valid link and refuses a bad 
   const bad = await request(app, `/api/media/image?key=${encodeURIComponent(KEY)}&exp=9999999999&sig=wrong`);
   assert.equal(bad.res.statusCode, 403);
 });
+
+test('images in folders CloudFront does not serve go through the proxy for students too', async () => {
+  const stored = 'https://whitecoat-media-prod.s3.us-east-1.amazonaws.com/unani_exam_questions/1794977301789-aea2b631-unani_q_1.png';
+  for (const viewer of [{ role: 'student' }, undefined, { role: 'admin' }]) {
+    const url = await proxy.signImageForViewer(stored, viewer);
+    assert.ok(url.startsWith('https://api.whitecoat.academy/api/media/image?'), `viewer ${viewer?.role || 'public'}: ${url}`);
+    const { key, exp, sig } = params(url);
+    assert.equal(key, 'unani_exam_questions/1794977301789-aea2b631-unani_q_1.png');
+    assert.equal(proxy.verifyImageProxy(key, exp, sig), true);
+  }
+});

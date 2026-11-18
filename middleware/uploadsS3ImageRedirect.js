@@ -8,9 +8,9 @@
  * Only image keys in image folders are redirected (no videos or documents).
  * Keys contain a random UUID, so a link only works for someone who already has it.
  */
-const { signS3Reference, SAFE_S3_KEY } = require('../utils/s3MediaSigner');
+const { signS3Reference, SAFE_S3_KEY, IMAGE_FOLDERS } = require('../utils/s3MediaSigner');
 
-const IMAGE_PREFIX_RE = /^(images|grand_mock_questions|reviews|unani_ranks)\//;
+const IMAGE_PREFIX_RE = new RegExp(`^(${IMAGE_FOLDERS.join('|')})/`);
 const IMAGE_TYPES = {
   '.png': 'image/png',
   '.jpg': 'image/jpeg',
