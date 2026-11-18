@@ -26,10 +26,17 @@ const IMAGE_EXT_RE = /\.(png|jpe?g|webp|gif)(?:[?#&]|$)/i;
 // was saved into the database expires, and the admin panel needs the proxy.
 
 /** Returns the S3 key if `value` is a stored link to one of our image files. */
+// Presigned *upload* links (the browser PUTs the file to them): never images to show.
+const UPLOAD_LINK_RE = /[?&]x-id=(PutObject|UploadPart|CreateMultipartUpload|CompleteMultipartUpload)\b/i;
+const UPLOAD_FIELDS = new Set(['uploadUrl', 'presignedUrl', 'presigned_url', 'putUrl', 'signedUploadUrl', 'uploadURL']);
+// Upload/presign endpoints return links the client must use exactly as given.
+const SKIP_PATH_RE = /^\/(api\/)?(v1\/)?(s3|s3-upload)(\/|$)|presign|multipart/i;
+
 function storedImageKey(value, isImageField) {
   if (typeof value !== 'string') return '';
   const raw = value.trim();
   if (!raw || raw.length > 2048 || !IMAGE_EXT_RE.test(raw)) return '';
+  if (UPLOAD_LINK_RE.test(raw)) return '';
   const isLink = /^https:\/\//i.test(raw) || raw.startsWith('/uploads/');
   // A bare key ("folder/file.png") only counts in an image field.
   if (!isLink && !isImageField) return '';
@@ -48,7 +55,7 @@ async function signImagesDeep(value, viewer, depth = 0) {
   await Promise.all(Object.keys(value).map(async (key) => {
     const field = value[key];
     out[key] = typeof field === 'string'
-      ? await signString(field, viewer, IMAGE_FIELDS.has(key))
+      ? (UPLOAD_FIELDS.has(key) ? field : await signString(field, viewer, IMAGE_FIELDS.has(key)))
       : await signImagesDeep(field, viewer, depth + 1);
   }));
   return out;
@@ -64,6 +71,7 @@ async function signString(value, viewer, isImageField) {
 }
 
 function signResponseImages(req, res, next) {
+  if (SKIP_PATH_RE.test(String(req.originalUrl || req.url || '').split('?')[0])) return next();
   const originalJson = res.json.bind(res);
   res.json = (body) => {
     if (!body || typeof body !== 'object' || res.statusCode >= 400) return originalJson(body);
@@ -97,12 +105,15 @@ function normalizeImageLinksDeep(value, depth = 0) {
   }
   if (!value || typeof value !== 'object' || depth > MAX_DEPTH) return value;
   if (Array.isArray(value)) return value.map((item) => normalizeImageLinksDeep(item, depth + 1));
-  for (const key of Object.keys(value)) value[key] = normalizeImageLinksDeep(value[key], depth + 1);
+  for (const key of Object.keys(value)) {
+    if (!UPLOAD_FIELDS.has(key)) value[key] = normalizeImageLinksDeep(value[key], depth + 1);
+  }
   return value;
 }
 
 function normalizeRequestImageLinks(req, res, next) {
-  if (['POST', 'PUT', 'PATCH'].includes(req.method) && req.body && typeof req.body === 'object') {
+  if (['POST', 'PUT', 'PATCH'].includes(req.method) && req.body && typeof req.body === 'object' &&
+      !SKIP_PATH_RE.test(String(req.originalUrl || req.url || '').split('?')[0])) {
     try { normalizeImageLinksDeep(req.body); } catch (_) { /* leave the body as sent */ }
   }
   next();
