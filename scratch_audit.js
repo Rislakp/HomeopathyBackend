@@ -4,24 +4,24 @@ require('dotenv').config({ path: 'C:/Users/admin/StudioProjects/HomeopathyBacken
 async function run() {
   await mongoose.connect(process.env.MONGODB_URI);
   const db = mongoose.connection.db;
-  
+
   console.log('=== COURSES & LESSONS ===');
-  const courses = await db.collection('courses').find({}, { 
-    projection: { 
-      title: 1, 
-      'modules.title': 1, 
+  const courses = await db.collection('courses').find({}, {
+    projection: {
+      title: 1,
+      'modules.title': 1,
       'modules.lessons._id': 1,
-      'modules.lessons.lessonTitle': 1, 
-      'modules.lessons.lessonType': 1, 
-      'modules.lessons.meetingUrl': 1, 
-      'modules.lessons.videoUrl': 1, 
-      'modules.lessons.s3Key': 1, 
-      'modules.lessons.videoS3Key': 1, 
+      'modules.lessons.lessonTitle': 1,
+      'modules.lessons.lessonType': 1,
+      'modules.lessons.meetingUrl': 1,
+      'modules.lessons.videoUrl': 1,
+      'modules.lessons.s3Key': 1,
+      'modules.lessons.videoS3Key': 1,
       'modules.lessons.videoParts': 1,
       'modules.lessons.pdfNotes': 1,
       'modules.lessons.assignments': 1,
       'modules.lessons.attachments': 1
-    } 
+    }
   }).toArray();
 
   for (const c of courses) {
