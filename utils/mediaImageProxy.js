@@ -13,7 +13,7 @@
 const crypto = require('crypto');
 const { GetObjectCommand } = require('@aws-sdk/client-s3');
 const { s3Client, bucket } = require('../config/s3');
-const { normalizeS3Reference, resolveProfileImageUrl } = require('./s3MediaSigner');
+const { normalizeS3Reference, resolveProfileImageUrl, CLOUDFRONT_IMAGE_FOLDERS } = require('./s3MediaSigner');
 const { imageKeyFromPath } = require('../middleware/uploadsS3ImageRedirect');
 
 const LINK_TTL_SECONDS = 12 * 60 * 60;
@@ -46,12 +46,16 @@ const isStudentViewer = (user) => String(user?.role || '').toLowerCase().trim() 
  * Signed link for a stored question image, chosen for the viewer:
  * students get CloudFront, everyone else (admin panel) gets the API proxy.
  */
+const hasCloudFrontBehavior = (key) => CLOUDFRONT_IMAGE_FOLDERS.some((folder) => key.startsWith(`${folder}/`));
+
 async function signImageForViewer(rawImage, user) {
   if (typeof rawImage !== 'string' || !rawImage.trim()) return rawImage;
   const raw = rawImage.trim();
-  if (user && !isStudentViewer(user)) {
-    const key = normalizeS3Reference(raw)?.s3Key;
-    const proxied = key ? buildImageProxyUrl(key) : '';
+  const key = normalizeS3Reference(raw)?.s3Key;
+  // Admin panel: always the proxy (CORS). Students: the proxy only for folders
+  // CloudFront does not serve, so those images still load.
+  if (key && ((user && !isStudentViewer(user)) || !hasCloudFrontBehavior(key))) {
+    const proxied = buildImageProxyUrl(key);
     if (proxied) return proxied;
   }
   return resolveProfileImageUrl(raw);

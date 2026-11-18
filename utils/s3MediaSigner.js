@@ -7,7 +7,18 @@ const { isCloudFrontConfigured, signCloudFrontPlaybackUrl, resolveCloudFrontPlay
 const S3_MEDIA_URL_TTL_SECONDS = parseInt(process.env.S3_SIGNED_URL_EXPIRES_IN || process.env.S3_MEDIA_URL_TTL_SECONDS, 10) || 21600;
 
 // Allowed S3 key patterns (folders and safe characters)
-const SAFE_S3_KEY = /^(videos|images|pdfs|documents|attachments|reviews|unani_ranks|grand_mock_questions|live_records)\/[a-zA-Z0-9][a-zA-Z0-9._\/\-]*$/;
+// Folders the admin panel uploads images into (it chooses the folder per screen).
+// Add a folder here when a new screen uploads images somewhere else.
+const IMAGE_FOLDERS = [
+  'images', 'grand_mock_questions', 'reviews', 'unani_ranks',
+  'unani_exam_questions', 'student_profiles', 'ranks', 'homeopathy', 'media',
+];
+// Image folders that have their own CloudFront behavior. Images in the other
+// folders are served through the API image proxy (utils/mediaImageProxy.js).
+const CLOUDFRONT_IMAGE_FOLDERS = ['images', 'grand_mock_questions', 'reviews', 'unani_ranks'];
+const SAFE_S3_KEY = new RegExp(
+  `^(videos|pdfs|documents|attachments|live_records|${IMAGE_FOLDERS.join('|')})\\/[a-zA-Z0-9][a-zA-Z0-9._\\/\\-]*$`
+);
 
 /**
  * Remove all URL fields from a reference object, effectively stripping signed data.
@@ -447,6 +458,8 @@ module.exports = {
   S3_MEDIA_URL_TTL_SECONDS,
   encodeSignedUrl,
   SAFE_S3_KEY,
+  IMAGE_FOLDERS,
+  CLOUDFRONT_IMAGE_FOLDERS,
   VERIFIED_LEGACY_ASSETS,
   getVerifiedS3KeyForLegacyAsset,
 };
