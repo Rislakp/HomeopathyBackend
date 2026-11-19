@@ -46,11 +46,31 @@ const getS3KeyFromUrl = (urlOrKey) => {
 
   // If already a raw S3 key (doesn't start with http/https)
   if (!trimmed.startsWith('http://') && !trimmed.startsWith('https://')) {
+    // If it looks like a meeting URL slug (e.g. ukm-sjrf-knf), it's not an S3 key
+    if (/^[a-z]{3}-[a-z]{4}-[a-z]{3}$/i.test(trimmed)) {
+      return null;
+    }
     return trimmed.replace(/^\/+/, '');
   }
 
   try {
     const parsed = new URL(trimmed);
+    const host = parsed.hostname.toLowerCase();
+
+    // Reject meeting URLs immediately
+    if (
+      host.includes('meet.google.com') ||
+      host.includes('zoom.us') ||
+      host.includes('teams.microsoft.com') ||
+      host.includes('webex.com')
+    ) {
+      return null;
+    }
+
+    // Reject Cloudinary URLs
+    if (host.includes('cloudinary.com')) {
+      return null;
+    }
 
     // If custom public base URL matches
     if (publicBaseUrl) {
@@ -62,6 +82,12 @@ const getS3KeyFromUrl = (urlOrKey) => {
       } catch (e) {
         // Continue to standard domain checks
       }
+    }
+
+    // CloudFront domain check
+    const cfDomain = (process.env.CLOUDFRONT_DOMAIN || '').replace(/^https?:\/\//i, '').split('/')[0].toLowerCase();
+    if (cfDomain && (parsed.host.toLowerCase() === cfDomain || host === cfDomain)) {
+      return decodeURIComponent(parsed.pathname.replace(/^\/+/, ''));
     }
 
     // Standard virtual-hosted style: <bucket>.s3.<region>.amazonaws.com/<key>
@@ -80,8 +106,13 @@ const getS3KeyFromUrl = (urlOrKey) => {
       }
     }
 
-    // Fallback: take pathname
-    return decodeURIComponent(parsed.pathname.replace(/^\/+/, ''));
+    // If it is media.whitecoat.academy or another whitecoat.academy media subdomain
+    if (host.endsWith('whitecoat.academy')) {
+      return decodeURIComponent(parsed.pathname.replace(/^\/+/, ''));
+    }
+
+    // External or unknown domains must not be treated as S3 keys
+    return null;
   } catch (err) {
     return null;
   }

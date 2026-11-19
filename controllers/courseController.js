@@ -522,6 +522,42 @@ const toAbsoluteUrl = (urlStr, req) => {
   return `${baseUrl}${cleanPath}`;
 };
 
+const isMeetingUrlOrSlug = (val) => {
+  if (!val || typeof val !== 'string') return false;
+  const trimmed = val.trim();
+  if (/^[a-z]{3}-[a-z]{4}-[a-z]{3}$/i.test(trimmed)) return true;
+  return /meet\.google\.com|zoom\.us|teams\.microsoft\.com|webex\.com/i.test(trimmed);
+};
+
+const isMediaOrRecordingUrl = (val) => {
+  if (!val || typeof val !== 'string') return false;
+  const trimmed = val.trim();
+  if (/\.(mp4|m4v|webm|mov|mkv|avi|ts|flv|wmv)($|\?)/i.test(trimmed)) return true;
+  return (
+    trimmed.includes('.amazonaws.com/') ||
+    trimmed.includes('media.whitecoat.academy') ||
+    trimmed.includes('cloudfront.net') ||
+    trimmed.startsWith('videos/') ||
+    trimmed.startsWith('courses/videos/') ||
+    trimmed.startsWith('demo-videos/')
+  );
+};
+
+const isValidVideoS3Key = (key) => {
+  if (!key || typeof key !== 'string') return false;
+  const trimmed = key.trim();
+  if (trimmed.length < 4) return false;
+  if (isMeetingUrlOrSlug(trimmed)) return false;
+  if (/\.(pdf|doc|docx|ppt|pptx|xls|xlsx|txt)($|\?)/i.test(trimmed)) return false;
+  if (/\.(mp4|m4v|webm|mov|mkv|avi|ts|flv|wmv)($|\?)/i.test(trimmed)) return true;
+  if (
+    trimmed.startsWith('videos/') ||
+    trimmed.startsWith('courses/videos/') ||
+    trimmed.startsWith('demo-videos/')
+  ) return true;
+  return false;
+};
+
 /**
  * Serialize a lesson subdocument into a plain object with absolute file URLs.
  */
@@ -632,8 +668,18 @@ const result = {
       }))
     : (rawVideoParts || []);
 
+  const cleanVideoList = (verifiedVideoParts || []).filter((vp) => {
+    if (!vp) return false;
+    const url = String(vp.url || vp.secure_url || vp.fileUrl || '').trim();
+    const s3Key = String(vp.s3Key || vp.key || '').trim();
+    if (isMeetingUrlOrSlug(url)) return false;
+    if (s3Key && !isValidVideoS3Key(s3Key)) return false;
+    if (!url && !s3Key) return false;
+    return true;
+  });
+
   const isolated = {
-    videoParts: verifiedVideoParts,
+    videoParts: cleanVideoList,
     pdfNotes: rawPdfNotes || [],
     assignments: rawAssignments || [],
     attachments: rawAttachments || [],
@@ -660,7 +706,7 @@ const result = {
   const lessonS3Key = (lessonObj.videoS3Key || lesson.videoS3Key || lessonObj.s3Key || lesson.s3Key || firstVideo?.s3Key || '').trim();
 
   // If videoParts array is empty, but lesson has top-level videoS3Key or s3Key, synthesize a video part
-  if (isolated.videoParts.length === 0 && lessonS3Key) {
+  if (isolated.videoParts.length === 0 && lessonS3Key && isValidVideoS3Key(lessonS3Key)) {
     const rawFileName = lessonS3Key.split('/').pop() || 'Video';
     const cleanFileName = rawFileName.replace(/^\d+-([0-9a-fA-F-]+-)?/, '');
     isolated.videoParts.push({
@@ -705,7 +751,7 @@ const result = {
   }).filter(Boolean);
 
   const effectiveFirstVideo = (isolated.videoParts && isolated.videoParts.length > 0) ? isolated.videoParts[0] : null;
-  const effectiveS3Key = lessonS3Key || effectiveFirstVideo?.s3Key || '';
+  const effectiveS3Key = (lessonS3Key && isValidVideoS3Key(lessonS3Key)) ? lessonS3Key : (effectiveFirstVideo?.s3Key && isValidVideoS3Key(effectiveFirstVideo.s3Key) ? effectiveFirstVideo.s3Key : '');
   const effectiveStorage = lessonObj.storageProvider || lesson.storageProvider || (effectiveS3Key ? 's3' : (effectiveFirstVideo?.storageProvider || ''));
 
   const resolvedLessonBytes = (lesson.videoBytes && Number(lesson.videoBytes) > 0)
@@ -725,7 +771,7 @@ const result = {
     lessonType: lessonObj.lessonType || lesson.lessonType || 'Recorded Video',
     durationOrPages: resolvedDurationOrPages,
     description: lessonObj.description || lesson.description || '',
-    videoUrl: primaryVideoUrl,
+    videoUrl: (primaryVideoUrl && !isMeetingUrlOrSlug(primaryVideoUrl)) ? primaryVideoUrl : '',
     videoPublicId: lessonObj.videoPublicId || lesson.videoPublicId || (primaryVideoUrl ? (getPublicIdFromUrl(primaryVideoUrl) || '') : ''),
     videoResourceType: lessonObj.videoResourceType || lesson.videoResourceType || 'video',
     videoDuration: resolvedLessonDuration,
@@ -746,7 +792,10 @@ const result = {
     pdfNotes: isolated.pdfNotes,
     assignments: isolated.assignments,
     attachments: isolated.attachments,
-    meetingUrl: lessonObj.meetingUrl || lesson.meetingUrl || '',
+    meetingUrl: (() => {
+      const raw = String(lessonObj.meetingUrl || lesson.meetingUrl || '').trim();
+      return (!isMediaOrRecordingUrl(raw) && isMeetingUrlOrSlug(raw)) ? raw : '';
+    })(),
     status: lessonObj.status || lesson.status || 'Published',
     storageProvider: effectiveStorage,
     s3Key: effectiveS3Key,
@@ -1877,16 +1926,16 @@ exports.addLesson = async (req, res) => {
     }
 
     // Auto-sync videoUrl with videoParts if single video was provided
-    if (finalVideoUrl && finalVideoParts.length === 0) {
+    if (finalVideoUrl && !isMeetingUrlOrSlug(finalVideoUrl) && isMediaOrRecordingUrl(finalVideoUrl) && finalVideoParts.length === 0) {
       finalVideoParts.push({ title: actualLessonTitle || 'Video Part 1', url: finalVideoUrl, secure_url: finalVideoUrl, resource_type: 'video' });
-    } else if (!finalVideoUrl && finalVideoParts.length > 0 && finalVideoParts[0].url) {
+    } else if (!finalVideoUrl && finalVideoParts.length > 0 && finalVideoParts[0].url && !isMeetingUrlOrSlug(finalVideoParts[0].url)) {
       finalVideoUrl = finalVideoParts[0].url;
     }
 
     const incomingS3Key = (req.body.videoS3Key || req.body.s3Key || (finalVideoParts[0] && finalVideoParts[0].s3Key) || '').trim();
     const incomingStorage = (req.body.storageProvider || (incomingS3Key ? 's3' : '')).trim();
 
-    if (incomingS3Key && finalVideoParts.length === 0) {
+    if (incomingS3Key && isValidVideoS3Key(incomingS3Key) && finalVideoParts.length === 0) {
       const rawFileName = incomingS3Key.split('/').pop() || 'Video';
       const cleanFileName = rawFileName.replace(/^\d+-([0-9a-fA-F-]+-)?/, '');
       finalVideoParts.push({
@@ -2129,9 +2178,17 @@ exports.updateLesson = async (req, res) => {
             ? req.body.meetingLink
             : (req.body.liveMeetingUrl !== undefined ? req.body.liveMeetingUrl : req.body.googleMeetUrl)));
       targetLesson.meetingUrl = String(explicitMeeting || '').trim();
+      if (isMediaOrRecordingUrl(targetLesson.meetingUrl)) {
+        targetLesson.meetingUrl = '';
+      }
     }
     if (status !== undefined) targetLesson.status = status.trim();
-    if (videoUrl !== undefined) targetLesson.videoUrl = videoUrl.trim();
+    if (videoUrl !== undefined) {
+      targetLesson.videoUrl = videoUrl.trim();
+      if (isMeetingUrlOrSlug(targetLesson.videoUrl)) {
+        targetLesson.videoUrl = '';
+      }
+    }
 
     if (req.body.videoPublicId !== undefined || req.body.video_public_id !== undefined || req.body.public_id !== undefined || (req.body.videoMetadata && req.body.videoMetadata.videoPublicId !== undefined)) {
       targetLesson.videoPublicId = (req.body.videoPublicId || req.body.video_public_id || req.body.public_id || (req.body.videoMetadata && req.body.videoMetadata.videoPublicId) || '').trim();
@@ -2420,21 +2477,21 @@ exports.updateLesson = async (req, res) => {
       targetLesson.videoUrl = '';
     }
 
-    if (targetLesson.videoUrl && targetLesson.videoParts.length === 0) {
+    if (targetLesson.videoUrl && !isMeetingUrlOrSlug(targetLesson.videoUrl) && isMediaOrRecordingUrl(targetLesson.videoUrl) && targetLesson.videoParts.length === 0) {
       targetLesson.videoParts.push({ title: targetLesson.lessonTitle || 'Video Part 1', url: targetLesson.videoUrl, secure_url: targetLesson.videoUrl, resource_type: 'video' });
     }
 
     // Preserve and synchronize S3 video references on the lesson subdocument
     const incomingS3Key = (req.body.videoS3Key || req.body.s3Key || (targetLesson.videoParts?.[0] && targetLesson.videoParts[0].s3Key) || '').trim();
     const incomingStorage = (req.body.storageProvider || (incomingS3Key ? 's3' : '')).trim();
-    if (incomingS3Key) {
+    if (incomingS3Key && isValidVideoS3Key(incomingS3Key)) {
       targetLesson.videoS3Key = incomingS3Key;
       targetLesson.s3Key = incomingS3Key;
       targetLesson.storageProvider = incomingStorage || 's3';
     }
 
     const savedS3Key = targetLesson.videoS3Key || targetLesson.s3Key;
-    if (savedS3Key && (!targetLesson.videoParts || targetLesson.videoParts.length === 0)) {
+    if (savedS3Key && isValidVideoS3Key(savedS3Key) && (!targetLesson.videoParts || targetLesson.videoParts.length === 0)) {
       const rawFileName = savedS3Key.split('/').pop() || 'Video';
       const cleanFileName = rawFileName.replace(/^\d+-([0-9a-fA-F-]+-)?/, '');
       targetLesson.videoParts = [{
@@ -2472,8 +2529,9 @@ exports.updateLesson = async (req, res) => {
     console.log(JSON.stringify(targetLesson.assignments, null, 2));
     console.log('ATTACHMENTS:');
     console.log(JSON.stringify(targetLesson.attachments, null, 2));
-    const s3UpdatePart = (targetLesson.videoParts || []).find((p) => p.storageProvider === 's3' && p.s3Key);
-    const updatedS3Key = req.body.videoS3Key || req.body.s3Key || (s3UpdatePart ? s3UpdatePart.s3Key : '') || (getS3KeyFromUrl(targetLesson.videoUrl) || '');
+    const s3UpdatePart = (targetLesson.videoParts || []).find((p) => p.storageProvider === 's3' && p.s3Key && isValidVideoS3Key(p.s3Key));
+    const rawUpdatedS3Key = req.body.videoS3Key || req.body.s3Key || (s3UpdatePart ? s3UpdatePart.s3Key : '') || (getS3KeyFromUrl(targetLesson.videoUrl) || '');
+    const updatedS3Key = isValidVideoS3Key(rawUpdatedS3Key) ? rawUpdatedS3Key : '';
     if (updatedS3Key) {
       targetLesson.videoS3Key = updatedS3Key;
       targetLesson.s3Key = updatedS3Key;
